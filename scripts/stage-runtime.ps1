@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 $configPath = Join-Path $RuntimeRoot 'runtime-config.json'
 if (-not (Test-Path $configPath)) { throw "Missing runtime config. Run scripts/setup.ps1 first: $configPath" }
 $config = Get-Content $configPath -Raw | ConvertFrom-Json

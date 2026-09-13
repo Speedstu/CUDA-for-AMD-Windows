@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 $Program = (Resolve-Path $Program).Path
 $targetDir = Split-Path $Program -Parent
 $configPath = Join-Path $RuntimeRoot 'runtime-config.json'

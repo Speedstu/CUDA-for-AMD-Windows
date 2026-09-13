@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 $manifest = Join-Path $repo 'manifests\recovered-artifacts.sha256'
 $configPath = Join-Path $RuntimeRoot 'runtime-config.json'
 

@@ -1,21 +1,22 @@
-# Smoke-test status
+# Current smoke-test status
 
-Date: 2026-09-13
+The public upstream-only runtime was revalidated on 2026-09-13 on an RX 9060 XT (`gfx1200`).
 
-A recovered ZLUDA `cuda_check.exe` was launched through the reconstructed runtime with:
+## Runtime probe
 
-- ZLUDA v6-preview.69 core
-- recovered custom BLAS overlay
-- ROCm 6.4 HIP root
-- LibTorch 2.3.0+cu118 on PATH
-- `ZLUDA_CC=8.6`
+`cuda_check.exe` completed successfully for the core CUDA-facing libraries:
 
-Observed stdout before the 20-second test timeout:
+- `nvcuda`: PASS
+- cuBLAS: PASS through rocBLAS
+- cuBLASLt: PASS through hipBLASLt
+- cuSPARSE: PASS through rocSPARSE
+- cuFFT: PASS
+- cuDNN: unavailable on the validated stable Windows HIP SDK configuration
 
-```text
-cublaslt12: OK (C:\Program Files\AMD\ROCm\6.4\bin\hipblaslt.dll)
-```
+The earlier partial/hanging probe was not representative of the final public path. The clean upstream configuration now exits normally.
 
-The probe did not exit within 20 seconds, so this is recorded as a **partial smoke**, not a full runtime pass. It proves the staged process reached the expected AMD hipBLASLt library through the reconstructed environment, but it does not establish complete CUDA API compatibility.
+## Training probe
 
-The historical benchmark/training logs remain the stronger evidence that this stack previously executed the intended LibTorch PPO workload successfully.
+A CUDA-enabled LibTorch PPO workload was run with the runtime produced by the public installation path, without the recovered custom overlay. It completed one full training iteration / 65,536 timesteps on the CUDA-facing device.
+
+See `VALIDATION.md` for the exact recorded output and scope of the claim.

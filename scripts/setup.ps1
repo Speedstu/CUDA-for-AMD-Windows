@@ -16,6 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 if (-not $RecoveredOverlayRoot) { $RecoveredOverlayRoot = Join-Path $repo 'local-artifacts\custom' }
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
@@ -50,6 +51,10 @@ if ($DownloadZluda) {
     if (-not (Test-Path (Join-Path $zludaPkg 'zluda\zluda.exe'))) {
         Write-Host '[setup] Downloading ZLUDA v6-preview.69 (Windows, commit 87531d3)...'
         Invoke-WebRequest -Uri $zludaUrl -OutFile $zludaZip
+        $expectedZluda = 'E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A'
+        $actualZluda = (Get-FileHash $zludaZip -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($actualZluda -ne $expectedZluda) { Remove-Item $zludaZip -Force; throw "ZLUDA SHA-256 mismatch: $actualZluda" }
+        Write-Host "[setup] ZLUDA SHA-256 verified: $actualZluda"
         if (Test-Path $zludaPkg) { Remove-Item $zludaPkg -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $zludaPkg | Out-Null
         Expand-Archive -Path $zludaZip -DestinationPath $zludaPkg -Force
@@ -64,8 +69,12 @@ if ($DownloadLibTorch) {
     $zip = Join-Path $RuntimeRoot 'libtorch-2.3.0+cu118.zip'
     $url = 'https://download.pytorch.org/libtorch/cu118/libtorch-win-shared-with-deps-2.3.0%2Bcu118.zip'
     if (-not (Test-Path (Join-Path $dest 'libtorch\lib\torch_cuda.dll'))) {
-        Write-Host '[setup] Downloading LibTorch 2.3.0+cu118...'
+        Write-Host '[setup] Downloading LibTorch 2.3.0+cu118 (~2.66 GB)...'
         Invoke-WebRequest -Uri $url -OutFile $zip
+        $expectedTorch = 'E7D57EE5052996E1A9AAEAD5ECC3C491BA7C0DB21316FB1FA8A4A8136005C6CC'
+        $actualTorch = (Get-FileHash $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($actualTorch -ne $expectedTorch) { Remove-Item $zip -Force; throw "LibTorch SHA-256 mismatch: $actualTorch" }
+        Write-Host "[setup] LibTorch SHA-256 verified: $actualTorch"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
         Expand-Archive -Path $zip -DestinationPath $dest -Force
     }
