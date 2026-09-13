@@ -1,142 +1,181 @@
 # CUDA for AMD on Windows
 
-Run CUDA-targeted Windows applications on AMD GPUs using ZLUDA and ROCm/HIP.
+Run CUDA-targeted Windows applications on AMD GPUs through ZLUDA + ROCm/HIP.
 
 [![Windows](https://img.shields.io/badge/platform-Windows%20x64-555555)](https://github.com/Speedstu/CUDA-for-AMD-Windows)
 [![AMD](https://img.shields.io/badge/GPU-AMD%20Radeon-555555)](https://github.com/Speedstu/CUDA-for-AMD-Windows)
 [![verify](https://github.com/Speedstu/CUDA-for-AMD-Windows/actions/workflows/verify.yml/badge.svg)](https://github.com/Speedstu/CUDA-for-AMD-Windows/actions/workflows/verify.yml)
 
-This project packages a working Windows compatibility stack for software built against CUDA but running on an AMD GPU.
+This project packages a Windows CUDA compatibility stack around ZLUDA, HIP/ROCm and CUDA-facing libraries. The goal is simple: make software built for CUDA usable on AMD hardware without pretending AMD implements CUDA natively.
 
-It combines a pinned ZLUDA runtime with HIP/ROCm and a custom BLAS overlay. The setup was tested on an RX 9060 XT (`gfx1200`) with real CUDA-enabled LibTorch workloads, including long-running training runs.
+> [!IMPORTANT]
+> **The project has only been validated on an AMD Radeon RX 9060 XT (`gfx1200`) so far.** Other GPUs are experimental until someone reports a successful run. If you try another AMD GPU, please open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml), even if it fails. Those reports are how the compatibility matrix will grow.
 
-> This is a compatibility layer, not native CUDA. Applications still need to stay within the CUDA surface implemented by ZLUDA and the available HIP/ROCm backend libraries.
-
-## Stack
+## How it works
 
 ```text
 CUDA application
       |
     ZLUDA
       |
-cuBLAS compatibility layer
+cuBLAS / CUDA compatibility layer
       |
 HIP / rocBLAS / hipBLASLt
       |
-  AMD Radeon
+   AMD GPU
 ```
 
 Reference configuration:
 
 | Component | Version |
 | --- | --- |
+| Tested GPU | RX 9060 XT / `gfx1200` |
 | ZLUDA | `v6-preview.69` |
-| ROCm toolchain | `6.4` |
-| HIP runtime overlay | `7.13` |
+| ROCm toolchain used by reference setup | `6.4` |
+| Recovered HIP runtime overlay | `7.13` |
 | LibTorch | `2.3.0 + cu118` |
 | CUDA headers/runtime metadata | `11.8.89` |
-| AMD target | `gfx1200` |
 | CUDA capability exposed through ZLUDA | `8.6` |
 
-The exact upstream archives are pinned by filename and SHA-256 in [`manifests/upstream-assets.sha256`](manifests/upstream-assets.sha256).
+The exact upstream archives used by the reference setup are pinned in [`manifests/upstream-assets.sha256`](manifests/upstream-assets.sha256).
 
-## Quick start
+## GPU scanner
 
-Requirements:
+The scanner detects the installed AMD GPU, HIP installation and native LLVM target (`gfxXXXX`). When HIP is installed it reads the target directly from AMD's `hipInfo.exe`; if HIP is not installed yet it can fall back to Windows GPU information for known cards.
 
-- Windows x64
-- AMD Radeon GPU with a working Windows HIP/ROCm installation
-- PowerShell
+```powershell
+.\scripts\gpu-scan.ps1
+```
 
-Prepare ZLUDA and LibTorch:
+Save a report for an issue:
+
+```powershell
+.\scripts\gpu-scan.ps1 -OutputPath .\gpu-report.json
+```
+
+Example on the reference machine:
+
+```text
+index  name                    gfx      generation  detection  project_status
+0      AMD Radeon RX 9060 XT   gfx1200  RDNA4       hipInfo    validated-reference
+```
+
+The report records GPU model, `gfx` target, driver, HIP version and detection status. It does not intentionally collect usernames, tokens or user files.
+
+## Automatic setup
+
+For a new machine, let the setup script scan the GPU and build a runtime configuration automatically:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
+  -AutoDetectGpu `
   -DownloadZluda `
   -DownloadLibTorch
 ```
 
-Stage the compatibility DLLs beside an application:
+This creates `.runtime\gpu-report.json` and `.runtime\runtime-config.json`.
+
+Then stage the compatibility DLLs beside an application:
 
 ```powershell
 .\scripts\stage-runtime.ps1 -TargetDir C:\path\to\your-app
 ```
 
-Launch it through ZLUDA:
+Launch through ZLUDA:
 
 ```powershell
 .\scripts\run-zluda.ps1 -Program C:\path\to\your-app\app.exe
 ```
 
-Check the local setup and pinned hashes:
+Verify the local runtime:
 
 ```powershell
 .\scripts\verify.ps1
 ```
 
-## What works
+Multiple AMD GPUs can be selected with `-GpuIndex`:
 
-The recovered setup has successfully run CUDA-enabled LibTorch code on AMD under Windows, including:
+```powershell
+.\scripts\setup.ps1 -AutoDetectGpu -GpuIndex 1 -DownloadZluda
+```
 
-- CUDA device-backed tensor workloads
+## GPU status
+
+**Validated by this project** currently means exactly one configuration:
+
+| GPU | Target | Status |
+| --- | --- | --- |
+| Radeon RX 9060 XT | `gfx1200` | ✅ validated reference |
+
+The scanner also recognizes current Windows HIP SDK architecture families and marks them as **unverified candidates**, not as confirmed working GPUs. Current AMD documentation lists Windows HIP SDK support for RDNA4/RDNA3 targets including `gfx1200`, `gfx1201`, `gfx1100`, `gfx1101`, `gfx1102`, plus supported RDNA3.5 APU targets such as `gfx1150`/`gfx1151`.
+
+RDNA2 `gfx103x` cards can still be detected, but current AMD Windows HIP SDK documentation does not list those Radeon cards as supported by the current SDK, so they are reported as experimental.
+
+AMD's current Windows hardware table: https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html
+
+## What has worked on the reference GPU
+
+The RX 9060 XT setup has run real CUDA-enabled LibTorch workloads under Windows, including:
+
+- CUDA-facing LibTorch code
 - neural-network inference
 - PPO / reinforcement-learning training
-- GEMM-heavy workloads
-- cuBLAS-compatible calls routed to AMD libraries
-- long-running training with checkpoint save/resume
+- GEMM-heavy training through cuBLAS-compatible calls
+- long-running training with checkpoints
 
-For the original workload, the ZLUDA + LibTorch path sustained roughly **70k-109k overall steps/s**. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the retained measurements and test context.
+Retained PPO benchmark summaries were roughly **70k–109k overall steps/s**, with faster individual warmed iterations. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
-## Compatibility
+This does **not** mean every CUDA program works. Compatibility depends on the CUDA APIs and libraries an application uses. NCCL, TensorRT, custom CUDA extensions, unsupported PTX behavior and incomplete CUDA-library paths can still fail.
 
-This is not a universal replacement for an NVIDIA CUDA installation.
+## Custom reference overlay
 
-Likely candidates are applications dominated by common CUDA driver/runtime calls and BLAS operations. Applications may need extra work when they depend heavily on unsupported CUDA features, unusual PTX behavior, TensorRT, NCCL, custom CUDA extensions, or incomplete library paths such as some FFT/cuDNN workloads.
+The original RX 9060 XT environment also used a recovered custom cuBLAS/cuBLASLt + HIP runtime overlay. Its binaries are fingerprinted in [`manifests/recovered-artifacts.sha256`](manifests/recovered-artifacts.sha256) but are intentionally not committed to the repository.
 
-The current reconstructed `cuda_check.exe` probe reaches AMD hipBLASLt successfully, then stalls later in the probe. That result is tracked honestly as a partial smoke in [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
+`-AutoDetectGpu` does **not** apply this recovered overlay automatically to other GPUs. This is deliberate: a `gfx1200`-validated runtime should not silently be treated as universal.
 
-## Custom BLAS layer
+If the local reference files are available, the exact setup can be reconstructed with:
 
-The original setup used a custom cuBLAS proxy and cuBLASLt forwarding shim on top of ZLUDA.
-
-Recovered runtime switches include:
-
-```text
-ZLUDA_CUBLAS_USE_HIPBLASLT
-ZLUDA_CUBLAS_AUTOTUNE
-ZLUDA_CUBLAS_WORKSPACE_MB
-ZLUDA_CUBLAS_SOLUTION_MAP
-HUMAN_CUBLASLT_SHIM_STATS
-HUMAN_CUBLASLT_FORCE_WORKSPACE_MB
+```powershell
+.\scripts\setup.ps1 `
+  -AutoDetectGpu `
+  -ZludaRoot C:\path\to\zluda `
+  -LibTorchRoot C:\path\to\libtorch `
+  -UseRecoveredCustomOverlay
 ```
 
-The exact recovered wrapper binaries are fingerprinted in [`manifests/recovered-artifacts.sha256`](manifests/recovered-artifacts.sha256), but are not committed to this repository because their original source/provenance has not yet been recovered.
+Using that overlay on anything except the validated RX 9060 XT is explicitly experimental and produces a warning.
 
-## Project layout
+## Found a bug or tested another GPU?
+
+Please publish an issue. Failed tests are useful too.
+
+1. Run `scripts\gpu-scan.ps1 -OutputPath .\gpu-report.json`.
+2. Open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml).
+3. Include what you ran, whether it launched, and the first useful error/output.
+4. Attach `gpu-report.json` if possible.
+
+The goal is to turn community reports into an actual Windows AMD compatibility matrix instead of guessing which cards work.
+
+## Repository layout
 
 ```text
-scripts/      setup, staging, launch and verification
-docs/         architecture, benchmarks and troubleshooting
-examples/     CMake and launcher examples
-manifests/    pinned versions and SHA-256 fingerprints
+scripts/              scanner, setup, staging, launch and verification
+manifests/            pinned versions, hashes and GPU architecture metadata
+docs/                 architecture, benchmarks and troubleshooting
+examples/             manual LibTorch/CUDA integration examples
+local-artifacts/      local recovered binaries; ignored by Git
+.runtime/             generated runtime/configuration; ignored by Git
 ```
 
-The generated runtime and recovered local binaries are ignored by Git.
+## Limitations
 
-## Notes for C++ / LibTorch
+- Only RX 9060 XT / `gfx1200` is currently validated by this project.
+- ZLUDA is not a complete CUDA implementation.
+- Windows exposes only a subset of the full ROCm ecosystem.
+- `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the AMD architecture.
+- Mixing HIP/ROCm generations can be fragile.
+- The scanner can identify a GPU; detection alone is not proof that a CUDA workload will run.
 
-The working C++ setup manually linked CUDA-enabled LibTorch import libraries instead of depending on a normal NVIDIA runtime installation at execution time.
+## License and third-party software
 
-A minimal pattern is included in [`examples/manual-libtorch-cuda.cmake`](examples/manual-libtorch-cuda.cmake).
-
-## Status
-
-The repository currently preserves the reproducible runtime layout, dependency versions, setup scripts, hashes and benchmark evidence from the working Windows AMD setup.
-
-The original source for the custom cuBLAS proxy and `cublasLtShim.c` has not been recovered yet. See [`docs/RECOVERY_NOTES.md`](docs/RECOVERY_NOTES.md) for the full recovery history.
-
-## Credits
-
-Built around [ZLUDA](https://github.com/vosen/ZLUDA), AMD ROCm/HIP and PyTorch/LibTorch.
-
-Third-party components remain under their upstream licenses. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Project-owned scripts and documentation are MIT licensed. ZLUDA, AMD ROCm/HIP, NVIDIA CUDA components and PyTorch/LibTorch retain their own upstream licenses. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

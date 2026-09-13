@@ -1,0 +1,90 @@
+name: GPU compatibility report
+description: Report a working or failing AMD GPU so the Windows compatibility matrix can grow.
+title: "[GPU] "
+labels: ["gpu-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing another GPU. **RX 9060 XT / gfx1200 is currently the only validated reference GPU.** Successful and failed reports are both useful.
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: Exact GPU model.
+      placeholder: AMD Radeon RX 7900 XTX
+    validations:
+      required: true
+
+  - type: input
+    id: gfx
+    attributes:
+      label: gfx target
+      description: Run `scripts\gpu-scan.ps1` and copy the detected `gfxXXXX` value.
+      placeholder: gfx1100
+    validations:
+      required: true
+
+  - type: input
+    id: hip
+    attributes:
+      label: HIP / ROCm version
+      placeholder: 7.2
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: AMD driver version
+      placeholder: 32.x.x.x
+    validations:
+      required: false
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works - training/inference completed
+        - Works - basic CUDA workload only
+        - Partial - launches but some operations fail
+        - Fails to launch
+        - GPU/HIP not detected
+    validations:
+      required: true
+
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload / application
+      description: What did you actually run? Include framework/version if relevant.
+      placeholder: LibTorch 2.3.0+cu118, model/training workload, command used...
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or first useful error
+      description: Paste the relevant console output. Please remove secrets or unrelated personal paths.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: GPU scanner report
+      description: Drag `gpu-report.json` here, or paste the relevant fields from `scripts\gpu-scan.ps1 -AsJson`.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Validation note
+      options:
+        - label: I understand that only RX 9060 XT / gfx1200 is currently validated by the project and this report is community compatibility data.
+          required: true

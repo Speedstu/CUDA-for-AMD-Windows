@@ -25,9 +25,21 @@ jobs:
           }
           if ($failed) { exit 1 }
 
-      - name: Validate JSON manifest
+      - name: Validate JSON manifests
         shell: pwsh
-        run: Get-Content manifests/recovered-stack.json -Raw | ConvertFrom-Json | Out-Null
+        run: |
+          Get-ChildItem manifests -Filter *.json | ForEach-Object {
+            Write-Host "Parsing $($_.Name)"
+            Get-Content $_.FullName -Raw | ConvertFrom-Json | Out-Null
+          }
+
+      - name: GPU scanner no-GPU smoke test
+        shell: pwsh
+        run: |
+          $json = & ./scripts/gpu-scan.ps1 -AsJson
+          $report = $json | ConvertFrom-Json
+          if ($report.schema -ne 1) { throw 'Unexpected scanner schema' }
+          Write-Host "Scanner schema $($report.schema) OK"
 
       - name: Verify pinned ZLUDA release asset
         shell: pwsh
