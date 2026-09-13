@@ -45,6 +45,21 @@ On the recovered RX 9060 XT, the ZLUDA + LibTorch 2.3.0 cu118 path produced real
 
 A later native-HIP rewrite was faster, but it is a separate implementation.
 
+## What this can run
+
+This stack can run **CUDA-facing AI / ML workloads on AMD GPUs under Windows** when the CUDA API surface used by the application is implemented by ZLUDA and the required backend library path is available through HIP/ROCm.
+
+Validated on the recovered machine:
+
+- CUDA-enabled LibTorch workloads
+- neural-network inference
+- PPO / reinforcement-learning training
+- GEMM-heavy training paths through cuBLAS-compatible calls
+- long-running multi-iteration training with checkpoints
+
+It is **not** a universal drop-in replacement for an NVIDIA CUDA GPU. Workloads depending on unsupported CUDA driver/runtime features, CUDA extensions, NCCL, TensorRT, custom kernels with unsupported PTX behavior, or incomplete libraries such as some cuFFT/cuDNN paths may fail or require additional work.
+
+A useful mental model is: **CUDA compatibility layer on AMD**, not “native CUDA on AMD.”
 ## Quick start
 
 Download LibTorch 2.3.0+cu118 and prepare a runtime tree:
