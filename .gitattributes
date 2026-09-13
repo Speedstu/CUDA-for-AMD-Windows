@@ -1,0 +1,10 @@
+* text=auto
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sha256 text eol=lf
+*.cmake text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

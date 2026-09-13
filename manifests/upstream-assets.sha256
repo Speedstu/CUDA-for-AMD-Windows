@@ -1,0 +1,4 @@
+# Exact upstream assets used by the recovered profile.
+# SHA256  bytes  filename  URL
+E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A  32944552  zluda-windows-87531d3.zip  https://github.com/vosen/ZLUDA/releases/download/v6-preview.69/zluda-windows-87531d3.zip
+E7D57EE5052996E1A9AAEAD5ECC3C491BA7C0DB21316FB1FA8A4A8136005C6CC  2660890386  libtorch-win-shared-with-deps-2.3.0+cu118.zip  https://download.pytorch.org/libtorch/cu118/libtorch-win-shared-with-deps-2.3.0%2Bcu118.zip

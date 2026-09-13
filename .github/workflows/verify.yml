@@ -1,0 +1,40 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-and-zluda-pin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) {
+              $failed = $true
+              Write-Host "::error file=$($_.FullName)::$($errors | Out-String)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Validate JSON manifest
+        shell: pwsh
+        run: Get-Content manifests/recovered-stack.json -Raw | ConvertFrom-Json | Out-Null
+
+      - name: Verify pinned ZLUDA release asset
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/vosen/ZLUDA/releases/download/v6-preview.69/zluda-windows-87531d3.zip'
+          $expected = 'E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A'
+          Invoke-WebRequest -Uri $url -OutFile zluda.zip
+          $actual = (Get-FileHash zluda.zip -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "ZLUDA hash mismatch: $actual" }
+          Write-Host "Verified $actual"

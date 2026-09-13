@@ -1,0 +1,15 @@
+.runtime*/
+local-artifacts/
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.log
+*.pdb
+build/
+build-*/
+.vs/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,28 @@
+{
+  "profile": "gfx1200-zluda-v6-preview69-hip713-libtorch230-cu118",
+  "recovered_on": "2026-09-13",
+  "os": "Windows x64",
+  "gpu": "AMD Radeon RX 9060 XT",
+  "amd_arch": "gfx1200",
+  "zluda": "v6-preview.69",
+  "installed_rocm": "6.4",
+  "installed_hip_version": "6.4.50101",
+  "hip_overlay": {
+    "runtime": "amdhip64 7.13",
+    "build": "3581.0",
+    "dll_version": "10.0.3581.0"
+  },
+  "libtorch": "2.3.0+cu118",
+  "cuda_header_packages": "11.8.89",
+  "zluda_cc": "8.6",
+  "environment": {
+    "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": "1",
+    "ROCBLAS_TENSILE_LIBPATH": "<HIP_ROOT>\\bin\\rocblas\\library",
+    "HIPBLASLT_TENSILE_LIBPATH": "<HIP_ROOT>\\bin\\hipblaslt\\library"
+  },
+  "benchmark_summary": {
+    "workload": "real PPO training",
+    "overall_sps_retained_range": "70000-109000",
+    "note": "individual warmed iterations exceeded the retained range"
+  }
+}
