@@ -1,0 +1,26 @@
+[
+  {
+    "runtime": "upstream",
+    "samples": 8,
+    "overall_median": 13278.46,
+    "overall_mean": 13172.49,
+    "overall_min": 11009.91,
+    "overall_max": 14850.95,
+    "collection_median": 63306.0,
+    "consumption_median": 16806.36,
+    "inference_median_s": 0.5863,
+    "ppo_learn_median_s": 3.2076
+  },
+  {
+    "runtime": "custom",
+    "samples": 8,
+    "overall_median": 12875.8,
+    "overall_mean": 12649.83,
+    "overall_min": 10067.9,
+    "overall_max": 14097.91,
+    "collection_median": 59360.67,
+    "consumption_median": 16445.66,
+    "inference_median_s": 0.6293,
+    "ppo_learn_median_s": 3.2958
+  }
+]

@@ -136,13 +136,15 @@ The stable Windows HIP SDK does not ship the full ROCm AI-library stack such as 
 
 ## Performance
 
-Historical tuned runs of the ZLUDA + LibTorch path were roughly **70k–109k overall steps/s** on the reference RX 9060 XT. The fresh reproducibility validation was intentionally a short correctness run, not a tuned benchmark. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+A controlled 2026-09-13 A/B ran **10 iterations per runtime** on the same RX 9060 XT PPO workload. After discarding the first iteration of each trial as warmup, the public upstream path reached **13,278 median overall SPS** versus **12,876** for the recovered custom overlay. In this workload the custom overlay was about **3.03% slower**, so upstream remains the default.
+
+Historical tuned runs used a different training configuration and reached roughly **70k–109k overall steps/s**. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for methodology and raw data.
 
 ## Optional historical custom overlay
 
-The original development environment also experimented with a custom cuBLAS/cuBLASLt/HIP overlay. Those recovered binaries are **not required by the current validated public path** and are not distributed by this repository.
+The original development environment also experimented with a custom cuBLAS/cuBLASLt/HIP overlay. It is **not required** for the validated public path and, based on the controlled A/B above, is not currently a performance win for the reference PPO workload.
 
-They remain fingerprinted in `manifests/recovered-artifacts.sha256` for archival/research purposes. The normal `install.ps1` path uses upstream ZLUDA plus the installed AMD HIP SDK only.
+The recovered DLLs remain fingerprinted in `manifests/recovered-artifacts.sha256`. They are not published as binary blobs because the original custom wrapper source/provenance is incomplete and the recovered HIP runtime contains third-party AMD binaries. See [`docs/CUSTOM_OVERLAY.md`](docs/CUSTOM_OVERLAY.md).
 
 ## Found a bug or tested another GPU?
 
