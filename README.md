@@ -1,6 +1,6 @@
 # CUDA for AMD on Windows
 
-IM UPLOADING MY WORKING STACK RN 
+IM UPLOADING MY WORKING STACK I FEW MINS 
 
 Run CUDA-targeted Windows applications on AMD GPUs through ZLUDA + ROCm/HIP.
 
