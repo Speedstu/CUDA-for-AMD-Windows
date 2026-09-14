@@ -4,23 +4,28 @@ This document records what was actually tested, rather than what is assumed to w
 
 ## Public reproducible path
 
-Validation date: **2026-09-13**
+The operational target is TheRock HIP SDK nightly **7.14.0a20260612** on
+`gfx1201`. The original `gfx1200` profile remains recognized and preserved;
+the `gfx1200`/HIP 6.4 run below is retained as its historical evidence and
+must not be read as validation of the new `gfx1201` target.
 
 Hardware/software:
 
 - Windows x64
-- AMD Radeon RX 9060 XT (`gfx1200`)
+- AMD Radeon AI PRO R9700 (`gfx1201`) — target hardware
 - ZLUDA `v6-preview.69`, official Windows release asset
-- AMD HIP SDK `6.4`
+- TheRock HIP SDK nightly `7.14.0a20260612` — target SDK
 - LibTorch `2.3.0+cu118`
 - `ZLUDA_CC=8.6`
 - **no recovered/custom overlay DLLs**
 
-The runtime used for this validation was created from the same public path exposed by `scripts/install.ps1`: official ZLUDA plus the installed AMD HIP SDK. The repository's ignored `local-artifacts/` directory was not used.
+The target runtime should be created from the same public path exposed by `scripts/install.ps1`: official ZLUDA plus the installed TheRock HIP SDK. The repository's ignored `local-artifacts/` directory is not required.
 
 ## ZLUDA runtime check
 
-ZLUDA's `cuda_check.exe` completed and reported:
+ZLUDA's `cuda_check.exe` completed and reported the following core surfaces.
+The cuDNN line is retained as a **historical stable-HIP-SDK result**, not as
+evidence for the current TheRock nightly target:
 
 ```text
 nvcuda     OK
@@ -28,14 +33,28 @@ cuBLAS     OK -> rocBLAS
 cuBLASLt   OK -> hipBLASLt
 cuSPARSE   OK -> rocSPARSE
 cuFFT      OK
-cuDNN 8/9  unavailable on this stable Windows HIP SDK configuration
+cuDNN 8/9  historical: unavailable on the stable Windows HIP SDK configuration
 ```
 
-`test-runtime.ps1` treats the first five groups as core runtime checks. cuDNN is reported separately because the Windows HIP SDK does not provide the complete Linux ROCm AI-library stack.
+`test-runtime.ps1` treats the first five groups as core runtime checks. cuDNN is reported separately because availability depends on the selected HIP SDK build.
+
+The current TheRock nightly probe was also run against the generated runtime
+configuration and reported:
+
+```text
+cudnn9: OK (C:\ROCm\7.14-nightly\bin\MIOpen.dll)
+cudnn8: OK (C:\ROCm\7.14-nightly\bin\MIOpen.dll)
+[PASS] cudnn
+```
+
+This supersedes the historical stable-SDK cuDNN result for the `gfx1201`
+nightly profile. It does not imply that every stable HIP SDK build provides
+the same MIOpen-backed compatibility.
 
 ## Real training integration test
 
-The generated public runtime was then staged next to an existing CUDA-enabled LibTorch PPO trainer.
+The generated public runtime was then staged next to an existing CUDA-enabled
+LibTorch PPO trainer in the historical baseline run below.
 
 Observed during the validation run:
 
@@ -57,7 +76,7 @@ Total Iterations: 1
 
 The process was stopped after the completed iteration because the purpose of this run was reproducibility validation, not a throughput benchmark.
 
-This verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack.
+The historical run verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack. Repeat this probe on `gfx1201`/TheRock HIP SDK 7.14 before making equivalent PPO workload or performance claims. The runtime and native LibTorch build are already validated independently.
 
 ## Historical performance
 
@@ -69,7 +88,7 @@ See `BENCHMARKS.md` for the retained performance notes.
 
 This test does not claim universal CUDA compatibility. In particular:
 
-- applications that require cuDNN can fail on the stable Windows HIP SDK path;
+- applications that require cuDNN can fail when the selected HIP SDK build lacks MIOpen;
 - unsupported PTX/CUDA APIs may fail;
 - custom CUDA extensions are workload-specific;
 - other AMD GPU architectures remain unverified until tested.

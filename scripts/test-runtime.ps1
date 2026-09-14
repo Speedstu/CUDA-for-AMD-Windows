@@ -23,26 +23,58 @@ if (-not $hip -or -not (Test-Path (Join-Path $hip 'bin'))) { throw "HIP SDK bin 
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $launcher
-$psi.ArgumentList.Add('--')
-$psi.ArgumentList.Add($probe)
+$psi.Arguments = '-- "' + $probe.Replace('"', '\"') + '"'
 $psi.WorkingDirectory = $zluda
 $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
-$psi.Environment['HIP_PATH'] = $hip
-$psi.Environment['ZLUDA_CC'] = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
-$psi.Environment['ROCBLAS_TENSILE_LIBPATH'] = Join-Path $hip 'bin\rocblas\library'
-$psi.Environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\library'
-$psi.Environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
+$environment = $psi.EnvironmentVariables
+if ($null -eq $environment) { throw 'Windows PowerShell could not initialize ProcessStartInfo.EnvironmentVariables.' }
+$environment['HIP_PATH'] = $hip
+$environment['ZLUDA_CC'] = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
+$environment['ROCBLAS_TENSILE_LIBPATH'] = Join-Path $hip 'bin\rocblas\library'
+$environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\library'
+$environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
+if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
+    $environment['HIP_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
+    $environment['ROCR_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
+}
+
+function Stop-ProcessTree {
+    param([int]$RootId)
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $children = @{}
+    foreach ($process in $processes) {
+        $parent = [int]$process.ParentProcessId
+        if (-not $children.ContainsKey($parent)) { $children[$parent] = @() }
+        $children[$parent] += [int]$process.ProcessId
+    }
+    $pending = @($RootId)
+    $descendants = @()
+    while ($pending.Count -gt 0) {
+        $parent = $pending[0]
+        if ($pending.Count -eq 1) { $pending = @() } else { $pending = $pending[1..($pending.Count - 1)] }
+        if ($children.ContainsKey($parent)) {
+            foreach ($child in $children[$parent]) {
+                $descendants += $child
+                $pending += $child
+            }
+        }
+    }
+    foreach ($processId in ($descendants | Select-Object -Unique | Sort-Object -Descending)) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+    Stop-Process -Id $RootId -Force -ErrorAction SilentlyContinue
+}
 
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $psi
-[void]$p.Start()
+if (-not $p.Start()) { throw "Could not start ZLUDA runtime probe: $launcher" }
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
-if ($timedOut) { try { $p.Kill($true) } catch {}; $p.WaitForExit() }
+if ($timedOut) { Stop-ProcessTree -RootId $p.Id; $p.WaitForExit() }
 $stdout = $p.StandardOutput.ReadToEnd()
 $stderr = $p.StandardError.ReadToEnd()
 
@@ -73,7 +105,7 @@ foreach ($entry in $checks.GetEnumerator()) {
     Write-Host ("[{0}] {1}" -f ($(if($entry.Value){'PASS'}else{'FAIL'})), $entry.Key)
 }
 if ($cudnnOk) { Write-Host '[PASS] cudnn' }
-else { Write-Warning '[OPTIONAL] cuDNN unavailable. The stable Windows HIP SDK does not ship MIOpen; convolution-heavy workloads can need a newer/nightly stack.' }
+else { Write-Warning '[OPTIONAL] cuDNN unavailable in the selected HIP SDK build; convolution-heavy workloads may need a build that includes MIOpen.' }
 if ($timedOut) { Write-Warning "cuda_check timed out after ${TimeoutSeconds}s." }
 
 $result = [ordered]@{

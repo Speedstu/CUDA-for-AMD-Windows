@@ -11,23 +11,103 @@ Run CUDA-targeted Windows applications on AMD GPUs through ZLUDA + ROCm/HIP.
 A reproducible Windows CUDA compatibility setup built around **ZLUDA + AMD HIP/ROCm**. It is intended for CUDA-facing compute applications, including workloads that use CUDA-enabled LibTorch.
 
 > [!IMPORTANT]
-> **Validated hardware is currently AMD Radeon RX 9060 XT (`gfx1200`) only.** Other AMD GPUs are candidates, not guaranteed working devices. If you test another card, please open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml), whether it works or fails.
+> **The current target is AMD Radeon AI PRO R9700 (`gfx1201`) with the TheRock HIP SDK nightly.** Other AMD GPUs are candidates, not guaranteed working devices. If you test another card, please open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml), whether it works or fails.
+>
+> The original Radeon RX 9060 XT (`gfx1200`) profile remains supported and is
+> preserved as a separate recognized candidate/reference profile. This fork adds
+> `gfx1201`; it does not replace or remove the original `gfx1200` path.
 
-## Verified today
+## Validation status
 
-The public, upstream-only path has been tested without any private/recovered DLLs:
+The current target has passed the runtime smoke checks, including cuDNN 8/9
+through MIOpen, and a real x64 C++/LibTorch configuration and build. The
+published benchmark data is still from the previous `gfx1200` profile and must
+be rerun on this hardware/software combination:
 
 - ZLUDA `v6-preview.69` from the official ZLUDA release
-- AMD HIP SDK `6.4`
+- TheRock HIP SDK nightly `7.14.0a20260612` for `gfx120X`
 - LibTorch `2.3.0 + cu118`
-- RX 9060 XT / `gfx1200`
-- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT all pass `cuda_check`
-- a real **2,216,347-parameter PPO network completed forward/inference, PPO learning and optimizer work on the CUDA-facing device**
-- one clean validation iteration completed **65,536 timesteps** using the runtime produced by this repository
+- AMD Radeon AI PRO R9700 / `gfx1201`
+- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT are the required smoke-test surfaces
+- the existing **2,216,347-parameter PPO integration workload** remains the recommended workload validation
+- one clean validation iteration should complete **65,536 timesteps** before making PPO workload claims
 
-That integration test used the same CUDA-facing LibTorch training workload that originally motivated this project. See [`docs/VALIDATION.md`](docs/VALIDATION.md).
+See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the historical baseline and target validation scope.
 
 This does **not** mean every CUDA program or AI model works. CUDA API/library coverage is workload-dependent.
+
+### Original `gfx1200` reference remains supported
+
+The fork preserves the original public reference path for the Radeon RX 9060 XT:
+
+- AMD HIP SDK `6.4`
+- Radeon RX 9060 XT / `gfx1200`
+- ZLUDA `v6-preview.69`
+- LibTorch `2.3.0+cu118`
+- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT passing `cuda_check`
+- the 2,216,347-parameter PPO workload completing one 65,536-timestep iteration
+
+Its benchmark data and custom-overlay A/B results remain in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Adding the R9700 profile does not
+replace this validated `gfx1200` path.
+
+### C++ and LibTorch build validation
+
+On the reference machine, the CUDA-facing LibTorch integration was compiled and
+linked successfully from a temporary CMake project. This verifies the native
+build path independently of the Python package path:
+
+| Tool or component | Version/configuration |
+| --- | --- |
+| CMake | `4.4.3` |
+| Ninja | `1.13.2` |
+| Visual Studio Build Tools | `2022`, Developer Command Prompt `17.14.40` |
+| MSVC | `19.44.35228`, x64 target |
+| C++ standard | C++17 |
+| LibTorch | `2.3.0+cu118` |
+| Target GPU runtime | R9700 / `gfx1201`, TheRock HIP SDK nightly |
+
+The test project created an executable containing `torch::ones({1})`, included
+the LibTorch headers and linked the CUDA-facing import libraries
+`c10.lib`, `torch.lib`, `torch_cpu.lib`, `c10_cuda.lib` and `torch_cuda.lib`.
+It was configured and built from an **x64 Native Tools Command Prompt for VS 2022**
+with the following pattern. The cache values are required because the repository
+file is an integration fragment, not a standalone project:
+
+```cmd
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cmake -S <temporary-test-project> -B <temporary-test-project>\build -G Ninja -DMANUAL_LIBTORCH_ROOT=C:\path\to\libtorch -DCMAKE_CXX_STANDARD=17
+cmake --build <temporary-test-project>\build
+```
+
+The repository's [`examples/manual-libtorch-cuda.cmake`](examples/manual-libtorch-cuda.cmake)
+was included by that test project. The example is an integration fragment, not a
+standalone CMake project, so the consuming project must provide a real executable
+or library target and select C++17 (or newer). This validation proves CMake
+configuration, x64 compilation, header inclusion and library linking. It is not
+by itself a GPU execution benchmark; launch-time validation still requires the
+ZLUDA/HIP runtime staging described below.
+
+## Tested machine
+
+The current target was configured and inspected on this Windows x64 machine:
+
+| Component | Observed value |
+| --- | --- |
+| Operating system | Windows 11 Pro x64, build `26200` |
+| Motherboard | ASRock X870E Taichi |
+| CPU | AMD Ryzen 9 9950X3D, 16 cores / 32 logical processors |
+| System memory | 63.11 GB |
+| Dedicated GPU | AMD Radeon AI PRO R9700, `gfx1201` / RDNA4 |
+| Dedicated GPU memory reported by HIP | 31.86 GB |
+| Dedicated GPU bus width | 256-bit |
+| Dedicated GPU compute units | 32 |
+| Dedicated GPU clock reported by HIP | 2350 MHz |
+| Integrated GPU | AMD Radeon(TM) Graphics, `gfx1036`, 35.84 GB shared memory |
+| AMD driver | `amdhip64_7.dll` file version `10.0.3679.0` |
+| HIP SDK used | TheRock nightly `7.14.0a20260612` |
+
+The integrated GPU is enumerated by HIP as device `0` and the R9700 as device `1`. Do not assume device `0` is the dedicated card. This repository prefers `gfx1201` automatically and records the selected device in `.runtime\runtime-config.json`.
 
 ## How it works
 
@@ -47,12 +127,24 @@ CUDA-targeted Windows application
 
 ### 1. Install the AMD prerequisites
 
-Install a current AMD GPU driver and the **AMD HIP SDK for Windows including HIP Libraries**.
+Install a current AMD GPU driver and either the official **AMD HIP SDK for Windows** or the **TheRock HIP SDK nightly**. The nightly is recommended for CUDA-facing PyTorch/LibTorch workloads because the official Windows SDK has limited machine-learning library coverage.
 
-The validated reference uses HIP SDK 6.4. Newer versions may work but should be treated as unverified until reported.
+The current target uses this TheRock package:
 
-AMD Windows HIP SDK guide:
-https://rocm.docs.amd.com/projects/install-on-windows/en/docs-6.4.2/index.html
+https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-windows-gfx120X-all-7.14.0a20260612.tar.gz
+
+Extract the `.tar.gz` and then the nested `.tar` with 7-Zip. Set `HIP_PATH` to the extracted directory containing `bin\hipInfo.exe` and `bin\rocblas.dll`:
+
+```powershell
+$env:HIP_PATH = 'C:\ROCm\7.14-nightly'
+$env:PATH = "$env:HIP_PATH\bin;$env:PATH"
+& "$env:HIP_PATH\bin\hipInfo.exe"
+```
+
+Confirm that `hipInfo.exe` reports `gcnArchName: gfx1201`. The ZLUDA installation notes are available [here](https://zluda.readthedocs.io/latest/hip_sdk.html).
+
+Official AMD Windows HIP SDK guide:
+https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/install.html
 
 ### 2. Clone and run the installer
 
@@ -72,11 +164,42 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 6. generate `.runtime\runtime-config.json` and `.runtime\gpu-report.json`;
 7. run ZLUDA's `cuda_check.exe` against the installed AMD stack.
 
+To use a manually extracted nightly SDK, pass its root explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
+  -AutoDetectGpu `
+  -HipRoot $env:HIP_PATH `
+  -DownloadZluda
+```
+
+When multiple AMD GPUs are present, automatic detection prefers `gfx1201` instead of blindly choosing device 0. The selected HIP device is also isolated at launch with `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES`. To select a specific HIP device explicitly, pass its index:
+
+```powershell
+.\scripts\gpu-scan.ps1
+.\scripts\install.ps1 -GpuIndex 1
+```
+
 If you do not need LibTorch:
 
 ```powershell
 .\scripts\install.ps1 -SkipLibTorch
 ```
+
+### What was required to make this setup work
+
+The following details are important for reproducing the working configuration:
+
+1. The official stable Windows HIP SDK was not sufficient for the intended PyTorch/LibTorch path, so the ZLUDA-recommended TheRock nightly package was used.
+2. The `gfx120X` package was selected because the R9700 reports `gfx1201`. The extracted SDK root must contain `bin\hipInfo.exe`, `bin\rocblas.dll` and the other runtime DLLs.
+3. `hipInfo.exe` was used instead of relying only on Windows device ordering. It confirmed both the integrated `gfx1036` device and the dedicated `gfx1201` device.
+4. Automatic GPU selection was changed to prefer `gfx1201`; `-GpuIndex` remains available for explicit selection.
+5. The launcher exports both `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES`, preventing the application from falling back to the integrated GPU.
+6. LibTorch is downloaded as the CUDA-facing `2.3.0+cu118` build. The large archive uses resumable `curl.exe` retries and visible SHA-256 progress before extraction.
+7. Re-running `setup.ps1` preserves an existing LibTorch installation and can rediscover `.runtime\libtorch-2.3.0-cu118\libtorch` if the generated configuration was incomplete.
+8. The runtime probe was made compatible with Windows PowerShell 5.1, which does not support the newer `ProcessStartInfo.ArgumentList` workflow used by PowerShell 7 examples.
+
+The resulting runtime is still workload-dependent. Passing the prerequisite checks does not guarantee that every CUDA application, extension or kernel will run.
 
 ## Run a CUDA-targeted application
 
@@ -102,26 +225,28 @@ You can also stage without launching:
 
 The GPU scanner records the model, `gfx` architecture, driver and HIP information. It does not intentionally collect usernames, tokens or user files.
 
-Example on the validated machine:
+Examples on the reference machines:
 
 ```text
 AMD Radeon RX 9060 XT -> gfx1200 -> RDNA4 -> validated-reference
+AMD Radeon AI PRO R9700 -> gfx1201 -> RDNA4 -> validated-reference
 ```
 
 ## Current GPU status
 
 | GPU | Target | Project status |
 | --- | --- | --- |
-| Radeon RX 9060 XT | `gfx1200` | ✅ validated reference |
+| Radeon AI PRO R9700 | `gfx1201` | ✅ target reference |
+| Radeon RX 9060 XT | `gfx1200` | ✅ original profile preserved |
 
 The scanner recognizes other Windows HIP architecture families and marks them as **unverified candidates** rather than claiming support. Detection is not proof that a workload runs.
 
-AMD's current Windows hardware table:
-https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html
+AMD's current Windows HIP SDK hardware table:
+https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/system-requirements.html
 
 ## Runtime coverage on the validated setup
 
-Current upstream runtime check:
+Current target runtime check:
 
 | CUDA-facing component | Result |
 | --- | --- |
@@ -130,13 +255,47 @@ Current upstream runtime check:
 | cuBLASLt | ✅ via hipBLASLt |
 | cuSPARSE | ✅ via rocSPARSE |
 | cuFFT | ✅ |
-| cuDNN | ⚠️ unavailable with the validated stable Windows HIP SDK |
+| cuDNN 8/9 | ✅ via TheRock `MIOpen.dll` |
 
-The stable Windows HIP SDK does not ship the full ROCm AI-library stack such as MIOpen, so convolution-heavy software that requires cuDNN can need a newer/nightly HIP stack or additional work. Dense/GEMM-heavy LibTorch training does not necessarily require cuDNN; the validated PPO workload completed without it.
+On the tested TheRock `7.14-nightly` runtime, `cudnn8` and `cudnn9`
+both passed `cuda_check` through `C:\ROCm\7.14-nightly\bin\MIOpen.dll`.
+This result is specific to that nightly; the stable Windows HIP SDK can lack
+MIOpen, and convolution-heavy applications still require workload validation.
+
+## Troubleshooting notes from the target setup
+
+### LibTorch download appears stuck
+
+The LibTorch ZIP is approximately 2.66 GB. The installer resumes partial downloads and retries transient failures. After downloading, SHA-256 verification reads the entire archive and can appear idle if no progress output is enabled; the installer now reports percentage and throughput while hashing.
+
+### The installer selects the integrated GPU
+
+Run the scanner first:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\gpu-scan.ps1
+```
+
+For this machine, the expected result is `gfx1036` for the integrated device and `gfx1201` for the R9700. Automatic setup prefers `gfx1201`; alternatively force the dedicated device explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -GpuIndex 1
+```
+
+### `cuda_check.exe` hangs
+
+ZLUDA documents that `cuda_check.exe` can hang in some MIOpen paths. The runtime report is written to `.runtime\runtime-test.json`. A timeout in the optional cuDNN/MIOpen portion should not be confused with a failure to detect the GPU or LibTorch. Review the individual library results before diagnosing the installation.
+
+### PowerShell reports a null-method or `ArgumentList` error
+
+Use Windows PowerShell with `-ExecutionPolicy Bypass` as shown above. The repository's runtime probe avoids the PowerShell 7-only `ProcessStartInfo.ArgumentList` API and uses the Windows-compatible process argument/environment interfaces.
 
 ## Performance
 
-A controlled 2026-09-13 A/B ran **10 iterations per runtime** on the same RX 9060 XT PPO workload. After discarding the first iteration of each trial as warmup, the public upstream path reached **13,278 median overall SPS** versus **12,876** for the recovered custom overlay. In this workload the custom overlay was about **3.03% slower**, so upstream remains the default.
+The published benchmark data covers the original RX 9060 XT / `gfx1200`
+profile. That profile remains part of the project and is not replaced by the
+R9700 target. Re-run the workload on the R9700 / `gfx1201` nightly profile
+before making new performance claims.
 
 Historical tuned runs used a different training configuration and reached roughly **70k–109k overall steps/s**. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for methodology and raw data.
 
@@ -170,10 +329,12 @@ local-artifacts/      local archival files; ignored by Git
 
 ## Limitations
 
-- Only RX 9060 XT / `gfx1200` is currently validated by this project.
+- RX 9060 XT / `gfx1200` remains the original validated profile.
+- R9700 / `gfx1201` with the TheRock HIP SDK nightly is the additional project target; performance and application coverage still require workload validation.
 - ZLUDA is not a complete CUDA implementation.
 - Windows exposes only a subset of the full ROCm ecosystem.
-- cuDNN/MIOpen is not available in the validated stable HIP SDK path.
+- cuDNN/MIOpen availability depends on the HIP SDK build. The tested TheRock
+  `7.14-nightly` setup passes both cuDNN 8 and cuDNN 9 compatibility checks.
 - NCCL, TensorRT, unsupported PTX behavior and some custom CUDA extensions may fail.
 - `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the AMD GPU architecture.
 
