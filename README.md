@@ -29,6 +29,27 @@ See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the historical baseline and t
 
 This does **not** mean every CUDA program or AI model works. CUDA API/library coverage is workload-dependent.
 
+## Tested machine
+
+The current target was configured and inspected on this Windows x64 machine:
+
+| Component | Observed value |
+| --- | --- |
+| Operating system | Windows 11 Pro x64, build `26200` |
+| Motherboard | ASRock X870E Taichi |
+| CPU | AMD Ryzen 9 9950X3D, 16 cores / 32 logical processors |
+| System memory | 63.11 GB |
+| Dedicated GPU | AMD Radeon AI PRO R9700, `gfx1201` / RDNA4 |
+| Dedicated GPU memory reported by HIP | 31.86 GB |
+| Dedicated GPU bus width | 256-bit |
+| Dedicated GPU compute units | 32 |
+| Dedicated GPU clock reported by HIP | 2350 MHz |
+| Integrated GPU | AMD Radeon(TM) Graphics, `gfx1036`, 35.84 GB shared memory |
+| AMD driver | `amdhip64_7.dll` file version `10.0.3679.0` |
+| HIP SDK used | TheRock nightly `7.14.0a20260612` |
+
+The integrated GPU is enumerated by HIP as device `0` and the R9700 as device `1`. Do not assume device `0` is the dedicated card. This repository prefers `gfx1201` automatically and records the selected device in `.runtime\runtime-config.json`.
+
 ## How it works
 
 ```text
@@ -106,6 +127,21 @@ If you do not need LibTorch:
 .\scripts\install.ps1 -SkipLibTorch
 ```
 
+### What was required to make this setup work
+
+The following details are important for reproducing the working configuration:
+
+1. The official stable Windows HIP SDK was not sufficient for the intended PyTorch/LibTorch path, so the ZLUDA-recommended TheRock nightly package was used.
+2. The `gfx120X` package was selected because the R9700 reports `gfx1201`. The extracted SDK root must contain `bin\hipInfo.exe`, `bin\rocblas.dll` and the other runtime DLLs.
+3. `hipInfo.exe` was used instead of relying only on Windows device ordering. It confirmed both the integrated `gfx1036` device and the dedicated `gfx1201` device.
+4. Automatic GPU selection was changed to prefer `gfx1201`; `-GpuIndex` remains available for explicit selection.
+5. The launcher exports both `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES`, preventing the application from falling back to the integrated GPU.
+6. LibTorch is downloaded as the CUDA-facing `2.3.0+cu118` build. The large archive uses resumable `curl.exe` retries and visible SHA-256 progress before extraction.
+7. Re-running `setup.ps1` preserves an existing LibTorch installation and can rediscover `.runtime\libtorch-2.3.0-cu118\libtorch` if the generated configuration was incomplete.
+8. The runtime probe was made compatible with Windows PowerShell 5.1, which does not support the newer `ProcessStartInfo.ArgumentList` workflow used by PowerShell 7 examples.
+
+The resulting runtime is still workload-dependent. Passing the prerequisite checks does not guarantee that every CUDA application, extension or kernel will run.
+
 ## Run a CUDA-targeted application
 
 ```powershell
@@ -161,6 +197,34 @@ Current target runtime check:
 | cuDNN | ⚠️ depends on the SDK build; nightly/MIOpen support is not yet validated |
 
 The official stable Windows HIP SDK does not ship the full ROCm AI-library stack such as MIOpen. The nightly may provide additional machine-learning support, but convolution-heavy software and cuDNN still require workload validation.
+
+## Troubleshooting notes from the target setup
+
+### LibTorch download appears stuck
+
+The LibTorch ZIP is approximately 2.66 GB. The installer resumes partial downloads and retries transient failures. After downloading, SHA-256 verification reads the entire archive and can appear idle if no progress output is enabled; the installer now reports percentage and throughput while hashing.
+
+### The installer selects the integrated GPU
+
+Run the scanner first:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\gpu-scan.ps1
+```
+
+For this machine, the expected result is `gfx1036` for the integrated device and `gfx1201` for the R9700. Automatic setup prefers `gfx1201`; alternatively force the dedicated device explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -GpuIndex 1
+```
+
+### `cuda_check.exe` hangs
+
+ZLUDA documents that `cuda_check.exe` can hang in some MIOpen paths. The runtime report is written to `.runtime\runtime-test.json`. A timeout in the optional cuDNN/MIOpen portion should not be confused with a failure to detect the GPU or LibTorch. Review the individual library results before diagnosing the installation.
+
+### PowerShell reports a null-method or `ArgumentList` error
+
+Use Windows PowerShell with `-ExecutionPolicy Bypass` as shown above. The repository's runtime probe avoids the PowerShell 7-only `ProcessStartInfo.ArgumentList` API and uses the Windows-compatible process argument/environment interfaces.
 
 ## Performance
 
