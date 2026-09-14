@@ -101,12 +101,14 @@ if (-not $HipRoot) {
     if ($env:HIP_PATH -and (Test-Path $env:HIP_PATH)) {
         $HipRoot = $env:HIP_PATH.TrimEnd('\')
     } else {
-        $rocmBase = Join-Path $env:ProgramFiles 'AMD\ROCm'
-        if (Test-Path $rocmBase) {
-            $candidate = Get-ChildItem $rocmBase -Directory -ErrorAction SilentlyContinue | Sort-Object {
-                try { [version]$_.Name } catch { [version]'0.0' }
-            } -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'bin\hipInfo.exe') } | Select-Object -First 1
-            if ($candidate) { $HipRoot = $candidate.FullName }
+        $rocmBases = @('C:\ROCm', (Join-Path $env:ProgramFiles 'AMD\ROCm'))
+        foreach ($rocmBase in $rocmBases) {
+            if (Test-Path $rocmBase) {
+                $candidate = Get-ChildItem $rocmBase -Directory -ErrorAction SilentlyContinue | Sort-Object {
+                    try { [version]$_.Name } catch { [version]'0.0' }
+                } -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'bin\hipInfo.exe') } | Select-Object -First 1
+                if ($candidate) { $HipRoot = $candidate.FullName; break }
+            }
         }
     }
 }
@@ -202,7 +204,7 @@ $config = [ordered]@{
     }
     zluda_root = $zludaRuntime
     hip_root = $HipRoot
-    hip_sdk_target = '7.2'
+    hip_sdk_target = '7.14.0a20260612'
     libtorch_root = $LibTorchRoot
     custom_overlay_root = $overlayRuntime
     zluda_cc = $ZludaCc
@@ -213,9 +215,9 @@ $config = [ordered]@{
         libtorch = '2.3.0+cu118'
     }
     validation = [ordered]@{
-        reference_gpu = 'AMD Radeon RX 9070'
+        reference_gpu = 'AMD Radeon AI PRO R9700'
         reference_arch = 'gfx1201'
-        hip_sdk = '7.2'
+        hip_sdk = '7.14.0a20260612'
         other_gpus = 'unverified until community-tested'
     }
 }

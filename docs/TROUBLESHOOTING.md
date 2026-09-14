@@ -6,7 +6,7 @@ Stage the runtime beside the application and put ZLUDA at the front of `PATH`, o
 
 ## HIP runtime mismatch
 
-Do not mix arbitrary ROCm/HIP versions. The current target is a coherent Windows HIP SDK 7.2 installation; the historical HIP 7.13 overlay with a ROCm 6.4 installation is only for reproducing old experiments.
+Do not mix arbitrary ROCm/HIP versions. The current target is a coherent TheRock HIP SDK nightly 7.14.0a20260612 installation; the historical HIP 7.13 overlay with a ROCm 6.4 installation is only for reproducing old experiments.
 
 ## rocBLAS / hipBLASLt cannot find kernels
 

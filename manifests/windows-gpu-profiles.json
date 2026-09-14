@@ -1,7 +1,8 @@
 {
   "schema": 1,
   "checked": "2026-09-14",
-  "hip_sdk_target": "7.2",
+  "hip_sdk_target": "7.14.0a20260612",
+  "hip_sdk_package": "therock-dist-windows-gfx120X-all-7.14.0a20260612.tar.gz",
   "source": "https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/system-requirements.html",
   "architectures": {
     "gfx1200": { "generation": "RDNA4", "current_windows_hip_sdk": true },

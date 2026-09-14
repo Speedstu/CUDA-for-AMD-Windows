@@ -78,7 +78,7 @@ foreach ($entry in $checks.GetEnumerator()) {
     Write-Host ("[{0}] {1}" -f ($(if($entry.Value){'PASS'}else{'FAIL'})), $entry.Key)
 }
 if ($cudnnOk) { Write-Host '[PASS] cudnn' }
-else { Write-Warning '[OPTIONAL] cuDNN unavailable. The stable Windows HIP SDK does not ship MIOpen; convolution-heavy workloads can need a newer/nightly stack.' }
+else { Write-Warning '[OPTIONAL] cuDNN unavailable in the selected HIP SDK build; convolution-heavy workloads may need a build that includes MIOpen.' }
 if ($timedOut) { Write-Warning "cuda_check timed out after ${TimeoutSeconds}s." }
 
 $result = [ordered]@{

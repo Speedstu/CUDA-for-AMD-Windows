@@ -19,8 +19,11 @@ function Find-HipRoot {
     if ($env:HIP_PATH -and (Test-Path $env:HIP_PATH)) { return (Resolve-Path $env:HIP_PATH).Path }
 
     $base = Join-Path $env:ProgramFiles 'AMD\ROCm'
-    if (Test-Path $base) {
-        $dirs = Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Sort-Object {
+    $roots = @()
+    if (Test-Path 'C:\ROCm') { $roots += 'C:\ROCm' }
+    if (Test-Path $base) { $roots += $base }
+    foreach ($root in $roots) {
+        $dirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Sort-Object {
             try { [version]$_.Name } catch { [version]'0.0' }
         } -Descending
         foreach ($dir in $dirs) {

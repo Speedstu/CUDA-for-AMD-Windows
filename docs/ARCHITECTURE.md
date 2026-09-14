@@ -20,7 +20,7 @@ rocBLAS hipBLASLt rocSPARSE  HIP/ROCm backend
 
 `scripts/install.ps1` creates the runtime from:
 
-1. the installed AMD GPU driver and Windows HIP SDK;
+1. the installed AMD GPU driver and Windows HIP SDK/TheRock runtime;
 2. the pinned official ZLUDA `v6-preview.69` Windows release;
 3. optional pinned LibTorch `2.3.0+cu118` for CUDA-facing LibTorch applications.
 
@@ -49,12 +49,12 @@ For projects where LibTorch's CMake package insists on discovering a full NVIDIA
 
 ## cuDNN caveat
 
-The validated stable Windows HIP SDK path provides the math libraries required by the tested dense/PPO workload, but it does not provide the complete Linux ROCm AI-library stack. In particular, ZLUDA's cuDNN checks fail without a MIOpen-compatible backend.
+The selected HIP SDK build must provide the math libraries required by the workload. TheRock nightly builds can include additional AI-library support such as MIOpen, but cuDNN behavior remains build- and workload-dependent.
 
 This is why compatibility is reported per workload rather than as a blanket CUDA-support claim.
 
 ## Historical custom overlay
 
-The original development tree also contained an experimental/custom cuBLAS/cuBLASLt and HIP runtime overlay. Those files helped during earlier compatibility/performance work, but they are **not required** for the public HIP SDK 7.2 target path.
+The original development tree also contained an experimental/custom cuBLAS/cuBLASLt and HIP runtime overlay. Those files helped during earlier compatibility/performance work, but they are **not required** for the public TheRock HIP SDK 7.14 target path.
 
 The recovered binaries remain locally fingerprinted for research and provenance work. They are not part of the public installation dependency chain.
