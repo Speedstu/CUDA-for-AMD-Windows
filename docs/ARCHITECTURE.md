@@ -30,7 +30,7 @@ The normal install path does **not** copy files from `local-artifacts/` and does
 
 ## Runtime discovery
 
-`gpu-scan.ps1` prefers AMD's `hipInfo.exe` because it exposes the native architecture (`gcnArchName`, for example `gfx1200`) directly. Windows GPU information is used as a fallback when possible.
+`gpu-scan.ps1` prefers AMD's `hipInfo.exe` because it exposes the native architecture (`gcnArchName`, for example `gfx1201`) directly. Windows GPU information is used as a fallback when possible.
 
 `doctor.ps1` checks for the driver HIP runtime plus the HIP SDK libraries needed by the validated path:
 
@@ -55,6 +55,6 @@ This is why compatibility is reported per workload rather than as a blanket CUDA
 
 ## Historical custom overlay
 
-The original development tree also contained an experimental/custom cuBLAS/cuBLASLt and HIP runtime overlay. Those files helped during earlier compatibility/performance work, but A/B validation on 2026-09-13 showed that they are **not required** for the public RX 9060 XT training path.
+The original development tree also contained an experimental/custom cuBLAS/cuBLASLt and HIP runtime overlay. Those files helped during earlier compatibility/performance work, but they are **not required** for the public HIP SDK 7.2 target path.
 
 The recovered binaries remain locally fingerprinted for research and provenance work. They are not part of the public installation dependency chain.

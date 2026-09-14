@@ -4,19 +4,19 @@ This document records what was actually tested, rather than what is assumed to w
 
 ## Public reproducible path
 
-Validation date: **2026-09-13**
+The operational target is HIP SDK **7.2** on `gfx1201`; the previous `gfx1200`/HIP 6.4 run below is retained as historical evidence and must not be read as validation of the new target.
 
 Hardware/software:
 
 - Windows x64
-- AMD Radeon RX 9060 XT (`gfx1200`)
+- AMD Radeon RX 9070 (`gfx1201`) — target hardware
 - ZLUDA `v6-preview.69`, official Windows release asset
-- AMD HIP SDK `6.4`
+- AMD HIP SDK `7.2` — target SDK
 - LibTorch `2.3.0+cu118`
 - `ZLUDA_CC=8.6`
 - **no recovered/custom overlay DLLs**
 
-The runtime used for this validation was created from the same public path exposed by `scripts/install.ps1`: official ZLUDA plus the installed AMD HIP SDK. The repository's ignored `local-artifacts/` directory was not used.
+The target runtime should be created from the same public path exposed by `scripts/install.ps1`: official ZLUDA plus the installed AMD HIP SDK. The repository's ignored `local-artifacts/` directory is not required.
 
 ## ZLUDA runtime check
 
@@ -57,7 +57,7 @@ Total Iterations: 1
 
 The process was stopped after the completed iteration because the purpose of this run was reproducibility validation, not a throughput benchmark.
 
-This verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack.
+The historical run verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack. Repeat this probe on `gfx1201`/HIP SDK 7.2 before treating the target as validated.
 
 ## Historical performance
 

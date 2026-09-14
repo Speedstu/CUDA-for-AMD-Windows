@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing another GPU. **RX 9060 XT / gfx1200 is currently the only validated reference GPU.** Successful and failed reports are both useful.
+        Thanks for testing another GPU. **RX 9070 / gfx1201 with HIP SDK 7.2 is currently the project target reference.** Successful and failed reports are both useful.
 
   - type: input
     id: gpu
@@ -86,5 +86,5 @@ body:
     attributes:
       label: Validation note
       options:
-        - label: I understand that only RX 9060 XT / gfx1200 is currently validated by the project and this report is community compatibility data.
+        - label: I understand that RX 9070 / gfx1201 with HIP SDK 7.2 is the current project target and this report is compatibility data.
           required: true

@@ -25,6 +25,11 @@ $hip = $config.hip_root
 $libtorch = $config.libtorch_root
 $env:ZLUDA_CC = if ($config.zluda_cc) { $config.zluda_cc } else { '8.6' }
 $env:TORCH_ALLOW_TF32_CUBLAS_OVERRIDE = '1'
+if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
+    $env:HIP_VISIBLE_DEVICES = [string]$config.gpu.hip_visible_device
+    $env:ROCR_VISIBLE_DEVICES = [string]$config.gpu.hip_visible_device
+    Write-Host "[run] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES"
+}
 if ($hip) {
     $env:HIP_PATH = $hip
     $env:ROCBLAS_TENSILE_LIBPATH = Join-Path $hip 'bin\rocblas\library'

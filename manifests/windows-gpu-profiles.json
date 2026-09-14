@@ -1,7 +1,8 @@
 {
   "schema": 1,
-  "checked": "2026-09-13",
-  "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
+  "checked": "2026-09-14",
+  "hip_sdk_target": "7.2",
+  "source": "https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/system-requirements.html",
   "architectures": {
     "gfx1200": { "generation": "RDNA4", "current_windows_hip_sdk": true },
     "gfx1201": { "generation": "RDNA4", "current_windows_hip_sdk": true },

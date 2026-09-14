@@ -72,7 +72,7 @@ $coreOk = $checks.amd_driver_hip_runtime -and $checks.hip_sdk -and $checks.rocbl
 if (-not $coreOk) {
     Write-Host ''
     Write-Warning 'AMD HIP SDK prerequisites are incomplete. Install the Windows HIP SDK (including HIP Libraries), then rerun this script.'
-    Write-Host 'AMD installation guide: https://rocm.docs.amd.com/projects/install-on-windows/en/docs-6.4.2/index.html'
+    Write-Host 'AMD installation guide: https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/install.html'
 }
 
 $result = [pscustomobject][ordered]@{

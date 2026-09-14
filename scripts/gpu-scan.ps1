@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$HipRoot,
-    [int]$GpuIndex = 0,
+    [int]$GpuIndex = -1,
     [string]$OutputPath,
     [switch]$AsJson,
     [switch]$Quiet,
@@ -85,7 +85,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($d in $hipDevices) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
-        $isReference = ($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200')
+        $isReference = ($d.gfx -eq 'gfx1201')
         $devices += [pscustomobject][ordered]@{
             index = $d.index
             name = $d.name
@@ -104,7 +104,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($wmi in $wmiDevices) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
-        $isReference = ($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200')
+        $isReference = ($arch -eq 'gfx1201')
         $devices += [pscustomobject][ordered]@{
             index = $i++
             name = $wmi.name
@@ -120,8 +120,16 @@ if ($hipDevices.Count -gt 0) {
     }
 }
 
-$selected = $devices | Where-Object { $_.index -eq $GpuIndex } | Select-Object -First 1
-if (-not $selected -and $devices.Count -gt 0) { $selected = $devices[0] }
+if ($GpuIndex -ge 0) {
+    $selected = $devices | Where-Object { $_.index -eq $GpuIndex } | Select-Object -First 1
+    if (-not $selected -and $devices.Count -gt 0) {
+        throw "GPU index $GpuIndex was not found. Run scripts/gpu-scan.ps1 to list available devices."
+    }
+} else {
+    $selected = $devices | Where-Object { $_.gfx -eq 'gfx1201' } | Select-Object -First 1
+    if (-not $selected) { $selected = $devices | Where-Object { $_.project_tested } | Select-Object -First 1 }
+    if (-not $selected -and $devices.Count -gt 0) { $selected = $devices[0] }
+}
 
 $hipVersion = $null
 if ($resolvedHip) { $hipVersion = Split-Path $resolvedHip -Leaf }
@@ -136,7 +144,7 @@ $report = [pscustomobject][ordered]@{
     selected_gpu_index = if ($selected) { $selected.index } else { $null }
     selected_gpu = $selected
     devices = $devices
-    notes = 'Only RX 9060 XT / gfx1200 has been validated by this project. Other GPUs are scanner candidates until confirmed by community reports.'
+    notes = 'Without -GpuIndex, gfx1201 is preferred over integrated or other AMD GPUs. Use -GpuIndex to select a specific HIP device.'
 }
 
 if ($OutputPath) {

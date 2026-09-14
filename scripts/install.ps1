@@ -3,7 +3,7 @@ param(
     [string]$RuntimeRoot,
     [string]$HipRoot,
     [string]$LibTorchRoot,
-    [int]$GpuIndex = 0,
+    [int]$GpuIndex = -1,
     [switch]$SkipLibTorch,
     [switch]$SkipRuntimeTest
 )

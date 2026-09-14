@@ -2,7 +2,7 @@
 param(
     [string]$RuntimeRoot,
     [switch]$AutoDetectGpu,
-    [int]$GpuIndex = 0,
+    [int]$GpuIndex = -1,
     [string]$ZludaCc = '8.6',
     [switch]$DownloadZluda,
     [switch]$DownloadLibTorch,
@@ -19,6 +19,73 @@ if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
 $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 if (-not $RecoveredOverlayRoot) { $RecoveredOverlayRoot = Join-Path $repo 'local-artifacts\custom' }
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+
+if (-not $LibTorchRoot) {
+    $existingConfigPath = Join-Path $RuntimeRoot 'runtime-config.json'
+    if (Test-Path $existingConfigPath) {
+        $existingConfig = Get-Content $existingConfigPath -Raw | ConvertFrom-Json
+        if ($existingConfig.libtorch_root -and (Test-Path (Join-Path ([string]$existingConfig.libtorch_root) 'lib\torch_cuda.dll'))) {
+            $LibTorchRoot = [string]$existingConfig.libtorch_root
+        }
+    }
+    if (-not $LibTorchRoot) {
+        $defaultLibTorchRoot = Join-Path $RuntimeRoot 'libtorch-2.3.0-cu118\libtorch'
+        if (Test-Path (Join-Path $defaultLibTorchRoot 'lib\torch_cuda.dll')) {
+            $LibTorchRoot = $defaultLibTorchRoot
+        }
+    }
+}
+
+function Download-File {
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter(Mandatory=$true)][string]$Destination
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        Write-Host '[setup] Downloading with curl (resume/retry enabled)...'
+        & $curl.Source --fail --location --retry 5 --retry-delay 3 --retry-all-errors --continue-at - --output $Destination $Uri
+        if ($LASTEXITCODE -eq 0) { return }
+        throw "curl failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Warning 'curl.exe was not found; falling back to Invoke-WebRequest (no resume support).'
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination
+}
+
+function Get-Sha256WithProgress {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $buffer = New-Object byte[] (4MB)
+        $total = $stream.Length
+        $readTotal = [int64]0
+        $lastPercent = -1
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        Write-Host ("[setup] Verifying SHA-256: {0:N2} GB" -f ($total / 1GB))
+
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha256.TransformBlock($buffer, 0, $read, $buffer, 0)
+            $readTotal += $read
+            $percent = [int][Math]::Floor(($readTotal * 100) / $total)
+            if ($percent -ge ($lastPercent + 5) -or $readTotal -eq $total) {
+                $rate = if ($timer.Elapsed.TotalSeconds -gt 0) { $readTotal / 1MB / $timer.Elapsed.TotalSeconds } else { 0 }
+                Write-Host ("[setup] Hash progress: {0,3}% ({1:N1}/{2:N1} GB, {3:N1} MB/s)" -f $percent, ($readTotal / 1GB), ($total / 1GB), $rate)
+                $lastPercent = $percent
+            }
+        }
+        [void]$sha256.TransformFinalBlock([byte[]]::new(0), 0, 0)
+        return ([BitConverter]::ToString($sha256.Hash) -replace '-', '').ToUpperInvariant()
+    } finally {
+        if ($sha256) { $sha256.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
 
 $scan = $null
 $scanPath = $null
@@ -50,9 +117,9 @@ if ($DownloadZluda) {
     $zludaUrl = 'https://github.com/vosen/ZLUDA/releases/download/v6-preview.69/zluda-windows-87531d3.zip'
     if (-not (Test-Path (Join-Path $zludaPkg 'zluda\zluda.exe'))) {
         Write-Host '[setup] Downloading ZLUDA v6-preview.69 (Windows, commit 87531d3)...'
-        Invoke-WebRequest -Uri $zludaUrl -OutFile $zludaZip
+        Download-File -Uri $zludaUrl -Destination $zludaZip
         $expectedZluda = 'E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A'
-        $actualZluda = (Get-FileHash $zludaZip -Algorithm SHA256).Hash.ToUpperInvariant()
+        $actualZluda = Get-Sha256WithProgress -Path $zludaZip
         if ($actualZluda -ne $expectedZluda) { Remove-Item $zludaZip -Force; throw "ZLUDA SHA-256 mismatch: $actualZluda" }
         Write-Host "[setup] ZLUDA SHA-256 verified: $actualZluda"
         if (Test-Path $zludaPkg) { Remove-Item $zludaPkg -Recurse -Force }
@@ -70,9 +137,9 @@ if ($DownloadLibTorch) {
     $url = 'https://download.pytorch.org/libtorch/cu118/libtorch-win-shared-with-deps-2.3.0%2Bcu118.zip'
     if (-not (Test-Path (Join-Path $dest 'libtorch\lib\torch_cuda.dll'))) {
         Write-Host '[setup] Downloading LibTorch 2.3.0+cu118 (~2.66 GB)...'
-        Invoke-WebRequest -Uri $url -OutFile $zip
+        Download-File -Uri $url -Destination $zip
         $expectedTorch = 'E7D57EE5052996E1A9AAEAD5ECC3C491BA7C0DB21316FB1FA8A4A8136005C6CC'
-        $actualTorch = (Get-FileHash $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+        $actualTorch = Get-Sha256WithProgress -Path $zip
         if ($actualTorch -ne $expectedTorch) { Remove-Item $zip -Force; throw "LibTorch SHA-256 mismatch: $actualTorch" }
         Write-Host "[setup] LibTorch SHA-256 verified: $actualTorch"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -101,7 +168,7 @@ if ($UseRecoveredCustomOverlay) {
         throw "Recovered custom overlay not found at $RecoveredOverlayRoot"
     }
     if ($scan -and -not $scan.selected_gpu.project_tested) {
-        Write-Warning 'The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on this GPU is experimental.'
+        Write-Warning 'The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on gfx1201 is experimental.'
     }
     $overlayRuntime = Join-Path $RuntimeRoot 'custom-overlay'
     if (Test-Path $overlayRuntime) { Remove-Item $overlayRuntime -Recurse -Force }
@@ -114,7 +181,7 @@ $gpuArch = if ($scan) { [string]$scan.selected_gpu.gfx } else { $null }
 $gpuStatus = if ($scan) { [string]$scan.selected_gpu.project_status } else { 'not-scanned' }
 $isReference = [bool]($scan -and $scan.selected_gpu.project_tested)
 $profileName = if ($isReference -and $overlayRuntime) {
-    'reference-gfx1200-zluda-v6-preview69-custom-overlay-libtorch230-cu118'
+    'reference-gfx1201-zluda-v6-preview69-custom-overlay-libtorch230-cu118'
 } elseif ($gpuArch) {
     "auto-$gpuArch-zluda-v6-preview69-libtorch230-cu118"
 } else {
@@ -128,12 +195,14 @@ $config = [ordered]@{
         name = $gpuName
         arch = $gpuArch
         index = if ($scan) { $scan.selected_gpu.index } else { $null }
+        hip_visible_device = if ($scan) { [string]$scan.selected_gpu.index } else { $null }
         project_status = $gpuStatus
         tested_reference = $isReference
         scanner_report = $scanPath
     }
     zluda_root = $zludaRuntime
     hip_root = $HipRoot
+    hip_sdk_target = '7.2'
     libtorch_root = $LibTorchRoot
     custom_overlay_root = $overlayRuntime
     zluda_cc = $ZludaCc
@@ -144,8 +213,9 @@ $config = [ordered]@{
         libtorch = '2.3.0+cu118'
     }
     validation = [ordered]@{
-        reference_gpu = 'AMD Radeon RX 9060 XT'
-        reference_arch = 'gfx1200'
+        reference_gpu = 'AMD Radeon RX 9070'
+        reference_arch = 'gfx1201'
+        hip_sdk = '7.2'
         other_gpus = 'unverified until community-tested'
     }
 }

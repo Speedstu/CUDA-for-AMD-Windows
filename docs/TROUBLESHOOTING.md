@@ -6,7 +6,7 @@ Stage the runtime beside the application and put ZLUDA at the front of `PATH`, o
 
 ## HIP runtime mismatch
 
-Do not mix arbitrary ROCm/HIP versions. The historical profile used a specific HIP 7.13 overlay with a ROCm 6.4 installation. For new machines, prefer a coherent current Windows HIP SDK; use the historical mix only to reproduce it.
+Do not mix arbitrary ROCm/HIP versions. The current target is a coherent Windows HIP SDK 7.2 installation; the historical HIP 7.13 overlay with a ROCm 6.4 installation is only for reproducing old experiments.
 
 ## rocBLAS / hipBLASLt cannot find kernels
 
@@ -23,7 +23,7 @@ Use the manual LibTorch import-library approach in `examples/manual-libtorch-cud
 
 ## Wrong CUDA compute capability
 
-`ZLUDA_CC=8.6` was intentionally exposed to CUDA-facing software. Do not replace it with `gfx1200`; those are different architecture namespaces.
+`ZLUDA_CC=8.6` was intentionally exposed to CUDA-facing software. Do not replace it with `gfx1201`; those are different architecture namespaces.
 
 ## cuFFT errors
 

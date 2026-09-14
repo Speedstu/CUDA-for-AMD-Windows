@@ -23,26 +23,31 @@ if (-not $hip -or -not (Test-Path (Join-Path $hip 'bin'))) { throw "HIP SDK bin 
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $launcher
-$psi.ArgumentList.Add('--')
-$psi.ArgumentList.Add($probe)
+$psi.Arguments = '-- "' + $probe.Replace('"', '\"') + '"'
 $psi.WorkingDirectory = $zluda
 $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
-$psi.Environment['HIP_PATH'] = $hip
-$psi.Environment['ZLUDA_CC'] = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
-$psi.Environment['ROCBLAS_TENSILE_LIBPATH'] = Join-Path $hip 'bin\rocblas\library'
-$psi.Environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\library'
-$psi.Environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
+$environment = $psi.EnvironmentVariables
+if ($null -eq $environment) { throw 'Windows PowerShell could not initialize ProcessStartInfo.EnvironmentVariables.' }
+$environment['HIP_PATH'] = $hip
+$environment['ZLUDA_CC'] = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
+$environment['ROCBLAS_TENSILE_LIBPATH'] = Join-Path $hip 'bin\rocblas\library'
+$environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\library'
+$environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
+if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
+    $environment['HIP_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
+    $environment['ROCR_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
+}
 
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $psi
-[void]$p.Start()
+if (-not $p.Start()) { throw "Could not start ZLUDA runtime probe: $launcher" }
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
-if ($timedOut) { try { $p.Kill($true) } catch {}; $p.WaitForExit() }
+if ($timedOut) { try { $p.Kill() } catch {}; $p.WaitForExit() }
 $stdout = $p.StandardOutput.ReadToEnd()
 $stderr = $p.StandardError.ReadToEnd()
 
