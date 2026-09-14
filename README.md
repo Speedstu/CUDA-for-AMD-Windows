@@ -35,6 +35,21 @@ See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the historical baseline and t
 
 This does **not** mean every CUDA program or AI model works. CUDA API/library coverage is workload-dependent.
 
+### Original `gfx1200` reference remains supported
+
+The fork preserves the original public reference path for the Radeon RX 9060 XT:
+
+- AMD HIP SDK `6.4`
+- Radeon RX 9060 XT / `gfx1200`
+- ZLUDA `v6-preview.69`
+- LibTorch `2.3.0+cu118`
+- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT passing `cuda_check`
+- the 2,216,347-parameter PPO workload completing one 65,536-timestep iteration
+
+Its benchmark data and custom-overlay A/B results remain in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Adding the R9700 profile does not
+replace this validated `gfx1200` path.
+
 ### C++ and LibTorch build validation
 
 On the reference machine, the CUDA-facing LibTorch integration was compiled and
@@ -209,10 +224,11 @@ You can also stage without launching:
 
 The GPU scanner records the model, `gfx` architecture, driver and HIP information. It does not intentionally collect usernames, tokens or user files.
 
-Example on the validated machine:
+Examples on the reference machines:
 
 ```text
-AMD Radeon AI PRO R9700 -> gfx1201 -> RDNA4 -> target-reference
+AMD Radeon RX 9060 XT -> gfx1200 -> RDNA4 -> validated-reference
+AMD Radeon AI PRO R9700 -> gfx1201 -> RDNA4 -> validated-reference
 ```
 
 ## Current GPU status
@@ -309,7 +325,8 @@ local-artifacts/      local archival files; ignored by Git
 
 ## Limitations
 
-- R9700 / `gfx1201` with the TheRock HIP SDK nightly is the current project target; performance and application coverage still require workload validation.
+- RX 9060 XT / `gfx1200` remains the original validated profile.
+- R9700 / `gfx1201` with the TheRock HIP SDK nightly is the additional project target; performance and application coverage still require workload validation.
 - ZLUDA is not a complete CUDA implementation.
 - Windows exposes only a subset of the full ROCm ecosystem.
 - cuDNN/MIOpen availability depends on the HIP SDK build and is not yet validated for the nightly target.

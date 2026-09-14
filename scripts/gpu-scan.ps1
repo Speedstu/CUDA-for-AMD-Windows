@@ -91,7 +91,8 @@ if ($hipDevices.Count -gt 0) {
     foreach ($d in $hipDevices) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
-        $isReference = ($d.gfx -eq 'gfx1201' -and $d.name -eq 'AMD Radeon AI PRO R9700' -and $hipVersion -match '^7\.14')
+        $isReference = (($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200') -or
+            ($d.name -eq 'AMD Radeon AI PRO R9700' -and $d.gfx -eq 'gfx1201' -and $hipVersion -match '^7\.14'))
         $devices += [pscustomobject][ordered]@{
             index = $d.index
             name = $d.name
@@ -110,7 +111,8 @@ if ($hipDevices.Count -gt 0) {
     foreach ($wmi in $wmiDevices) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
-        $isReference = ($arch -eq 'gfx1201' -and $wmi.name -eq 'AMD Radeon AI PRO R9700' -and $hipVersion -match '^7\.14')
+        $isReference = (($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200') -or
+            ($wmi.name -eq 'AMD Radeon AI PRO R9700' -and $arch -eq 'gfx1201' -and $hipVersion -match '^7\.14'))
         $devices += [pscustomobject][ordered]@{
             index = $i++
             name = $wmi.name
@@ -147,7 +149,7 @@ $report = [pscustomobject][ordered]@{
     selected_gpu_index = if ($selected) { $selected.index } else { $null }
     selected_gpu = $selected
     devices = $devices
-    notes = 'Without -GpuIndex, gfx1201 is preferred over integrated or other AMD GPUs. Use -GpuIndex to select a specific HIP device.'
+    notes = 'The original RX 9060 XT / gfx1200 and the R9700 / gfx1201 reference profiles are preserved. Without -GpuIndex, gfx1201 is preferred; use -GpuIndex to select a specific HIP device.'
 }
 
 if ($OutputPath) {

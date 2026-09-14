@@ -23,7 +23,9 @@ Use the manual LibTorch import-library approach in `examples/manual-libtorch-cud
 
 ## Wrong CUDA compute capability
 
-`ZLUDA_CC=8.6` was intentionally exposed to CUDA-facing software. Do not replace it with `gfx1201`; those are different architecture namespaces.
+`ZLUDA_CC=8.6` was intentionally exposed to CUDA-facing software. Do not
+replace it with `gfx1200` or `gfx1201`; those are different architecture
+namespaces.
 
 ## cuFFT errors
 

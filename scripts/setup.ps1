@@ -186,7 +186,7 @@ $gpuStatus = if ($scan) { [string]$scan.selected_gpu.project_status } else { 'no
 $hipSdkVersion = if ($scan -and $scan.hip_version) { [string]$scan.hip_version } elseif ($HipRoot) { Split-Path $HipRoot -Leaf } else { $null }
 $isReference = [bool]($scan -and $scan.selected_gpu.project_tested)
 $profileName = if ($isReference -and $overlayRuntime) {
-    'reference-gfx1201-zluda-v6-preview69-custom-overlay-libtorch230-cu118'
+    "reference-$gpuArch-zluda-v6-preview69-custom-overlay-libtorch230-cu118"
 } elseif ($gpuArch) {
     "auto-$gpuArch-zluda-v6-preview69-libtorch230-cu118"
 } else {
@@ -218,10 +218,10 @@ $config = [ordered]@{
         libtorch = '2.3.0+cu118'
     }
     validation = [ordered]@{
-        reference_gpu = 'AMD Radeon AI PRO R9700'
-        reference_arch = 'gfx1201'
+        reference_gpu = if ($isReference) { $gpuName } else { $null }
+        reference_arch = if ($isReference) { $gpuArch } else { $null }
         hip_sdk = $hipSdkVersion
-        other_gpus = 'unverified until community-tested'
+        other_gpus = 'Other GPUs remain unverified until community-tested'
     }
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $RuntimeRoot 'runtime-config.json')

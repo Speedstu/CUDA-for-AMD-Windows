@@ -1,6 +1,9 @@
 # Current smoke-test status
 
-The current smoke-test target is a Radeon AI PRO R9700 (`gfx1201`) with TheRock HIP SDK nightly 7.14.0a20260612. The RX 9060 XT (`gfx1200`) result below is historical and does not validate the new target.
+The project retains two reference profiles: the original RX 9060 XT (`gfx1200`)
+stable-SDK path and the Radeon AI PRO R9700 (`gfx1201`) TheRock HIP SDK nightly
+7.14.0a20260612 path. Results for one profile do not replace or invalidate the
+other.
 
 ## Runtime probe
 
@@ -17,6 +20,10 @@ The earlier partial/hanging probe was not representative of the final public pat
 
 ## Training probe
 
-A CUDA-enabled LibTorch PPO workload was previously run with the runtime produced by the public installation path, without the recovered custom overlay. Repeat one full training iteration / 65,536 timesteps on the `gfx1201`/TheRock target before marking it validated.
+A CUDA-enabled LibTorch PPO workload was previously run with the runtime
+produced by the public installation path, without the recovered custom
+overlay. The original `gfx1200` profile completed one full training iteration /
+65,536 timesteps; repeat the same probe on the `gfx1201` nightly profile before
+claiming an equivalent training result there.
 
 See `VALIDATION.md` for the exact recorded output and scope of the claim.
