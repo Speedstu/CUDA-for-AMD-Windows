@@ -15,7 +15,9 @@ A reproducible Windows CUDA compatibility setup built around **ZLUDA + AMD HIP/R
 
 ## Validation status
 
-The project is adapted for the following target, but the existing published runtime evidence is from the previous `gfx1200` profile and must be rerun on this hardware/software combination:
+The current target has passed the runtime smoke checks and a real x64 C++/LibTorch
+configuration and build. The published benchmark data is still from the previous
+`gfx1200` profile and must be rerun on this hardware/software combination:
 
 - ZLUDA `v6-preview.69` from the official ZLUDA release
 - TheRock HIP SDK nightly `7.14.0a20260612` for `gfx120X`
@@ -28,6 +30,41 @@ The project is adapted for the following target, but the existing published runt
 See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the historical baseline and target validation scope.
 
 This does **not** mean every CUDA program or AI model works. CUDA API/library coverage is workload-dependent.
+
+### C++ and LibTorch build validation
+
+On the reference machine, the CUDA-facing LibTorch integration was compiled and
+linked successfully from a temporary CMake project. This verifies the native
+build path independently of the Python package path:
+
+| Tool or component | Version/configuration |
+| --- | --- |
+| CMake | `4.4.3` |
+| Ninja | `1.13.2` |
+| Visual Studio Build Tools | `2022`, Developer Command Prompt `17.14.40` |
+| MSVC | `19.44.35228`, x64 target |
+| C++ standard | C++17 |
+| LibTorch | `2.3.0+cu118` |
+| Target GPU runtime | R9700 / `gfx1201`, TheRock HIP SDK nightly |
+
+The test project created an executable containing `torch::ones({1})`, included
+the LibTorch headers and linked the CUDA-facing import libraries
+`c10.lib`, `torch.lib`, `torch_cpu.lib`, `c10_cuda.lib` and `torch_cuda.lib`.
+It was configured and built with the following pattern:
+
+```powershell
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cmake -S <temporary-test-project> -B <temporary-test-project>\build -G Ninja
+cmake --build <temporary-test-project>\build
+```
+
+The repository's [`examples/manual-libtorch-cuda.cmake`](examples/manual-libtorch-cuda.cmake)
+was included by that test project. The example is an integration fragment, not a
+standalone CMake project, so the consuming project must provide a real executable
+or library target and select C++17 (or newer). This validation proves CMake
+configuration, x64 compilation, header inclusion and library linking. It is not
+by itself a GPU execution benchmark; launch-time validation still requires the
+ZLUDA/HIP runtime staging described below.
 
 ## Tested machine
 
