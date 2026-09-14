@@ -20,7 +20,9 @@ The target runtime should be created from the same public path exposed by `scrip
 
 ## ZLUDA runtime check
 
-ZLUDA's `cuda_check.exe` completed and reported:
+ZLUDA's `cuda_check.exe` completed and reported the following core surfaces.
+The cuDNN line is retained as a **historical stable-HIP-SDK result**, not as
+evidence for the current TheRock nightly target:
 
 ```text
 nvcuda     OK
@@ -28,14 +30,15 @@ cuBLAS     OK -> rocBLAS
 cuBLASLt   OK -> hipBLASLt
 cuSPARSE   OK -> rocSPARSE
 cuFFT      OK
-cuDNN 8/9  unavailable on this stable Windows HIP SDK configuration
+cuDNN 8/9  historical: unavailable on the stable Windows HIP SDK configuration
 ```
 
 `test-runtime.ps1` treats the first five groups as core runtime checks. cuDNN is reported separately because availability depends on the selected HIP SDK build.
 
 ## Real training integration test
 
-The generated public runtime was then staged next to an existing CUDA-enabled LibTorch PPO trainer.
+The generated public runtime was then staged next to an existing CUDA-enabled
+LibTorch PPO trainer in the historical baseline run below.
 
 Observed during the validation run:
 

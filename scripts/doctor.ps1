@@ -21,7 +21,9 @@ function Find-HipRoot {
     if (Test-Path $base) { $roots += $base }
     foreach ($root in $roots) {
         $candidates = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Sort-Object {
-            try { [version]$_.Name } catch { [version]'0.0' }
+            $match = [regex]::Match($_.Name, '^\d+(?:\.\d+){0,3}')
+            if ($match.Success) { try { [version]$match.Value } catch { [version]'0.0' } }
+            else { [version]'0.0' }
         } -Descending
         foreach ($candidate in $candidates) {
             if (Test-Path (Join-Path $candidate.FullName 'bin\rocblas.dll')) { return $candidate.FullName.TrimEnd('\') }

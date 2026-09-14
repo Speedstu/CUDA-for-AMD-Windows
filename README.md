@@ -50,11 +50,13 @@ build path independently of the Python package path:
 The test project created an executable containing `torch::ones({1})`, included
 the LibTorch headers and linked the CUDA-facing import libraries
 `c10.lib`, `torch.lib`, `torch_cpu.lib`, `c10_cuda.lib` and `torch_cuda.lib`.
-It was configured and built with the following pattern:
+It was configured and built from an **x64 Native Tools Command Prompt for VS 2022**
+with the following pattern. The cache values are required because the repository
+file is an integration fragment, not a standalone project:
 
-```powershell
+```cmd
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-cmake -S <temporary-test-project> -B <temporary-test-project>\build -G Ninja
+cmake -S <temporary-test-project> -B <temporary-test-project>\build -G Ninja -DMANUAL_LIBTORCH_ROOT=C:\path\to\libtorch -DCMAKE_CXX_STANDARD=17
 cmake --build <temporary-test-project>\build
 ```
 
