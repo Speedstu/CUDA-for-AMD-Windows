@@ -76,7 +76,7 @@ Total Iterations: 1
 
 The process was stopped after the completed iteration because the purpose of this run was reproducibility validation, not a throughput benchmark.
 
-The historical run verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack. Repeat this probe on `gfx1201`/TheRock HIP SDK 7.14 before treating the target as validated.
+The historical run verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack. Repeat this probe on `gfx1201`/TheRock HIP SDK 7.14 before making equivalent PPO workload or performance claims. The runtime and native LibTorch build are already validated independently.
 
 ## Historical performance
 

@@ -25,7 +25,8 @@ both cuDNN compatibility groups as passing.
 A CUDA-enabled LibTorch PPO workload was previously run with the runtime
 produced by the public installation path, without the recovered custom
 overlay. The original `gfx1200` profile completed one full training iteration /
-65,536 timesteps; repeat the same probe on the `gfx1201` nightly profile before
-claiming an equivalent training result there.
+65,536 timesteps. Repeat the same probe on the `gfx1201` nightly profile before
+claiming an equivalent PPO training result or performance number there; the
+runtime smoke checks and native LibTorch build are already validated.
 
 See `VALIDATION.md` for the exact recorded output and scope of the claim.

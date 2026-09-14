@@ -19,17 +19,18 @@ A reproducible Windows CUDA compatibility setup built around **ZLUDA + AMD HIP/R
 
 ## Validation status
 
-The current target has passed the runtime smoke checks and a real x64 C++/LibTorch
-configuration and build. The published benchmark data is still from the previous
-`gfx1200` profile and must be rerun on this hardware/software combination:
+The current target has passed the runtime smoke checks, including cuDNN 8/9
+through MIOpen, and a real x64 C++/LibTorch configuration and build. The
+published benchmark data is still from the previous `gfx1200` profile and must
+be rerun on this hardware/software combination:
 
 - ZLUDA `v6-preview.69` from the official ZLUDA release
 - TheRock HIP SDK nightly `7.14.0a20260612` for `gfx120X`
 - LibTorch `2.3.0 + cu118`
 - AMD Radeon AI PRO R9700 / `gfx1201`
 - `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT are the required smoke-test surfaces
-- the existing **2,216,347-parameter PPO integration workload** is the recommended target validation
-- one clean validation iteration should complete **65,536 timesteps** before this profile is marked validated
+- the existing **2,216,347-parameter PPO integration workload** remains the recommended workload validation
+- one clean validation iteration should complete **65,536 timesteps** before making PPO workload claims
 
 See [`docs/VALIDATION.md`](docs/VALIDATION.md) for the historical baseline and target validation scope.
 
