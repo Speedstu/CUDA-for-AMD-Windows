@@ -171,8 +171,12 @@ if ($UseRecoveredCustomOverlay) {
     if (-not (Test-Path (Join-Path $RecoveredOverlayRoot 'cublas64_11.dll'))) {
         throw "Recovered custom overlay not found at $RecoveredOverlayRoot"
     }
-    if ($scan -and -not $scan.selected_gpu.project_tested) {
-        Write-Warning 'The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on gfx1201 is experimental.'
+    $overlayReference = ($scan -and
+        $scan.selected_gpu.name -match 'RX 9060 XT' -and
+        $scan.selected_gpu.gfx -eq 'gfx1200')
+    if (-not $overlayReference) {
+        $selectedName = if ($scan) { "$($scan.selected_gpu.name) / $($scan.selected_gpu.gfx)" } else { 'the selected device' }
+        Write-Warning "The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on $selectedName is experimental."
     }
     $overlayRuntime = Join-Path $RuntimeRoot 'custom-overlay'
     if (Test-Path $overlayRuntime) { Remove-Item $overlayRuntime -Recurse -Force }
@@ -185,7 +189,10 @@ $gpuArch = if ($scan) { [string]$scan.selected_gpu.gfx } else { $null }
 $gpuStatus = if ($scan) { [string]$scan.selected_gpu.project_status } else { 'not-scanned' }
 $hipSdkVersion = if ($scan -and $scan.hip_version) { [string]$scan.hip_version } elseif ($HipRoot) { Split-Path $HipRoot -Leaf } else { $null }
 $isReference = [bool]($scan -and $scan.selected_gpu.project_tested)
-$profileName = if ($isReference -and $overlayRuntime) {
+$overlayReference = ($scan -and
+    $scan.selected_gpu.name -match 'RX 9060 XT' -and
+    $scan.selected_gpu.gfx -eq 'gfx1200')
+$profileName = if ($overlayReference -and $overlayRuntime) {
     "reference-$gpuArch-zluda-v6-preview69-custom-overlay-libtorch230-cu118"
 } elseif ($gpuArch) {
     "auto-$gpuArch-zluda-v6-preview69-libtorch230-cu118"
@@ -200,7 +207,7 @@ $config = [ordered]@{
         name = $gpuName
         arch = $gpuArch
         index = if ($scan) { $scan.selected_gpu.index } else { $null }
-        hip_visible_device = if ($scan) { [string]$scan.selected_gpu.index } else { $null }
+        hip_visible_device = if ($scan -and $scan.selected_gpu.detection -eq 'hipInfo') { [string]$scan.selected_gpu.index } else { $null }
         project_status = $gpuStatus
         tested_reference = $isReference
         scanner_report = $scanPath

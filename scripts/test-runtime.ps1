@@ -41,13 +41,40 @@ if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$conf
     $environment['ROCR_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
 }
 
+function Stop-ProcessTree {
+    param([int]$RootId)
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $children = @{}
+    foreach ($process in $processes) {
+        $parent = [int]$process.ParentProcessId
+        if (-not $children.ContainsKey($parent)) { $children[$parent] = @() }
+        $children[$parent] += [int]$process.ProcessId
+    }
+    $pending = @($RootId)
+    $descendants = @()
+    while ($pending.Count -gt 0) {
+        $parent = $pending[0]
+        if ($pending.Count -eq 1) { $pending = @() } else { $pending = $pending[1..($pending.Count - 1)] }
+        if ($children.ContainsKey($parent)) {
+            foreach ($child in $children[$parent]) {
+                $descendants += $child
+                $pending += $child
+            }
+        }
+    }
+    foreach ($processId in ($descendants | Select-Object -Unique | Sort-Object -Descending)) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+    Stop-Process -Id $RootId -Force -ErrorAction SilentlyContinue
+}
+
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $psi
 if (-not $p.Start()) { throw "Could not start ZLUDA runtime probe: $launcher" }
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
-if ($timedOut) { try { $p.Kill() } catch {}; $p.WaitForExit() }
+if ($timedOut) { Stop-ProcessTree -RootId $p.Id; $p.WaitForExit() }
 $stdout = $p.StandardOutput.ReadToEnd()
 $stderr = $p.StandardError.ReadToEnd()
 
