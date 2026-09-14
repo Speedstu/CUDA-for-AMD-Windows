@@ -14,9 +14,11 @@ other.
 - cuBLASLt: PASS through hipBLASLt
 - cuSPARSE: PASS through rocSPARSE
 - cuFFT: PASS
-- cuDNN: depends on the selected HIP SDK build
+- cuDNN 8/9: PASS through TheRock `MIOpen.dll` on the tested `7.14-nightly`
 
-The earlier partial/hanging probe was not representative of the final public path. The clean upstream configuration now exits normally.
+The earlier partial/hanging probe was not representative of the final public
+path. The clean TheRock nightly configuration now exits normally and reports
+both cuDNN compatibility groups as passing.
 
 ## Training probe
 

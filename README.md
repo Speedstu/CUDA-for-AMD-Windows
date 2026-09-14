@@ -254,9 +254,12 @@ Current target runtime check:
 | cuBLASLt | ✅ via hipBLASLt |
 | cuSPARSE | ✅ via rocSPARSE |
 | cuFFT | ✅ |
-| cuDNN | ⚠️ depends on the SDK build; nightly/MIOpen support is not yet validated |
+| cuDNN 8/9 | ✅ via TheRock `MIOpen.dll` |
 
-The official stable Windows HIP SDK does not ship the full ROCm AI-library stack such as MIOpen. The nightly may provide additional machine-learning support, but convolution-heavy software and cuDNN still require workload validation.
+On the tested TheRock `7.14-nightly` runtime, `cudnn8` and `cudnn9`
+both passed `cuda_check` through `C:\ROCm\7.14-nightly\bin\MIOpen.dll`.
+This result is specific to that nightly; the stable Windows HIP SDK can lack
+MIOpen, and convolution-heavy applications still require workload validation.
 
 ## Troubleshooting notes from the target setup
 
@@ -329,7 +332,8 @@ local-artifacts/      local archival files; ignored by Git
 - R9700 / `gfx1201` with the TheRock HIP SDK nightly is the additional project target; performance and application coverage still require workload validation.
 - ZLUDA is not a complete CUDA implementation.
 - Windows exposes only a subset of the full ROCm ecosystem.
-- cuDNN/MIOpen availability depends on the HIP SDK build and is not yet validated for the nightly target.
+- cuDNN/MIOpen availability depends on the HIP SDK build. The tested TheRock
+  `7.14-nightly` setup passes both cuDNN 8 and cuDNN 9 compatibility checks.
 - NCCL, TensorRT, unsupported PTX behavior and some custom CUDA extensions may fail.
 - `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the AMD GPU architecture.
 

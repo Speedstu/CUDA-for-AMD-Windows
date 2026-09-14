@@ -38,6 +38,19 @@ cuDNN 8/9  historical: unavailable on the stable Windows HIP SDK configuration
 
 `test-runtime.ps1` treats the first five groups as core runtime checks. cuDNN is reported separately because availability depends on the selected HIP SDK build.
 
+The current TheRock nightly probe was also run against the generated runtime
+configuration and reported:
+
+```text
+cudnn9: OK (C:\ROCm\7.14-nightly\bin\MIOpen.dll)
+cudnn8: OK (C:\ROCm\7.14-nightly\bin\MIOpen.dll)
+[PASS] cudnn
+```
+
+This supersedes the historical stable-SDK cuDNN result for the `gfx1201`
+nightly profile. It does not imply that every stable HIP SDK build provides
+the same MIOpen-backed compatibility.
+
 ## Real training integration test
 
 The generated public runtime was then staged next to an existing CUDA-enabled
