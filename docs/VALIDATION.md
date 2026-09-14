@@ -4,7 +4,10 @@ This document records what was actually tested, rather than what is assumed to w
 
 ## Public reproducible path
 
-The operational target is TheRock HIP SDK nightly **7.14.0a20260612** on `gfx1201`; the previous `gfx1200`/HIP 6.4 run below is retained as historical evidence and must not be read as validation of the new target.
+The operational target is TheRock HIP SDK nightly **7.14.0a20260612** on
+`gfx1201`. The original `gfx1200` profile remains recognized and preserved;
+the `gfx1200`/HIP 6.4 run below is retained as its historical evidence and
+must not be read as validation of the new `gfx1201` target.
 
 Hardware/software:
 

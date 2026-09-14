@@ -12,6 +12,10 @@ A reproducible Windows CUDA compatibility setup built around **ZLUDA + AMD HIP/R
 
 > [!IMPORTANT]
 > **The current target is AMD Radeon AI PRO R9700 (`gfx1201`) with the TheRock HIP SDK nightly.** Other AMD GPUs are candidates, not guaranteed working devices. If you test another card, please open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml), whether it works or fails.
+>
+> The original Radeon RX 9060 XT (`gfx1200`) profile remains supported and is
+> preserved as a separate recognized candidate/reference profile. This fork adds
+> `gfx1201`; it does not replace or remove the original `gfx1200` path.
 
 ## Validation status
 
@@ -216,6 +220,7 @@ AMD Radeon AI PRO R9700 -> gfx1201 -> RDNA4 -> target-reference
 | GPU | Target | Project status |
 | --- | --- | --- |
 | Radeon AI PRO R9700 | `gfx1201` | ✅ target reference |
+| Radeon RX 9060 XT | `gfx1200` | ✅ original profile preserved |
 
 The scanner recognizes other Windows HIP architecture families and marks them as **unverified candidates** rather than claiming support. Detection is not proof that a workload runs.
 
@@ -267,7 +272,10 @@ Use Windows PowerShell with `-ExecutionPolicy Bypass` as shown above. The reposi
 
 ## Performance
 
-The published benchmark data covers the previous RX 9060 XT / `gfx1200` profile. Re-run the workload on the R9700 / `gfx1201` nightly profile before making performance claims.
+The published benchmark data covers the original RX 9060 XT / `gfx1200`
+profile. That profile remains part of the project and is not replaced by the
+R9700 target. Re-run the workload on the R9700 / `gfx1201` nightly profile
+before making new performance claims.
 
 Historical tuned runs used a different training configuration and reached roughly **70k–109k overall steps/s**. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for methodology and raw data.
 
