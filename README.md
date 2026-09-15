@@ -11,23 +11,35 @@ Run CUDA-targeted Windows applications on AMD GPUs through ZLUDA + ROCm/HIP.
 A reproducible Windows CUDA compatibility setup built around **ZLUDA + AMD HIP/ROCm**. It is intended for CUDA-facing compute applications, including workloads that use CUDA-enabled LibTorch.
 
 > [!IMPORTANT]
-> **Validated hardware is currently AMD Radeon RX 9060 XT (`gfx1200`) only.** Other AMD GPUs are candidates, not guaranteed working devices. If you test another card, please open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml), whether it works or fails.
+> **The validated reference remains AMD Radeon RX 9060 XT (`gfx1200`).** Other AMD GPUs are compatibility candidates, not automatically validated devices.
+>
+> A successful `doctor.ps1` or `cuda_check.exe` run proves that runtime/library surfaces load. It does **not** prove numerical correctness. Non-reference GPUs should also pass `scripts/test-functional.ps1` before their workload output is trusted.
 
-## Verified today
+## Verified reference
 
-The public, upstream-only path has been tested without any private/recovered DLLs:
+The public, upstream-only reference path was tested without private/recovered DLLs:
 
 - ZLUDA `v6-preview.69` from the official ZLUDA release
 - AMD HIP SDK `6.4`
 - LibTorch `2.3.0 + cu118`
 - RX 9060 XT / `gfx1200`
-- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT all pass `cuda_check`
+- `nvcuda`, cuBLAS, cuBLASLt, cuSPARSE and cuFFT pass `cuda_check`
 - a real **2,216,347-parameter PPO network completed forward/inference, PPO learning and optimizer work on the CUDA-facing device**
 - one clean validation iteration completed **65,536 timesteps** using the runtime produced by this repository
 
 That integration test used the same CUDA-facing LibTorch training workload that originally motivated this project. See [`docs/VALIDATION.md`](docs/VALIDATION.md).
 
 This does **not** mean every CUDA program or AI model works. CUDA API/library coverage is workload-dependent.
+
+## Compatibility status
+
+| GPU | Target | Status | Notes |
+| --- | --- | --- | --- |
+| Radeon RX 9060 XT | `gfx1200` | ✅ validated reference | Project integration workload completed |
+| Radeon 890M | `gfx1150` | 🟡 community partial | HIP 7.2 runtime/GEMM worked; reported `conv2d` hang and incorrect memory-efficient SDPA output in issue #3 |
+| Other recognized AMD GPUs | architecture-dependent | ⚪ unverified candidate | Runtime detection is not functional validation |
+
+For `gfx1150`/RDNA 3.5, the project records **HIP SDK 7.2 or newer** as the minimum compatible floor. Do not install HIP 6.4 merely to match the historical RX 9060 XT reference profile.
 
 ## How it works
 
@@ -45,14 +57,14 @@ CUDA-targeted Windows application
 
 ## Install
 
-### 1. Install the AMD prerequisites
+### 1. Install AMD prerequisites
 
-Install a current AMD GPU driver and the **AMD HIP SDK for Windows including HIP Libraries**.
+Install a current AMD GPU driver and a coherent **AMD HIP SDK for Windows including HIP Libraries**.
 
-The validated reference uses HIP SDK 6.4. Newer versions may work but should be treated as unverified until reported.
+The correct HIP version depends on the GPU architecture. The installer now checks the architecture-specific minimum recorded in `manifests/windows-gpu-profiles.json` instead of assuming the historical reference version is valid for every GPU.
 
 AMD Windows HIP SDK guide:
-https://rocm.docs.amd.com/projects/install-on-windows/en/docs-6.4.2/index.html
+https://rocm.docs.amd.com/projects/install-on-windows/en/latest/
 
 ### 2. Clone and run the installer
 
@@ -66,16 +78,58 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 1. detect the AMD GPU and native `gfxXXXX` target;
 2. verify the AMD driver/HIP SDK and required math libraries;
-3. download the pinned official ZLUDA Windows build;
-4. download LibTorch `2.3.0+cu118` (about 2.66 GB);
-5. verify the downloaded SHA-256 hashes;
-6. generate `.runtime\runtime-config.json` and `.runtime\gpu-report.json`;
-7. run ZLUDA's `cuda_check.exe` against the installed AMD stack.
+3. enforce an architecture-aware HIP version floor when one is recorded;
+4. download the pinned official ZLUDA Windows build;
+5. download LibTorch `2.3.0+cu118` unless skipped;
+6. verify downloaded SHA-256 hashes;
+7. generate `.runtime\runtime-config.json` and `.runtime\gpu-report.json`;
+8. run ZLUDA's `cuda_check.exe` as a **runtime smoke test**;
+9. run numerical functional checks automatically when a Python environment with PyTorch is available.
+
+If you already have an isolated CUDA-facing PyTorch environment, pass it explicitly so the installer can run the numerical suite:
+
+```powershell
+.\scripts\install.ps1 -FunctionalPython C:\path\to\venv\Scripts\python.exe
+```
 
 If you do not need LibTorch:
 
 ```powershell
 .\scripts\install.ps1 -SkipLibTorch
+```
+
+## Runtime smoke vs functional correctness
+
+There are now two separate validation layers.
+
+### Runtime smoke
+
+```powershell
+.\scripts\test-runtime.ps1
+```
+
+This checks whether ZLUDA can expose/load the CUDA-facing driver and major libraries. A timeout is now treated as a failure even if earlier probes printed `OK`.
+
+### Numerical functional validation
+
+```powershell
+.\scripts\test-functional.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe -Strict
+```
+
+Each operation runs in its **own process with a timeout**, so a hanging backend cannot block the entire validation suite. Current probes cover:
+
+- FP32 and FP16 matrix multiplication with CPU reference comparison;
+- `conv2d` with CPU reference comparison;
+- SDPA math backend with CPU reference comparison;
+- SDPA memory-efficient backend with CPU reference comparison.
+
+A backend that cleanly refuses unsupported work is reported as `unsupported` rather than numerically wrong. A returned tensor that exceeds tolerance, contains non-finite data, errors unexpectedly, or hangs is a functional failure.
+
+Reports are written to:
+
+```text
+.runtime\runtime-test.json
+.runtime\functional-test.json
 ```
 
 ## Run a CUDA-targeted application
@@ -95,33 +149,28 @@ You can also stage without launching:
 ## Diagnose a machine
 
 ```powershell
-.\scripts\doctor.ps1
 .\scripts\gpu-scan.ps1
+.\scripts\doctor.ps1
+.\scripts\check-hip-compat.ps1
 .\scripts\test-runtime.ps1
+.\scripts\test-functional.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
 ```
 
 The GPU scanner records the model, `gfx` architecture, driver and HIP information. It does not intentionally collect usernames, tokens or user files.
 
-Example on the validated machine:
+Example statuses:
 
 ```text
-AMD Radeon RX 9060 XT -> gfx1200 -> RDNA4 -> validated-reference
+AMD Radeon RX 9060 XT -> gfx1200 -> validated-reference
+AMD Radeon 890M       -> gfx1150 -> community-partial
 ```
-
-## Current GPU status
-
-| GPU | Target | Project status |
-| --- | --- | --- |
-| Radeon RX 9060 XT | `gfx1200` | ✅ validated reference |
 
 The scanner recognizes other Windows HIP architecture families and marks them as **unverified candidates** rather than claiming support. Detection is not proof that a workload runs.
 
 AMD's current Windows hardware table:
 https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html
 
-## Runtime coverage on the validated setup
-
-Current upstream runtime check:
+## Runtime coverage on the validated reference
 
 | CUDA-facing component | Result |
 | --- | --- |
@@ -148,11 +197,12 @@ The recovered DLLs remain fingerprinted in `manifests/recovered-artifacts.sha256
 
 ## Found a bug or tested another GPU?
 
-Please publish an issue. Failed tests are useful too.
+Successful and failed reports are both useful. Please include both runtime and functional reports when possible:
 
 ```powershell
 .\scripts\gpu-scan.ps1 -OutputPath .\gpu-report.json
 .\scripts\test-runtime.ps1
+.\scripts\test-functional.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
 ```
 
 Then open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/new?template=gpu-compatibility.yml) and include the application, result and first useful error/output.
@@ -160,7 +210,7 @@ Then open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-
 ## Repository layout
 
 ```text
-scripts/              install, diagnostics, scanner, staging and launcher
+scripts/              install, diagnostics, scanner, staging, launcher and functional probes
 manifests/            pinned versions, hashes and GPU architecture metadata
 docs/                 validation, architecture, benchmarks and troubleshooting
 examples/             integration/reference snippets
@@ -170,8 +220,9 @@ local-artifacts/      local archival files; ignored by Git
 
 ## Limitations
 
-- Only RX 9060 XT / `gfx1200` is currently validated by this project.
+- Only RX 9060 XT / `gfx1200` is currently a fully validated project reference.
 - ZLUDA is not a complete CUDA implementation.
+- Passing `cuda_check` does not establish numerical correctness.
 - Windows exposes only a subset of the full ROCm ecosystem.
 - cuDNN/MIOpen is not available in the validated stable HIP SDK path.
 - NCCL, TensorRT, unsupported PTX behavior and some custom CUDA extensions may fail.
