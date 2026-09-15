@@ -47,9 +47,19 @@ function Get-ArchMetadata {
     return $null
 }
 
+function Test-ExternalValidation {
+    param([string]$Name, $Meta)
+    if (-not $Meta -or -not $Meta.project_validation) { return $false }
+    if ([string]$Meta.project_validation.status -ne 'validated-external') { return $false }
+    $pattern = [string]$Meta.project_validation.model_pattern
+    if (-not $pattern) { return $true }
+    return [bool]($Name -match $pattern)
+}
+
 function Get-ProjectStatus {
     param([string]$Name, [string]$Arch, $Meta, [bool]$IsReference)
     if ($IsReference) { return 'validated-reference' }
+    if (Test-ExternalValidation -Name $Name -Meta $Meta) { return 'validated-external' }
     if ($Meta -and $Meta.community_report -and $Meta.community_report.status -eq 'partial') {
         # The current partial evidence is specifically from Radeon 890M / gfx1150 issue #3.
         if ($Arch -eq 'gfx1150' -and $Name -match '890M') { return 'community-partial' }
@@ -57,7 +67,6 @@ function Get-ProjectStatus {
     if ($Meta -and $Meta.current_windows_hip_sdk) { return 'unverified-candidate' }
     return 'experimental'
 }
-
 $resolvedHip = Find-HipRoot $HipRoot
 $hipInfoPath = if ($resolvedHip) { Join-Path $resolvedHip 'bin\hipInfo.exe' } else { $null }
 $hipDevices = @()
@@ -98,6 +107,8 @@ if ($hipDevices.Count -gt 0) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
         $isReference = ($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200')
+        $isExternalValidated = Test-ExternalValidation -Name $d.name -Meta $meta
+        $isProjectTested = [bool]($isReference -or $isExternalValidated)
         $status = Get-ProjectStatus -Name $d.name -Arch $d.gfx -Meta $meta -IsReference $isReference
         $devices += [pscustomobject][ordered]@{
             index = $d.index
@@ -110,7 +121,8 @@ if ($hipDevices.Count -gt 0) {
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
             minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
             community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
-            project_tested = $isReference
+            project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
+            project_tested = $isProjectTested
             project_status = $status
             functional_validation_required = [bool](-not $isReference)
         }
@@ -121,6 +133,8 @@ if ($hipDevices.Count -gt 0) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
         $isReference = ($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200')
+        $isExternalValidated = Test-ExternalValidation -Name $wmi.name -Meta $meta
+        $isProjectTested = [bool]($isReference -or $isExternalValidated)
         $status = Get-ProjectStatus -Name $wmi.name -Arch $arch -Meta $meta -IsReference $isReference
         $devices += [pscustomobject][ordered]@{
             index = $i++
@@ -133,7 +147,8 @@ if ($hipDevices.Count -gt 0) {
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
             minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
             community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
-            project_tested = $isReference
+            project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
+            project_tested = $isProjectTested
             project_status = $status
             functional_validation_required = [bool](-not $isReference)
         }
@@ -156,7 +171,7 @@ $report = [pscustomobject][ordered]@{
     selected_gpu_index = if ($selected) { $selected.index } else { $null }
     selected_gpu = $selected
     devices = $devices
-    notes = 'Runtime detection is not proof of numerical correctness. Non-reference GPUs require scripts/test-functional.ps1 before they should be treated as validated.'
+    notes = 'Runtime detection is not proof of numerical correctness. validated-external means the project has archived validation evidence on a separate machine; re-run functional validation on your exact current stack.'
 }
 
 if ($OutputPath) {
@@ -176,8 +191,11 @@ if ($AsJson) {
     } else {
         $devices | Format-Table index,name,gfx,generation,detection,current_windows_hip_sdk,project_status -AutoSize
         Write-Host ''
-        if ($selected.project_tested) {
+        if ($selected.project_status -eq 'validated-reference') {
             Write-Host '[validated] This is the reference GPU tested by the project.'
+        } elseif ($selected.project_status -eq 'validated-external') {
+            Write-Host '[validated-external] This GPU has archived project validation on a separate Windows AMD/ZLUDA machine.'
+            Write-Warning 'Re-run test-functional.ps1/test-capabilities.ps1 on your exact current driver/runtime before assuming every capability matches the archived setup.'
         } elseif ($selected.project_status -eq 'community-partial') {
             Write-Warning 'This GPU has a community partial report: runtime/GEMM worked, but at least one functional operation failed or returned incorrect results. Run test-functional.ps1 on your exact stack.'
         } elseif ($selected.current_windows_hip_sdk) {

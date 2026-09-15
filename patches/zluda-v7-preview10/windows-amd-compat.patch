@@ -1,3 +1,45 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 75fa768..26b0de8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5214,6 +5214,9 @@ version = "0.0.0"
+ dependencies = [
+  "cuda_macros",
+  "cuda_types",
++ "hip_runtime-sys",
++ "libloading",
++ "zluda_windows",
+ ]
+ 
+ [[package]]
+@@ -5244,6 +5247,7 @@ version = "0.0.0"
+ dependencies = [
+  "cuda_macros",
+  "cuda_types",
++ "libloading",
+  "rocm_smi-sys",
+  "zluda_common",
+ ]
+@@ -5300,6 +5304,7 @@ dependencies = [
+  "cuda_macros",
+  "cuda_types",
+  "embed-resource",
++ "hip_runtime-sys",
+  "libloading",
+  "rocsparse-sys",
+  "unwrap_or",
+diff --git a/zluda_common/src/lib.rs b/zluda_common/src/lib.rs
+index af41f7a..8036577 100644
+--- a/zluda_common/src/lib.rs
++++ b/zluda_common/src/lib.rs
+@@ -281,6 +281,7 @@ from_cuda_transmute!(
+     cudnn9::cudnnConvolutionDescriptor_t => miopenConvolutionDescriptor_t,
+     cusparseHandle_t => rocsparse_handle,
+     cusparseMatrixType_t => rocsparse_matrix_type,
++    cusparseSpMatDescr_t => rocsparse_spmat_descr,
+     cusparseConstSpMatDescr_t => rocsparse_const_spmat_descr,
+     cusparseDnMatDescr_t => rocsparse_dnmat_descr,
+     cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
 diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
 index 6b672fa..19ea98b 100644
 --- a/zluda_fft/Cargo.toml
@@ -569,7 +611,7 @@ index 9de500c..aefce62 100644
 +    ]
 +);
 diff --git a/zluda_ml/Cargo.toml b/zluda_ml/Cargo.toml
-index 592d87c..8f9c3be 100644
+index 592d87c..acbf071 100644
 --- a/zluda_ml/Cargo.toml
 +++ b/zluda_ml/Cargo.toml
 @@ -21,3 +21,6 @@ linux_symlinks = [
@@ -578,45 +620,92 @@ index 592d87c..8f9c3be 100644
  ]
 +
 +[target.'cfg(windows)'.dependencies]
-+hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
++libloading = "0.8"
 diff --git a/zluda_ml/src/impl_win.rs b/zluda_ml/src/impl_win.rs
-index 99c93cc..131ec3a 100644
+index 99c93cc..63981f7 100644
 --- a/zluda_ml/src/impl_win.rs
 +++ b/zluda_ml/src/impl_win.rs
-@@ -1,77 +1,154 @@
+@@ -1,77 +1,227 @@
  use cuda_types::nvml::*;
-+use hip_runtime_sys::*;
++use libloading::os::windows::Library;
++use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
++use std::sync::OnceLock;
  
  pub(crate) use crate::impl_common::error_string;
  pub(crate) use crate::impl_common::system_get_driver_version;
  
-+fn hip_ok(result: hipError_t) -> nvmlReturn_t {
-+    if result.is_ok() { nvmlReturn_t::SUCCESS } else { nvmlReturn_t::ERROR_UNKNOWN }
-+}
++type CuResult = c_int;
++type CuDevice = c_int;
++type CuContext = *mut c_void;
 +
 +fn handle_from_index(index: u32) -> nvmlDevice_t {
 +    (index as usize + 1) as nvmlDevice_t
 +}
 +
-+fn index_from_handle(device: nvmlDevice_t) -> Result<i32, nvmlReturn_t> {
++fn index_from_handle(device: nvmlDevice_t) -> Result<CuDevice, nvmlReturn_t> {
 +    if device.is_null() {
 +        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
 +    }
 +    let raw = device as usize;
-+    if raw == 0 || raw - 1 > i32::MAX as usize {
++    if raw == 0 || raw - 1 > c_int::MAX as usize {
 +        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
 +    }
-+    Ok((raw - 1) as i32)
++    Ok((raw - 1) as CuDevice)
++}
++
++fn driver_library() -> Result<&'static Library, nvmlReturn_t> {
++    static LIB: OnceLock<Result<Library, ()>> = OnceLock::new();
++    let result = LIB.get_or_init(|| {
++        Library::open_already_loaded("nvcuda")
++            .or_else(|_| unsafe { Library::new("nvcuda.dll") })
++            .map_err(|_| ())
++    });
++    result.as_ref().map_err(|_| nvmlReturn_t::ERROR_UNKNOWN)
++}
++
++unsafe fn symbol<T: Copy>(name: &'static [u8]) -> Result<T, nvmlReturn_t> {
++    driver_library()?
++        .get::<T>(name)
++        .map(|s| *s)
++        .map_err(|_| nvmlReturn_t::ERROR_NOT_SUPPORTED)
++}
++
++unsafe fn ensure_cuda() -> nvmlReturn_t {
++    let init = match symbol::<unsafe extern "system" fn(c_uint) -> CuResult>(b"cuInit\0") {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
++    if init(0) == 0 {
++        nvmlReturn_t::SUCCESS
++    } else {
++        nvmlReturn_t::ERROR_UNKNOWN
++    }
++}
++
++unsafe fn device_count() -> Result<u32, nvmlReturn_t> {
++    let init = ensure_cuda();
++    if init.is_err() {
++        return Err(init);
++    }
++    let f = symbol::<unsafe extern "system" fn(*mut c_int) -> CuResult>(b"cuDeviceGetCount\0")?;
++    let mut count = 0i32;
++    if f(&mut count) != 0 {
++        return Err(nvmlReturn_t::ERROR_UNKNOWN);
++    }
++    Ok(count.max(0) as u32)
 +}
 +
 +fn valid_index(index: u32) -> bool {
-+    let mut count = 0i32;
-+    unsafe { hipGetDeviceCount(&mut count).is_ok() && index < count.max(0) as u32 }
++    unsafe { device_count().map(|count| index < count).unwrap_or(false) }
 +}
 +
  pub(crate) unsafe fn init() -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+    hip_ok(hipInit(0))
++    // NVML must not initialize HIP directly on Windows. Doing so creates HIP
++    // runtime state outside ZLUDA's CUDA context model and can break rocSPARSE
++    // handle creation later in the same process. Query the already-loaded
++    // CUDA-facing ZLUDA driver instead.
++    ensure_cuda()
  }
  
  pub(crate) unsafe fn init_v2() -> nvmlReturn_t {
@@ -624,45 +713,58 @@ index 99c93cc..131ec3a 100644
 +    init()
  }
  
- pub(crate) unsafe fn init_with_flags(_flags: ::core::ffi::c_uint) -> nvmlReturn_t {
+-pub(crate) unsafe fn init_with_flags(_flags: ::core::ffi::c_uint) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
++pub(crate) unsafe fn init_with_flags(_flags: c_uint) -> nvmlReturn_t {
 +    init()
  }
  
  pub(crate) unsafe fn shutdown() -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+    // HIP runtime lifetime is process-global; NVML shutdown should not tear it down.
++    // ZLUDA/CUDA driver lifetime belongs to the process, not NVML.
 +    nvmlReturn_t::SUCCESS
  }
  
 -pub(crate) unsafe fn device_get_count_v2(_device_count: &mut ::core::ffi::c_uint) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+pub(crate) unsafe fn device_get_count_v2(device_count: &mut ::core::ffi::c_uint) -> nvmlReturn_t {
-+    let mut count = 0i32;
-+    match hipGetDeviceCount(&mut count) {
-+        Ok(()) => {
-+            *device_count = count.max(0) as u32;
++pub(crate) unsafe fn device_get_count_v2(device_count_out: &mut c_uint) -> nvmlReturn_t {
++    match device_count() {
++        Ok(count) => {
++            *device_count_out = count;
 +            nvmlReturn_t::SUCCESS
 +        }
-+        Err(_) => nvmlReturn_t::ERROR_UNKNOWN,
++        Err(e) => e,
 +    }
  }
  
  pub(crate) unsafe fn device_get_handle_by_pci_bus_id_v2(
-     _pci_bus_id: &std::ffi::CStr,
+-    _pci_bus_id: &std::ffi::CStr,
 -    _device: &mut cuda_types::nvml::nvmlDevice_t,
-+    _device: &mut nvmlDevice_t,
++    pci_bus_id: &CStr,
++    device: &mut nvmlDevice_t,
  ) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+    // PCI lookup is intentionally left explicit until HIP PCI-id parsing is validated.
-+    nvmlReturn_t::ERROR_NOT_SUPPORTED
++    ensure_cuda()?;
++    let f = match symbol::<unsafe extern "system" fn(*mut CuDevice, *const c_char) -> CuResult>(
++        b"cuDeviceGetByPCIBusId\0",
++    ) {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
++    let mut cuda_device = 0;
++    if f(&mut cuda_device, pci_bus_id.as_ptr()) != 0 || cuda_device < 0 {
++        return nvmlReturn_t::ERROR_NOT_FOUND;
++    }
++    *device = handle_from_index(cuda_device as u32);
++    nvmlReturn_t::SUCCESS
  }
  
  pub(crate) unsafe fn device_get_field_values(
 -    _device: cuda_types::nvml::nvmlDevice_t,
-+    _device: nvmlDevice_t,
-     _values_count: ::core::ffi::c_int,
+-    _values_count: ::core::ffi::c_int,
 -    _values: &mut cuda_types::nvml::nvmlFieldValue_t,
++    _device: nvmlDevice_t,
++    _values_count: c_int,
 +    _values: &mut nvmlFieldValue_t,
  ) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
@@ -684,7 +786,7 @@ index 99c93cc..131ec3a 100644
 -    _device: &mut cuda_types::nvml::nvmlDevice_t,
 -) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+pub(crate) fn device_get_handle_by_index_v2(index: ::core::ffi::c_uint, device: &mut nvmlDevice_t) -> nvmlReturn_t {
++pub(crate) fn device_get_handle_by_index_v2(index: c_uint, device: &mut nvmlDevice_t) -> nvmlReturn_t {
 +    if !valid_index(index) {
 +        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
 +    }
@@ -694,11 +796,14 @@ index 99c93cc..131ec3a 100644
  
  pub(crate) fn device_get_compute_running_processes(
 -    _device: cuda_types::nvml::nvmlDevice_t,
-+    _device: nvmlDevice_t,
-     info_count: &mut ::core::ffi::c_uint,
+-    info_count: &mut ::core::ffi::c_uint,
 -    _infos: Option<&mut cuda_types::nvml::nvmlProcessInfo_v1_t>,
++    _device: nvmlDevice_t,
++    info_count: &mut c_uint,
 +    _infos: Option<&mut nvmlProcessInfo_v1_t>,
  ) -> nvmlReturn_t {
++    // Process accounting is not exposed by the CUDA driver API. Keep this
++    // conservative until a Windows telemetry backend is added.
      *info_count = 0;
 -    Ok(())
 +    nvmlReturn_t::SUCCESS
@@ -718,30 +823,39 @@ index 99c93cc..131ec3a 100644
 +        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
 +    }
 +
++    let total_mem = match symbol::<unsafe extern "system" fn(*mut usize, CuDevice) -> CuResult>(
++        b"cuDeviceTotalMem_v2\0",
++    ) {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
 +    let mut total = 0usize;
-+    if hipDeviceTotalMem(&mut total, index).is_err() {
++    if total_mem(&mut total, index) != 0 {
 +        return nvmlReturn_t::ERROR_UNKNOWN;
 +    }
 +
-+    let mut previous = 0i32;
-+    let have_previous = hipGetDevice(&mut previous).is_ok();
-+    if hipSetDevice(index).is_err() {
-+        return nvmlReturn_t::ERROR_UNKNOWN;
-+    }
-+    let mut free = 0usize;
-+    let mut current_total = 0usize;
-+    let mem_result = hipMemGetInfo(&mut free, &mut current_total);
-+    if have_previous && previous != index {
-+        let _ = hipSetDevice(previous);
-+    }
-+    if mem_result.is_err() {
-+        return nvmlReturn_t::ERROR_UNKNOWN;
++    // Free/used memory is only queried when a CUDA context already exists.
++    // Creating or switching a hidden context from NVML would be observable by
++    // the application and previously caused cross-library initialization bugs.
++    let mut free = total;
++    if let (Ok(ctx_get), Ok(mem_get)) = (
++        symbol::<unsafe extern "system" fn(*mut CuContext) -> CuResult>(b"cuCtxGetCurrent\0"),
++        symbol::<unsafe extern "system" fn(*mut usize, *mut usize) -> CuResult>(b"cuMemGetInfo_v2\0"),
++    ) {
++        let mut ctx: CuContext = std::ptr::null_mut();
++        if ctx_get(&mut ctx) == 0 && !ctx.is_null() {
++            let mut current_total = 0usize;
++            let mut current_free = 0usize;
++            if mem_get(&mut current_free, &mut current_total) == 0 && current_total > 0 {
++                total = current_total;
++                free = current_free.min(total);
++            }
++        }
 +    }
 +
-+    let effective_total = if current_total > 0 { current_total } else { total };
-+    memory.total = effective_total as u64;
-+    memory.free = free.min(effective_total) as u64;
-+    memory.used = effective_total.saturating_sub(free.min(effective_total)) as u64;
++    memory.total = total as u64;
++    memory.free = free as u64;
++    memory.used = total.saturating_sub(free) as u64;
 +    nvmlReturn_t::SUCCESS
  }
  
@@ -751,7 +865,7 @@ index 99c93cc..131ec3a 100644
 -    _length: ::core::ffi::c_uint,
 -) -> nvmlReturn_t {
 -    crate::impl_common::unimplemented()
-+pub(crate) fn device_get_name(device: nvmlDevice_t, name: *mut ::core::ffi::c_char, length: ::core::ffi::c_uint) -> nvmlReturn_t {
++pub(crate) fn device_get_name(device: nvmlDevice_t, name: *mut c_char, length: c_uint) -> nvmlReturn_t {
 +    if name.is_null() || length == 0 {
 +        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
 +    }
@@ -763,11 +877,118 @@ index 99c93cc..131ec3a 100644
 +        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
 +    }
 +    unsafe {
-+        if hipDeviceGetName(name, length.min(i32::MAX as u32) as i32, index).is_err() {
++        let f = match symbol::<unsafe extern "system" fn(*mut c_char, c_int, CuDevice) -> CuResult>(
++            b"cuDeviceGetName\0",
++        ) {
++            Ok(f) => f,
++            Err(e) => return e,
++        };
++        if f(name, length.min(c_int::MAX as u32) as c_int, index) != 0 {
 +            return nvmlReturn_t::ERROR_UNKNOWN;
 +        }
-+        // Defensive termination even if a backend truncates.
 +        *name.add(length as usize - 1) = 0;
 +    }
 +    nvmlReturn_t::SUCCESS
  }
+diff --git a/zluda_sparse/Cargo.toml b/zluda_sparse/Cargo.toml
+index a6614c9..44ff977 100644
+--- a/zluda_sparse/Cargo.toml
++++ b/zluda_sparse/Cargo.toml
+@@ -11,6 +11,7 @@ name = "cusparse"
+ cuda_macros = { path = "../cuda_macros" }
+ cuda_types = { path = "../cuda_types" }
+ rocsparse-sys = { path = "../ext/rocsparse-sys" }
++hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
+ zluda_common = { path = "../zluda_common" }
+ unwrap_or = "1.0.1"
+ 
+@@ -24,4 +25,3 @@ libloading = "0.8"
+ 
+ [target.'cfg(windows)'.build-dependencies]
+ embed-resource = "3.0"
+-
+diff --git a/zluda_sparse/src/impl.rs b/zluda_sparse/src/impl.rs
+index ead8614..c95c568 100644
+--- a/zluda_sparse/src/impl.rs
++++ b/zluda_sparse/src/impl.rs
+@@ -1,4 +1,5 @@
+ use cuda_types::cusparse::*;
++use hip_runtime_sys::hipStream_t;
+ use rocsparse_sys::*;
+ use std::{ptr, sync::OnceLock};
+ use unwrap_or::unwrap_ok_or;
+@@ -89,10 +90,44 @@ pub(crate) unsafe fn get_mat_diag_type(descr: rocsparse_mat_descr) -> rocsparse_
+     rocsparse.rocsparse_get_mat_diag_type(descr)
+ }
+ 
++pub(crate) unsafe fn set_stream(handle: rocsparse_handle, stream: hipStream_t) -> rocsparse_status {
++    rocsparse()?.rocsparse_set_stream(handle, stream)
++}
++
++pub(crate) unsafe fn xcoo2csr(
++    handle: rocsparse_handle,
++    coo_row_ind: *const i32,
++    nnz: i32,
++    m: i32,
++    csr_row_ptr: *mut i32,
++    idx_base: rocsparse_index_base,
++) -> rocsparse_status {
++    rocsparse()?.rocsparse_coo2csr(handle, coo_row_ind, nnz, m, csr_row_ptr, idx_base)
++}
++
+ pub(crate) unsafe fn create(context: *mut rocsparse_handle) -> rocsparse_status {
+     rocsparse()?.rocsparse_create_handle(context)
+ }
+ 
++pub(crate) unsafe fn create_csr(
++    descr: *mut rocsparse_spmat_descr,
++    rows: i64,
++    cols: i64,
++    nnz: i64,
++    csr_row_ptr: *mut ::core::ffi::c_void,
++    csr_col_ind: *mut ::core::ffi::c_void,
++    csr_val: *mut ::core::ffi::c_void,
++    row_ptr_type: rocsparse_indextype,
++    col_ind_type: rocsparse_indextype,
++    idx_base: rocsparse_index_base,
++    data_type: rocsparse_datatype,
++) -> rocsparse_status {
++    rocsparse()?.rocsparse_create_csr_descr(
++        descr, rows, cols, nnz, csr_row_ptr, csr_col_ind, csr_val,
++        row_ptr_type, col_ind_type, idx_base, data_type,
++    )
++}
++
+ pub(crate) unsafe fn create_const_coo(
+     descr: *mut rocsparse_const_spmat_descr,
+     rows: i64,
+diff --git a/zluda_sparse/src/lib.rs b/zluda_sparse/src/lib.rs
+index 6ae899d..ddb0166 100644
+--- a/zluda_sparse/src/lib.rs
++++ b/zluda_sparse/src/lib.rs
+@@ -75,6 +75,9 @@ cuda_macros::cusparse_function_declarations!(
+     implemented
+         <= [
+             cusparseCreate,
++            cusparseSetStream,
++            cusparseXcoo2csr,
++            cusparseCreateCsr,
+             cusparseCreateConstCoo,
+             cusparseCreateConstDnMat,
+             cusparseCreateDnMat,
+@@ -155,6 +158,7 @@ cuda_macros::rocsparse_function_declarations!(
+     noop,
+     os_macro::vtable_impl
+         <= [
++            rocsparse_create_csr_descr,
+             rocsparse_create_const_coo_descr,
+             rocsparse_create_const_dnmat_descr,
+             rocsparse_create_dnmat_descr,
+@@ -169,5 +173,7 @@ cuda_macros::rocsparse_function_declarations!(
+             rocsparse_spmm_buffer_size,
+             rocsparse_spmm_preprocess,
+             rocsparse_spmm,
++            rocsparse_set_stream,
++            rocsparse_coo2csr,
+         ]
+ );

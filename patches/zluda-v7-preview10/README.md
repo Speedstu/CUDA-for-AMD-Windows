@@ -6,14 +6,15 @@ It is **not** the repository's default stable runtime yet. The stable installer 
 
 ## What this patch adds
 
-On the RX 9060 XT / `gfx1200` development machine, using a recent TheRock Windows HIP stack and CUDA-facing PyTorch `2.0.1+cu118`, the patch enabled additional CUDA-facing functionality that was missing or stubbed in upstream ZLUDA v7-preview.10:
+On the RX 9060 XT / `gfx1200` development machine, using a recent TheRock Windows HIP stack and CUDA-facing PyTorch `2.0.1+cu118`, the patch enables additional CUDA-facing functionality that is missing or stubbed in upstream ZLUDA v7-preview.10:
 
-- cuFFT: common plan, workspace, stream, execution and Xt paths are routed to hipFFT; validated paths include FP32 R2C/C2R, complex64 C2C, FP64 D2Z/Z2D and 2D FFT round-trips.
-- NVML on Windows: initialization, device count, handle-by-index, device name and basic memory information are backed by HIP instead of returning `NOT_SUPPORTED`.
+- **cuFFT → hipFFT**: common plan, workspace, stream, execution and Xt paths. Validated paths include FP32 R2C/C2R, complex64 C2C, FP64 D2Z/Z2D and 2D FFT round-trips.
+- **cuSPARSE → rocSPARSE**: adds the paths required by the tested PyTorch sparse matrix multiplication flow, including `cusparseSetStream`, `cusparseXcoo2csr` and `cusparseCreateCsr`.
+- **Windows NVML through ZLUDA**: initialization, device count, handle-by-index, PCI-bus lookup, device name and basic memory information query the CUDA-facing `nvcuda.dll` driver instead of opening an independent HIP runtime context.
 
-A separate cuSPARSE prototype also reached a passing `torch.sparse.mm` result during development, but it is intentionally **not included in this public patch yet** because the latest clean rebuild exposed a `cusparseCreate` regression that still needs to be made reproducible.
+The NVML design is deliberate. An earlier direct-HIP NVML prototype passed isolated NVML probes but caused `cusparseCreate`/`rocsparse_create_handle` to fail later in the same process. Routing NVML queries through ZLUDA keeps CUDA-facing libraries on one context model. A combined strict regression passes **NVML + `torch.sparse.mm` + FFT** together on the tested `gfx1200` stack.
 
-Advanced cuFFT/NVML entry points not covered by the patch still fall back to the normal ZLUDA unsupported behavior. CUDA Graphs are not modified by this patch set.
+Advanced cuFFT/cuSPARSE/NVML entry points not covered by the patch still fall back to normal ZLUDA unsupported behavior. CUDA Graphs are not modified by this patch set.
 
 ## Apply
 
@@ -34,6 +35,16 @@ Use the repository capability runner against an isolated runtime:
 .\scripts\test-capabilities.ps1 `
   -RuntimeRoot C:\path\to\runtime `
   -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe
+```
+
+For a focused regression of the newly patched surfaces:
+
+```powershell
+.\scripts\test-capabilities.ps1 `
+  -RuntimeRoot C:\path\to\runtime `
+  -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
+  -Tests nvml,sparse_mm,fft `
+  -Strict
 ```
 
 Results are workload- and stack-dependent. A pass on `gfx1200` does not imply that every AMD architecture or every CUDA API is supported.

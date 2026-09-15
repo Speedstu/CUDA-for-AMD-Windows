@@ -36,6 +36,7 @@ This does **not** mean every CUDA program or AI model works. CUDA API/library co
 | GPU | Target | Status | Notes |
 | --- | --- | --- | --- |
 | Radeon RX 9060 XT | `gfx1200` | ✅ validated reference | Project integration workload completed |
+| Radeon RX 9070 XT | `gfx1201` | ✅ validated external | Archived Windows AMD/ZLUDA training setup from a separately tested RX 9070 XT machine; see [`docs/RX9070XT_VALIDATION.md`](docs/RX9070XT_VALIDATION.md) |
 | Radeon 890M | `gfx1150` | 🟡 community partial | HIP 7.2 runtime/GEMM worked; reported `conv2d` hang and incorrect memory-efficient SDPA output in issue #3 |
 | Other recognized AMD GPUs | architecture-dependent | ⚪ unverified candidate | Runtime detection is not functional validation |
 
@@ -142,12 +143,13 @@ For broader bring-up work, `scripts/test-capabilities.ps1` adds isolated probes 
 
 An experimental source patch for ZLUDA `v7-preview.10` / commit `9c8b43f` is available under [`patches/zluda-v7-preview10`](patches/zluda-v7-preview10/README.md). It is separate from the stable installer and does not change the current default runtime.
 
-On the RX 9060 XT / `gfx1200` development system, the current public patch set has numerically validated additional CUDA-facing paths through AMD libraries:
+On the RX 9060 XT / `gfx1200` development system, the current patch set has numerically validated additional CUDA-facing paths through AMD libraries:
 
 - common cuFFT and cuFFT Xt paths through hipFFT, including real/complex, FP32/FP64 and 2D round-trips;
-- basic Windows NVML device enumeration, device name and memory reporting through HIP.
+- cuSPARSE paths needed by PyTorch sparse matrix multiplication, including stream binding, COO→CSR conversion and CSR descriptor creation through rocSPARSE;
+- basic Windows NVML initialization, device enumeration/name and memory reporting through the ZLUDA CUDA driver rather than a separate direct-HIP context.
 
-A cuSPARSE prototype also reached a passing `torch.sparse.mm` result during development, but it is not included in this public patch yet because the latest clean rebuild exposed a `cusparseCreate` regression. These are experimental results for the tested stack, not a claim of complete CUDA coverage. CUDA Graphs are not changed by this patch set and will be revalidated separately.
+The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. A combined strict regression now passes NVML + `torch.sparse.mm` + FFT together. These are experimental results for the tested stack, not a claim of complete CUDA coverage. CUDA Graphs are not changed by this patch set and are tracked separately.
 
 ## Optional real PPO integration smoke
 
@@ -189,6 +191,7 @@ Example statuses:
 
 ```text
 AMD Radeon RX 9060 XT -> gfx1200 -> validated-reference
+AMD Radeon RX 9070 XT -> gfx1201 -> validated-external
 AMD Radeon 890M       -> gfx1150 -> community-partial
 ```
 

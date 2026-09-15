@@ -4,7 +4,18 @@
   "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
   "architectures": {
     "gfx1200": { "generation": "RDNA4", "current_windows_hip_sdk": true },
-    "gfx1201": { "generation": "RDNA4", "current_windows_hip_sdk": true },
+    "gfx1201": {
+      "generation": "RDNA4",
+      "current_windows_hip_sdk": true,
+      "project_validation": {
+        "status": "validated-external",
+        "gpu": "Radeon RX 9070 XT",
+        "model_pattern": "RX 9070 XT",
+        "target": "gfx1201",
+        "evidence": "archived-tested-bundle",
+        "notes": "Archived Windows AMD/ZLUDA training bundle from a separately tested RX 9070 XT machine. The package targets HIP device 1 as Radeon RX 9070 XT / gfx1201 and includes gfx1201-specific hipBLASLt/Tensile kernels. The current maintainer reference GPU remains RX 9060 XT."
+      }
+    },
     "gfx1150": {
       "generation": "RDNA3.5",
       "current_windows_hip_sdk": true,
