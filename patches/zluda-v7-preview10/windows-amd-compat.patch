@@ -1,0 +1,773 @@
+diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
+index 6b672fa..19ea98b 100644
+--- a/zluda_fft/Cargo.toml
++++ b/zluda_fft/Cargo.toml
+@@ -10,6 +10,7 @@ name = "cufft"
+ [dependencies]
+ cuda_macros = { path = "../cuda_macros" }
+ cuda_types = { path = "../cuda_types" }
++hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
+ 
+ [package.metadata.zluda]
+ linux_symlinks = [
+@@ -18,3 +19,7 @@ linux_symlinks = [
+     "libcufft.so.12",
+ ]
+ windows_paths = ["cufft64_10.dll", "cufft64_11.dll", "cufft64_12.dll"]
++
++[target.'cfg(windows)'.dependencies]
++zluda_windows = { path = "../zluda_windows" }
++libloading = "0.8"
+diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
+index 94cc02b..258e351 100644
+--- a/zluda_fft/src/impl.rs
++++ b/zluda_fft/src/impl.rs
+@@ -1,4 +1,12 @@
+ use cuda_types::cufft::*;
++use hip_runtime_sys::hipStream_t;
++use std::collections::HashMap;
++use std::ffi::{c_int, c_void};
++use std::ptr;
++use std::sync::{Mutex, OnceLock};
++
++#[cfg(windows)]
++use libloading::os::windows::Library;
+ 
+ #[cfg(debug_assertions)]
+ pub(crate) fn unimplemented() -> cufftResult {
+@@ -7,5 +15,468 @@ pub(crate) fn unimplemented() -> cufftResult {
+ 
+ #[cfg(not(debug_assertions))]
+ pub(crate) fn unimplemented() -> cufftResult {
+-    cufftResult::ERROR_NOT_SUPPORTED
++    Err(cufftError_t::r#NOT_SUPPORTED)
++}
++
++type HipfftHandle = *mut c_void;
++type HipfftResult = c_int;
++
++fn from_hipfft(code: HipfftResult) -> cufftResult {
++    match code {
++        0 => Ok(()),
++        1 => Err(cufftError_t::r#INVALID_PLAN),
++        2 => Err(cufftError_t::r#ALLOC_FAILED),
++        3 => Err(cufftError_t::r#INVALID_TYPE),
++        4 => Err(cufftError_t::r#INVALID_VALUE),
++        5 => Err(cufftError_t::r#INTERNAL_ERROR),
++        6 => Err(cufftError_t::r#EXEC_FAILED),
++        7 => Err(cufftError_t::r#SETUP_FAILED),
++        8 => Err(cufftError_t::r#INVALID_SIZE),
++        9 => Err(cufftError_t::r#UNALIGNED_DATA),
++        11 => Err(cufftError_t::r#INVALID_DEVICE),
++        13 => Err(cufftError_t::r#NO_WORKSPACE),
++        14 => Err(cufftError_t::r#NOT_IMPLEMENTED),
++        16 => Err(cufftError_t::r#NOT_SUPPORTED),
++        _ => Err(cufftError_t::r#INTERNAL_ERROR),
++    }
++}
++
++#[cfg(windows)]
++fn hipfft_library() -> Result<&'static Library, cufftError_t> {
++    static LIB: OnceLock<Result<Library, cufftError_t>> = OnceLock::new();
++    let result = LIB.get_or_init(|| unsafe {
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["hipfft.dll"])
++            .ok_or(cufftError_t::r#MISSING_DEPENDENCY)?;
++        Ok(Library::from_raw(hmodule.0 as _))
++    });
++    result.as_ref().map_err(|e| *e)
++}
++
++#[cfg(windows)]
++unsafe fn symbol<T: Copy>(name: &'static [u8]) -> Result<T, cufftError_t> {
++    let lib = hipfft_library()?;
++    lib.get::<T>(name)
++        .map(|s| *s)
++        .map_err(|_| cufftError_t::r#MISSING_DEPENDENCY)
++}
++
++#[cfg(not(windows))]
++unsafe fn symbol<T: Copy>(_name: &'static [u8]) -> Result<T, cufftError_t> {
++    Err(cufftError_t::r#MISSING_DEPENDENCY)
++}
++
++struct PlanRegistry {
++    next: i32,
++    plans: HashMap<i32, usize>,
++}
++
++fn registry() -> &'static Mutex<PlanRegistry> {
++    static REGISTRY: OnceLock<Mutex<PlanRegistry>> = OnceLock::new();
++    REGISTRY.get_or_init(|| {
++        Mutex::new(PlanRegistry {
++            next: 1,
++            plans: HashMap::new(),
++        })
++    })
++}
++
++fn register_plan(raw: HipfftHandle) -> Result<cufftHandle, cufftError_t> {
++    if raw.is_null() {
++        return Err(cufftError_t::r#INVALID_PLAN);
++    }
++    let mut reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    for _ in 0..i32::MAX {
++        let id = if reg.next <= 0 { 1 } else { reg.next };
++        reg.next = id.wrapping_add(1);
++        if !reg.plans.contains_key(&id) {
++            reg.plans.insert(id, raw as usize);
++            return Ok(id);
++        }
++    }
++    Err(cufftError_t::r#ALLOC_FAILED)
++}
++
++fn lookup_plan(plan: cufftHandle) -> Result<HipfftHandle, cufftError_t> {
++    let reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    reg.plans
++        .get(&plan)
++        .copied()
++        .map(|p| p as HipfftHandle)
++        .ok_or(cufftError_t::r#INVALID_PLAN)
++}
++
++fn remove_plan(plan: cufftHandle) -> Result<HipfftHandle, cufftError_t> {
++    let mut reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    reg.plans
++        .remove(&plan)
++        .map(|p| p as HipfftHandle)
++        .ok_or(cufftError_t::r#INVALID_PLAN)
++}
++
++unsafe fn create_registered_with<F>(plan: *mut cufftHandle, create: F) -> cufftResult
++where
++    F: FnOnce(*mut HipfftHandle) -> HipfftResult,
++{
++    if plan.is_null() {
++        return Err(cufftError_t::r#INVALID_VALUE);
++    }
++    let mut raw: HipfftHandle = ptr::null_mut();
++    from_hipfft(create(&mut raw))?;
++    let id = register_plan(raw)?;
++    *plan = id;
++    Ok(())
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftCreate(handle: *mut cufftHandle) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle) -> HipfftResult>(b"hipfftCreate\0")?;
++    create_registered_with(handle, |raw| f(raw))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan1d(plan: *mut cufftHandle, nx: c_int, type_: cufftType, batch: c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan1d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, type_.0 as c_int, batch))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan2d(plan: *mut cufftHandle, nx: c_int, ny: c_int, type_: cufftType) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan2d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, ny, type_.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan3d(plan: *mut cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan3d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, ny, nz, type_.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlanMany(
++    plan: *mut cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlanMany\0")?;
++    create_registered_with(plan, |raw| f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan1d(plan: cufftHandle, nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan1d\0")?;
++    from_hipfft(f(raw, nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan2d(plan: cufftHandle, nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan2d\0")?;
++    from_hipfft(f(raw, nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan3d(plan: cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan3d\0")?;
++    from_hipfft(f(raw, nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlanMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlanMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlanMany64(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    type_: cufftType,
++    batch: i64,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, *mut i64, i64, i64, c_int, i64, *mut usize) -> HipfftResult>(b"hipfftMakePlanMany64\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize1d(plan: cufftHandle, nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize1d\0")?;
++    from_hipfft(f(raw, nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize2d(plan: cufftHandle, nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize2d\0")?;
++    from_hipfft(f(raw, nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize3d(plan: cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize3d\0")?;
++    from_hipfft(f(raw, nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSizeMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workArea: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSizeMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workArea))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSizeMany64(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    type_: cufftType,
++    batch: i64,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, *mut i64, i64, i64, c_int, i64, *mut usize) -> HipfftResult>(b"hipfftGetSizeMany64\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize(plan: cufftHandle, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut usize) -> HipfftResult>(b"hipfftGetSize\0")?;
++    from_hipfft(f(raw, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate1d(nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate1d\0")?;
++    from_hipfft(f(nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate2d(nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate2d\0")?;
++    from_hipfft(f(nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate3d(nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate3d\0")?;
++    from_hipfft(f(nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimateMany(
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workSize: *mut usize,
++) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimateMany\0")?;
++    from_hipfft(f(rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtMakePlanMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    inputtype: cudaDataType,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    outputtype: cudaDataType,
++    batch: i64,
++    workSize: *mut usize,
++    executiontype: cudaDataType,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, c_int, *mut i64, i64, i64, c_int, i64, *mut usize, c_int) -> HipfftResult>(b"hipfftXtMakePlanMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, inputtype.0 as c_int, onembed, ostride, odist, outputtype.0 as c_int, batch, workSize, executiontype.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtGetSizeMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    inputtype: cudaDataType,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    outputtype: cudaDataType,
++    batch: i64,
++    workSize: *mut usize,
++    executiontype: cudaDataType,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, c_int, *mut i64, i64, i64, c_int, i64, *mut usize, c_int) -> HipfftResult>(b"hipfftXtGetSizeMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, inputtype.0 as c_int, onembed, ostride, odist, outputtype.0 as c_int, batch, workSize, executiontype.0 as c_int))
++}
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtExec(
++    plan: cufftHandle,
++    input: *mut c_void,
++    output: *mut c_void,
++    direction: c_int,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut c_void, *mut c_void, c_int) -> HipfftResult>(b"hipfftXtExec\0")?;
++    from_hipfft(f(raw, input, output, direction))
++}
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetWorkArea(plan: cufftHandle, workArea: *mut c_void) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut c_void) -> HipfftResult>(b"hipfftSetWorkArea\0")?;
++    from_hipfft(f(raw, workArea))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetAutoAllocation(plan: cufftHandle, autoAllocate: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int) -> HipfftResult>(b"hipfftSetAutoAllocation\0")?;
++    from_hipfft(f(raw, autoAllocate))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecC2C(plan: cufftHandle, idata: *mut cufftComplex, odata: *mut cufftComplex, direction: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftComplex, *mut cufftComplex, c_int) -> HipfftResult>(b"hipfftExecC2C\0")?;
++    from_hipfft(f(raw, idata, odata, direction))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecR2C(plan: cufftHandle, idata: *mut cufftReal, odata: *mut cufftComplex) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftReal, *mut cufftComplex) -> HipfftResult>(b"hipfftExecR2C\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecC2R(plan: cufftHandle, idata: *mut cufftComplex, odata: *mut cufftReal) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftComplex, *mut cufftReal) -> HipfftResult>(b"hipfftExecC2R\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecZ2Z(plan: cufftHandle, idata: *mut cufftDoubleComplex, odata: *mut cufftDoubleComplex, direction: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleComplex, *mut cufftDoubleComplex, c_int) -> HipfftResult>(b"hipfftExecZ2Z\0")?;
++    from_hipfft(f(raw, idata, odata, direction))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecD2Z(plan: cufftHandle, idata: *mut cufftDoubleReal, odata: *mut cufftDoubleComplex) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleReal, *mut cufftDoubleComplex) -> HipfftResult>(b"hipfftExecD2Z\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecZ2D(plan: cufftHandle, idata: *mut cufftDoubleComplex, odata: *mut cufftDoubleReal) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleComplex, *mut cufftDoubleReal) -> HipfftResult>(b"hipfftExecZ2D\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetStream(plan: cufftHandle, stream: cudaStream_t) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let hip_stream = hipStream_t(stream.0.cast());
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, hipStream_t) -> HipfftResult>(b"hipfftSetStream\0")?;
++    from_hipfft(f(raw, hip_stream))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftDestroy(plan: cufftHandle) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle) -> HipfftResult>(b"hipfftDestroy\0")?;
++    let result = from_hipfft(f(raw));
++    if result.is_ok() {
++        let _ = remove_plan(plan);
++    }
++    result
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetVersion(version: *mut c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut c_int) -> HipfftResult>(b"hipfftGetVersion\0")?;
++    from_hipfft(f(version))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetProperty(type_: libraryPropertyType, value: *mut c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, *mut c_int) -> HipfftResult>(b"hipfftGetProperty\0")?;
++    from_hipfft(f(type_.0 as c_int, value))
+ }
+diff --git a/zluda_fft/src/lib.rs b/zluda_fft/src/lib.rs
+index 9de500c..aefce62 100644
+--- a/zluda_fft/src/lib.rs
++++ b/zluda_fft/src/lib.rs
+@@ -14,4 +14,57 @@ macro_rules! unimplemented {
+     };
+ }
+ 
+-cuda_macros::cufft_function_declarations!(unimplemented);
++macro_rules! implemented {
++    ($($abi:literal fn $fn_name:ident( $($arg_id:ident : $arg_type:ty),* ) -> $ret_type:ty;)*) => {
++        $(
++            #[cfg_attr(not(test), no_mangle)]
++            #[allow(improper_ctypes)]
++            #[allow(improper_ctypes_definitions)]
++            #[allow(unused_variables)]
++            pub unsafe extern $abi fn $fn_name ( $( $arg_id : $arg_type),* ) -> $ret_type {
++                crate::r#impl::$fn_name($($arg_id),*)
++            }
++        )*
++    };
++}
++
++cuda_macros::cufft_function_declarations!(
++    unimplemented,
++    implemented <= [
++        cufftPlan1d,
++        cufftPlan2d,
++        cufftPlan3d,
++        cufftPlanMany,
++        cufftMakePlan1d,
++        cufftMakePlan2d,
++        cufftMakePlan3d,
++        cufftMakePlanMany,
++        cufftMakePlanMany64,
++        cufftGetSizeMany64,
++        cufftEstimate1d,
++        cufftEstimate2d,
++        cufftEstimate3d,
++        cufftEstimateMany,
++        cufftCreate,
++        cufftGetSize1d,
++        cufftGetSize2d,
++        cufftGetSize3d,
++        cufftGetSizeMany,
++        cufftGetSize,
++        cufftSetWorkArea,
++        cufftSetAutoAllocation,
++        cufftExecC2C,
++        cufftExecR2C,
++        cufftExecC2R,
++        cufftExecZ2Z,
++        cufftExecD2Z,
++        cufftExecZ2D,
++        cufftSetStream,
++        cufftDestroy,
++        cufftGetVersion,
++        cufftGetProperty,
++        cufftXtMakePlanMany,
++        cufftXtGetSizeMany,
++        cufftXtExec,
++    ]
++);
+diff --git a/zluda_ml/Cargo.toml b/zluda_ml/Cargo.toml
+index 592d87c..8f9c3be 100644
+--- a/zluda_ml/Cargo.toml
++++ b/zluda_ml/Cargo.toml
+@@ -21,3 +21,6 @@ linux_symlinks = [
+     "libnvidia-ml.so",
+     "libnvidia-ml.so.1",
+ ]
++
++[target.'cfg(windows)'.dependencies]
++hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
+diff --git a/zluda_ml/src/impl_win.rs b/zluda_ml/src/impl_win.rs
+index 99c93cc..131ec3a 100644
+--- a/zluda_ml/src/impl_win.rs
++++ b/zluda_ml/src/impl_win.rs
+@@ -1,77 +1,154 @@
+ use cuda_types::nvml::*;
++use hip_runtime_sys::*;
+ 
+ pub(crate) use crate::impl_common::error_string;
+ pub(crate) use crate::impl_common::system_get_driver_version;
+ 
++fn hip_ok(result: hipError_t) -> nvmlReturn_t {
++    if result.is_ok() { nvmlReturn_t::SUCCESS } else { nvmlReturn_t::ERROR_UNKNOWN }
++}
++
++fn handle_from_index(index: u32) -> nvmlDevice_t {
++    (index as usize + 1) as nvmlDevice_t
++}
++
++fn index_from_handle(device: nvmlDevice_t) -> Result<i32, nvmlReturn_t> {
++    if device.is_null() {
++        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
++    }
++    let raw = device as usize;
++    if raw == 0 || raw - 1 > i32::MAX as usize {
++        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
++    }
++    Ok((raw - 1) as i32)
++}
++
++fn valid_index(index: u32) -> bool {
++    let mut count = 0i32;
++    unsafe { hipGetDeviceCount(&mut count).is_ok() && index < count.max(0) as u32 }
++}
++
+ pub(crate) unsafe fn init() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    hip_ok(hipInit(0))
+ }
+ 
+ pub(crate) unsafe fn init_v2() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    init()
+ }
+ 
+ pub(crate) unsafe fn init_with_flags(_flags: ::core::ffi::c_uint) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    init()
+ }
+ 
+ pub(crate) unsafe fn shutdown() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    // HIP runtime lifetime is process-global; NVML shutdown should not tear it down.
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) unsafe fn device_get_count_v2(_device_count: &mut ::core::ffi::c_uint) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) unsafe fn device_get_count_v2(device_count: &mut ::core::ffi::c_uint) -> nvmlReturn_t {
++    let mut count = 0i32;
++    match hipGetDeviceCount(&mut count) {
++        Ok(()) => {
++            *device_count = count.max(0) as u32;
++            nvmlReturn_t::SUCCESS
++        }
++        Err(_) => nvmlReturn_t::ERROR_UNKNOWN,
++    }
+ }
+ 
+ pub(crate) unsafe fn device_get_handle_by_pci_bus_id_v2(
+     _pci_bus_id: &std::ffi::CStr,
+-    _device: &mut cuda_types::nvml::nvmlDevice_t,
++    _device: &mut nvmlDevice_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    // PCI lookup is intentionally left explicit until HIP PCI-id parsing is validated.
++    nvmlReturn_t::ERROR_NOT_SUPPORTED
+ }
+ 
+ pub(crate) unsafe fn device_get_field_values(
+-    _device: cuda_types::nvml::nvmlDevice_t,
++    _device: nvmlDevice_t,
+     _values_count: ::core::ffi::c_int,
+-    _values: &mut cuda_types::nvml::nvmlFieldValue_t,
++    _values: &mut nvmlFieldValue_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    nvmlReturn_t::ERROR_NOT_SUPPORTED
+ }
+ 
+ pub(crate) unsafe fn device_get_gpu_fabric_info(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _gpu_fabric_info: &mut cuda_types::nvml::nvmlGpuFabricInfo_t,
++    _device: nvmlDevice_t,
++    _gpu_fabric_info: &mut nvmlGpuFabricInfo_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    nvmlReturn_t::ERROR_NOT_SUPPORTED
+ }
+ 
+-pub(crate) fn device_get_handle_by_index_v2(
+-    _index: ::core::ffi::c_uint,
+-    _device: &mut cuda_types::nvml::nvmlDevice_t,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) fn device_get_handle_by_index_v2(index: ::core::ffi::c_uint, device: &mut nvmlDevice_t) -> nvmlReturn_t {
++    if !valid_index(index) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    *device = handle_from_index(index);
++    nvmlReturn_t::SUCCESS
+ }
+ 
+ pub(crate) fn device_get_compute_running_processes(
+-    _device: cuda_types::nvml::nvmlDevice_t,
++    _device: nvmlDevice_t,
+     info_count: &mut ::core::ffi::c_uint,
+-    _infos: Option<&mut cuda_types::nvml::nvmlProcessInfo_v1_t>,
++    _infos: Option<&mut nvmlProcessInfo_v1_t>,
+ ) -> nvmlReturn_t {
+     *info_count = 0;
+-    Ok(())
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) unsafe fn device_get_memory_info(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _memory: &mut cuda_types::nvml::nvmlMemory_t,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) unsafe fn device_get_memory_info(device: nvmlDevice_t, memory: &mut nvmlMemory_t) -> nvmlReturn_t {
++    let index = match index_from_handle(device) {
++        Ok(i) => i,
++        Err(e) => return e,
++    };
++    if !valid_index(index as u32) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++
++    let mut total = 0usize;
++    if hipDeviceTotalMem(&mut total, index).is_err() {
++        return nvmlReturn_t::ERROR_UNKNOWN;
++    }
++
++    let mut previous = 0i32;
++    let have_previous = hipGetDevice(&mut previous).is_ok();
++    if hipSetDevice(index).is_err() {
++        return nvmlReturn_t::ERROR_UNKNOWN;
++    }
++    let mut free = 0usize;
++    let mut current_total = 0usize;
++    let mem_result = hipMemGetInfo(&mut free, &mut current_total);
++    if have_previous && previous != index {
++        let _ = hipSetDevice(previous);
++    }
++    if mem_result.is_err() {
++        return nvmlReturn_t::ERROR_UNKNOWN;
++    }
++
++    let effective_total = if current_total > 0 { current_total } else { total };
++    memory.total = effective_total as u64;
++    memory.free = free.min(effective_total) as u64;
++    memory.used = effective_total.saturating_sub(free.min(effective_total)) as u64;
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) fn device_get_name(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _name: *mut ::core::ffi::c_char,
+-    _length: ::core::ffi::c_uint,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) fn device_get_name(device: nvmlDevice_t, name: *mut ::core::ffi::c_char, length: ::core::ffi::c_uint) -> nvmlReturn_t {
++    if name.is_null() || length == 0 {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    let index = match index_from_handle(device) {
++        Ok(i) => i,
++        Err(e) => return e,
++    };
++    if !valid_index(index as u32) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    unsafe {
++        if hipDeviceGetName(name, length.min(i32::MAX as u32) as i32, index).is_err() {
++            return nvmlReturn_t::ERROR_UNKNOWN;
++        }
++        // Defensive termination even if a backend truncates.
++        *name.add(length as usize - 1) = 0;
++    }
++    nvmlReturn_t::SUCCESS
+ }

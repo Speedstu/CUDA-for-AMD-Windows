@@ -134,7 +134,20 @@ Reports are written to:
 .runtime\functional-test.json
 ```
 
+For broader bring-up work, `scripts/test-capabilities.ps1` adds isolated probes for CUDA-facing runtime/device behavior, memory copies, streams/events, GEMM variants, convolution, FFT, sparse operations, linear algebra, RNG, AMP, optimizers, SDPA and NVML. It records numerical failures, clean unsupported results and process hangs separately instead of reducing compatibility to a single load test.
+
 `core_correctness_ok` represents the dense/GEMM path used by the validated PPO workload. `correctness_ok` remains stricter and covers every probed capability. `-Strict` fails if any tested capability is incorrect, errors, or hangs; this is useful when validating a broader CUDA application rather than the PPO reference profile.
+
+## Experimental ZLUDA v7 patch set
+
+An experimental source patch for ZLUDA `v7-preview.10` / commit `9c8b43f` is available under [`patches/zluda-v7-preview10`](patches/zluda-v7-preview10/README.md). It is separate from the stable installer and does not change the current default runtime.
+
+On the RX 9060 XT / `gfx1200` development system, the current public patch set has numerically validated additional CUDA-facing paths through AMD libraries:
+
+- common cuFFT and cuFFT Xt paths through hipFFT, including real/complex, FP32/FP64 and 2D round-trips;
+- basic Windows NVML device enumeration, device name and memory reporting through HIP.
+
+A cuSPARSE prototype also reached a passing `torch.sparse.mm` result during development, but it is not included in this public patch yet because the latest clean rebuild exposed a `cusparseCreate` regression. These are experimental results for the tested stack, not a claim of complete CUDA coverage. CUDA Graphs are not changed by this patch set and will be revalidated separately.
 
 ## Optional real PPO integration smoke
 
@@ -226,6 +239,7 @@ Then open a [GPU compatibility report](https://github.com/Speedstu/CUDA-for-AMD-
 ```text
 scripts/              install, diagnostics, scanner, staging, launcher and functional probes
 manifests/            pinned versions, hashes and GPU architecture metadata
+patches/              experimental source patches for upstream compatibility layers
 docs/                 validation, architecture, benchmarks and troubleshooting
 examples/             integration/reference snippets
 .runtime/             generated dependencies and reports; ignored by Git
