@@ -1,12 +1,24 @@
 {
-  "schema": 1,
-  "checked": "2026-09-13",
+  "schema": 2,
+  "checked": "2026-09-15",
   "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
   "architectures": {
     "gfx1200": { "generation": "RDNA4", "current_windows_hip_sdk": true },
     "gfx1201": { "generation": "RDNA4", "current_windows_hip_sdk": true },
-    "gfx1150": { "generation": "RDNA3.5", "current_windows_hip_sdk": true },
-    "gfx1151": { "generation": "RDNA3.5", "current_windows_hip_sdk": true },
+    "gfx1150": {
+      "generation": "RDNA3.5",
+      "current_windows_hip_sdk": true,
+      "minimum_hip_sdk": "7.2",
+      "community_report": {
+        "status": "partial",
+        "gpu": "Radeon 890M",
+        "issue": "https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/3",
+        "notes": "HIP 7.2 runtime and GEMM work, but conv2d hung and memory-efficient SDPA returned incorrect values in the reported ZLUDA/PyTorch workload."
+      }
+    },
+    "gfx1151": { "generation": "RDNA3.5", "current_windows_hip_sdk": true, "minimum_hip_sdk": "7.2" },
+    "gfx1152": { "generation": "RDNA3.5", "current_windows_hip_sdk": true, "minimum_hip_sdk": "7.2" },
+    "gfx1153": { "generation": "RDNA3.5", "current_windows_hip_sdk": true, "minimum_hip_sdk": "7.2" },
     "gfx1100": { "generation": "RDNA3", "current_windows_hip_sdk": true },
     "gfx1101": { "generation": "RDNA3", "current_windows_hip_sdk": true },
     "gfx1102": { "generation": "RDNA3", "current_windows_hip_sdk": true },
@@ -18,6 +30,10 @@
     { "pattern": "RX 9060( XT)?", "gfx": "gfx1200" },
     { "pattern": "RX 9070( XT| GRE)?", "gfx": "gfx1201" },
     { "pattern": "Radeon AI PRO R9700", "gfx": "gfx1201" },
+    { "pattern": "Radeon 890M", "gfx": "gfx1150" },
+    { "pattern": "Radeon 880M", "gfx": "gfx1150" },
+    { "pattern": "Radeon 860M", "gfx": "gfx1152" },
+    { "pattern": "Radeon 840M", "gfx": "gfx1152" },
     { "pattern": "RX 7900 (XTX|XT)", "gfx": "gfx1100" },
     { "pattern": "PRO W7900|PRO W7800", "gfx": "gfx1100" },
     { "pattern": "RX 7800 XT|RX 7700 XT|PRO W7700", "gfx": "gfx1101" },
