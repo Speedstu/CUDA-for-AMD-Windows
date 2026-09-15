@@ -2,6 +2,7 @@
 param(
     [string]$RuntimeRoot,
     [string]$HipRoot,
+    [int]$GpuIndex = 0,
     [switch]$Strict,
     [switch]$PassThru
 )
@@ -11,41 +12,22 @@ $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
 $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 
-function Find-HipRoot {
-    param([string]$Explicit)
-    if ($Explicit -and (Test-Path $Explicit)) { return (Resolve-Path $Explicit).Path.TrimEnd('\') }
-    if ($env:HIP_PATH -and (Test-Path $env:HIP_PATH)) { return (Resolve-Path $env:HIP_PATH).Path.TrimEnd('\') }
-    $base = Join-Path $env:ProgramFiles 'AMD\ROCm'
-    if (Test-Path $base) {
-        $candidates = Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Sort-Object {
-            try { [version]$_.Name } catch { [version]'0.0' }
-        } -Descending
-        foreach ($candidate in $candidates) {
-            if (Test-Path (Join-Path $candidate.FullName 'bin\rocblas.dll')) { return $candidate.FullName.TrimEnd('\') }
-        }
-    }
-    return $null
+$scan = & (Join-Path $PSScriptRoot 'gpu-scan.ps1') -HipRoot $HipRoot -GpuIndex $GpuIndex -Quiet -PassThru
+if (-not $HipRoot -and $scan.hip_root) { $HipRoot = [string]$scan.hip_root }
+
+$driverRuntime = $false
+foreach ($name in @('amdhip64_7.dll','amdhip64_6.dll')) {
+    if (Test-Path (Join-Path $env:WINDIR "System32\$name")) { $driverRuntime = $true }
 }
 
-$hip = Find-HipRoot $HipRoot
-$driverRuntime = @('amdhip64_7.dll','amdhip64_6.dll') | ForEach-Object {
-    $path = Join-Path $env:WINDIR "System32\$_"
-    if (Test-Path $path) {
-        $item = Get-Item $path
-        [ordered]@{ name=$_.ToString(); path=$path; version=$item.VersionInfo.FileVersion }
-    }
+$checks = [ordered]@{
+    amd_driver_hip_runtime = [bool]$driverRuntime
+    hip_sdk = [bool]($HipRoot -and (Test-Path $HipRoot))
+    hip_info = [bool]($HipRoot -and (Test-Path (Join-Path $HipRoot 'bin\hipInfo.exe')))
+    rocblas = [bool]($HipRoot -and (Test-Path (Join-Path $HipRoot 'bin\rocblas.dll')))
+    hipblaslt = [bool]($HipRoot -and ((Test-Path (Join-Path $HipRoot 'bin\hipblaslt.dll')) -or (Test-Path (Join-Path $HipRoot 'bin\libhipblaslt.dll'))))
+    rocsparse = [bool]($HipRoot -and (Test-Path (Join-Path $HipRoot 'bin\rocsparse.dll')))
 }
-
-$gpu = $null
-try { $gpu = & (Join-Path $PSScriptRoot 'gpu-scan.ps1') -HipRoot $hip -Quiet -PassThru } catch {}
-
-$checks = [ordered]@{}
-$checks.amd_driver_hip_runtime = [bool]($driverRuntime.Count -gt 0)
-$checks.hip_sdk = [bool]$hip
-$checks.hip_info = [bool]($hip -and (Test-Path (Join-Path $hip 'bin\hipInfo.exe')))
-$checks.rocblas = [bool]($hip -and (Test-Path (Join-Path $hip 'bin\rocblas.dll')))
-$checks.hipblaslt = [bool]($hip -and ((Test-Path (Join-Path $hip 'bin\hipblaslt.dll')) -or (Test-Path (Join-Path $hip 'bin\libhipblaslt.dll'))))
-$checks.rocsparse = [bool]($hip -and (Test-Path (Join-Path $hip 'bin\rocsparse.dll')))
 
 $configPath = Join-Path $RuntimeRoot 'runtime-config.json'
 $config = if (Test-Path $configPath) { Get-Content $configPath -Raw | ConvertFrom-Json } else { $null }
@@ -53,34 +35,49 @@ $checks.zluda = [bool]($config -and $config.zluda_root -and (Test-Path (Join-Pat
 $checks.cuda_check = [bool]($config -and $config.zluda_root -and (Test-Path (Join-Path $config.zluda_root 'cuda_check.exe')))
 $checks.libtorch_cuda = [bool]($config -and $config.libtorch_root -and (Test-Path (Join-Path $config.libtorch_root 'lib\torch_cuda.dll')))
 
+$compat = $null
+if ($checks.hip_sdk -and $scan.selected_gpu) {
+    try { $compat = & (Join-Path $PSScriptRoot 'check-hip-compat.ps1') -HipRoot $HipRoot -GpuIndex $GpuIndex -PassThru } catch {}
+}
+$versionOk = [bool](-not $compat -or $compat.compatible)
+$checks.hip_version_compatible = $versionOk
+
 Write-Host 'CUDA for AMD - doctor'
 Write-Host '---------------------'
-if ($gpu -and $gpu.selected_gpu) {
-    Write-Host "GPU       : $($gpu.selected_gpu.name) / $($gpu.selected_gpu.gfx) [$($gpu.selected_gpu.project_status)]"
+if ($scan.selected_gpu) {
+    Write-Host "GPU       : $($scan.selected_gpu.name) / $($scan.selected_gpu.gfx) [$($scan.selected_gpu.project_status)]"
 } else { Write-Warning 'GPU       : no AMD GPU detected' }
-if ($hip) { Write-Host "HIP SDK   : $hip" } else { Write-Warning 'HIP SDK   : not found' }
-if ($driverRuntime) {
-    foreach ($r in $driverRuntime) { Write-Host "Driver HIP: $($r.name) $($r.version)" }
-} else { Write-Warning 'Driver HIP: amdhip64_6/7.dll not found in System32' }
+if ($HipRoot) { Write-Host "HIP SDK   : $HipRoot" } else { Write-Warning 'HIP SDK   : not found' }
+if ($compat -and $compat.minimum_hip_sdk) { Write-Host "HIP floor : $($compat.minimum_hip_sdk)" }
 
 foreach ($entry in $checks.GetEnumerator()) {
     $tag = if ($entry.Value) { 'PASS' } else { 'MISS' }
     Write-Host ("[{0}] {1}" -f $tag, $entry.Key)
 }
+if ($compat -and -not $compat.compatible) { Write-Warning $compat.reason }
 
-$coreOk = $checks.amd_driver_hip_runtime -and $checks.hip_sdk -and $checks.rocblas -and $checks.hipblaslt -and $checks.rocsparse
+$coreOk = $checks.amd_driver_hip_runtime -and $checks.hip_sdk -and $checks.hip_version_compatible -and $checks.rocblas -and $checks.hipblaslt -and $checks.rocsparse
+$functionalRequired = [bool]($scan.selected_gpu -and $scan.selected_gpu.functional_validation_required)
+
 if (-not $coreOk) {
-    Write-Host ''
-    Write-Warning 'AMD HIP SDK prerequisites are incomplete. Install the Windows HIP SDK (including HIP Libraries), then rerun this script.'
-    Write-Host 'AMD installation guide: https://rocm.docs.amd.com/projects/install-on-windows/en/docs-6.4.2/index.html'
+    Write-Warning 'AMD HIP prerequisites are incomplete or incompatible with this GPU profile.'
+}
+if ($scan.selected_gpu -and $scan.selected_gpu.project_status -eq 'community-partial') {
+    Write-Warning 'Known partial compatibility report for this GPU. doctor PASS means prerequisites only; it is NOT a numerical correctness result.'
+    Write-Host 'Run .\scripts\test-functional.ps1 -PythonExe <cuda-pytorch-venv\Scripts\python.exe> -Strict'
+} elseif ($functionalRequired) {
+    Write-Warning 'This is not a validated reference GPU. Numerical functional validation is required before trusting workload output.'
 }
 
 $result = [pscustomobject][ordered]@{
     ok = [bool]$coreOk
-    hip_root = $hip
-    gpu = if ($gpu) { $gpu.selected_gpu } else { $null }
-    driver_runtime = $driverRuntime
+    prerequisites_ok = [bool]$coreOk
+    numerical_correctness_tested = $false
+    functional_validation_required = $functionalRequired
+    hip_root = $HipRoot
+    hip_version = if ($scan) { $scan.hip_version } else { $null }
+    gpu = if ($scan) { $scan.selected_gpu } else { $null }
     checks = [pscustomobject]$checks
 }
 if ($PassThru) { return $result }
-if ($Strict -and -not $coreOk) { throw 'AMD HIP SDK prerequisites are incomplete.' }
+if ($Strict -and -not $coreOk) { throw 'AMD HIP SDK prerequisites are incomplete or incompatible.' }
