@@ -50,7 +50,7 @@ Restore the original DLL with:
 
 ## Validation
 
-On the RX 9060 XT / `gfx1200` experimental ZLUDA v7 + TheRock stack, the generated proxy preserved **940/940 exports** of the tested CUDA 11 cuSOLVER DLL.
+On the RX 9060 XT / `gfx1200` experimental ZLUDA v7 + TheRock stack, the generated proxy preserved **940/940 exports** of the tested CUDA 11 cuSOLVER DLL. The proxy also skips `hipsolverDnDestroy` only when Windows reports that DLL shutdown is already in progress; this prevents the same late-teardown `0xC0000409` fast-fail seen with other ROCm-backed cached handles while preserving normal runtime destruction.
 
 `torch.linalg.solve` was validated against CPU references for:
 

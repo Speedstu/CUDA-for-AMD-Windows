@@ -12,7 +12,11 @@ On the RX 9060 XT / `gfx1200` development machine, using a recent TheRock Window
 - **cuSPARSE → rocSPARSE**: adds the paths required by the tested PyTorch sparse matrix multiplication flow, including `cusparseSetStream`, `cusparseXcoo2csr` and `cusparseCreateCsr`.
 - **Windows NVML through ZLUDA**: initialization, device count, handle-by-index, PCI-bus lookup, device name and basic memory information query the CUDA-facing `nvcuda.dll` driver instead of opening an independent HIP runtime context.
 
-The NVML design is deliberate. An earlier direct-HIP NVML prototype passed isolated NVML probes but caused `cusparseCreate`/`rocsparse_create_handle` to fail later in the same process. Routing NVML queries through ZLUDA keeps CUDA-facing libraries on one context model. A combined strict regression passes **NVML + `torch.sparse.mm` + FFT** together on the tested `gfx1200` stack.
+The NVML design is deliberate. An earlier direct-HIP NVML prototype passed isolated NVML probes but caused `cusparseCreate`/`rocsparse_create_handle` to fail later in the same process. Routing NVML queries through ZLUDA keeps CUDA-facing libraries on one context model.
+
+The patch also guards late `hipfftDestroy` / `rocsparse_destroy_handle` calls when Windows is already in DLL shutdown. Without this guard, FFT and sparse operations returned numerically correct results but the Python process later terminated with `0xC0000409` during cached-handle teardown. Normal runtime destruction still calls the AMD backend; the guard applies only once Windows reports DLL shutdown in progress.
+
+A clean-checkout rebuild now passes a combined strict **NVML + `torch.sparse.mm` + FFT** regression with zero numerical errors, zero hangs and zero post-result process crashes on the tested `gfx1200` stack.
 
 Advanced cuFFT/cuSPARSE/NVML entry points not covered by the patch still fall back to normal ZLUDA unsupported behavior. CUDA Graphs are not modified by this patch set.
 

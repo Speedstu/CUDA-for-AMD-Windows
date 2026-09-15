@@ -61,7 +61,7 @@ index 6b672fa..19ea98b 100644
 +zluda_windows = { path = "../zluda_windows" }
 +libloading = "0.8"
 diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
-index 94cc02b..258e351 100644
+index 94cc02b..a9c0bc9 100644
 --- a/zluda_fft/src/impl.rs
 +++ b/zluda_fft/src/impl.rs
 @@ -1,4 +1,12 @@
@@ -77,7 +77,7 @@ index 94cc02b..258e351 100644
  
  #[cfg(debug_assertions)]
  pub(crate) fn unimplemented() -> cufftResult {
-@@ -7,5 +15,468 @@ pub(crate) fn unimplemented() -> cufftResult {
+@@ -7,5 +15,472 @@ pub(crate) fn unimplemented() -> cufftResult {
  
  #[cfg(not(debug_assertions))]
  pub(crate) fn unimplemented() -> cufftResult {
@@ -528,6 +528,10 @@ index 94cc02b..258e351 100644
 +#[allow(non_snake_case)]
 +pub(crate) unsafe fn cufftDestroy(plan: cufftHandle) -> cufftResult {
 +    let raw = lookup_plan(plan)?;
++    if zluda_windows::process_shutdown_in_progress() {
++        let _ = remove_plan(plan);
++        return Ok(());
++    }
 +    let f = symbol::<unsafe extern "C" fn(HipfftHandle) -> HipfftResult>(b"hipfftDestroy\0")?;
 +    let result = from_hipfft(f(raw));
 +    if result.is_ok() {
@@ -908,7 +912,7 @@ index a6614c9..44ff977 100644
  embed-resource = "3.0"
 -
 diff --git a/zluda_sparse/src/impl.rs b/zluda_sparse/src/impl.rs
-index ead8614..c95c568 100644
+index ead8614..6bf4856 100644
 --- a/zluda_sparse/src/impl.rs
 +++ b/zluda_sparse/src/impl.rs
 @@ -1,4 +1,5 @@
@@ -962,6 +966,16 @@ index ead8614..c95c568 100644
  pub(crate) unsafe fn create_const_coo(
      descr: *mut rocsparse_const_spmat_descr,
      rows: i64,
+@@ -160,6 +195,9 @@ pub(crate) unsafe fn create_dn_mat(
+ }
+ 
+ pub(crate) unsafe fn destroy(context: rocsparse_handle) -> rocsparse_status {
++    if zluda_windows::process_shutdown_in_progress() {
++        return Ok(());
++    }
+     rocsparse()?.rocsparse_destroy_handle(context)
+ }
+ 
 diff --git a/zluda_sparse/src/lib.rs b/zluda_sparse/src/lib.rs
 index 6ae899d..ddb0166 100644
 --- a/zluda_sparse/src/lib.rs
@@ -992,3 +1006,23 @@ index 6ae899d..ddb0166 100644
 +            rocsparse_coo2csr,
          ]
  );
+diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
+index 1a293a9..a9f714d 100644
+--- a/zluda_windows/src/lib.rs
++++ b/zluda_windows/src/lib.rs
+@@ -10,6 +10,15 @@ use std::{
+ use trie_hard::TrieHard;
+ use uuid::uuid;
+ use widestring::{u16str, U16Str, U16String};
++
++#[link(name = "ntdll")]
++unsafe extern "system" {
++    fn RtlDllShutdownInProgress() -> u8;
++}
++
++pub fn process_shutdown_in_progress() -> bool {
++    unsafe { RtlDllShutdownInProgress() != 0 }
++}
+ use windows::{
+     core::{w, HRESULT, PCWSTR},
+     Win32::{

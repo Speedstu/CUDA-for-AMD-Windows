@@ -97,17 +97,31 @@ function Invoke-Probe([string]$Name) {
             if ($candidate.schema -eq 1 -and $candidate.test -eq $Name) { $parsed = $candidate; break }
         } catch {}
     }
-    # Some failing CUDA wrappers emit a useful error and then hang during
-    # process teardown. Preserve the real capability result while separately
-    # recording that the child had to be killed.
-    $status = if ($parsed) { [string]$parsed.status } elseif ($timedOut) { 'timeout' } else { 'error' }
+    # Some failing CUDA wrappers emit a useful result and then hang or crash
+    # during process teardown. Preserve the parsed capability result, but do
+    # not count a numerically-correct result as a clean PASS unless the child
+    # process also exits normally.
+    $exitCode = if ($timedOut) { $null } else { $p.ExitCode }
+    $abnormalExit = [bool](-not $timedOut -and $null -ne $exitCode -and $exitCode -ne 0)
+    $parsedStatus = if ($parsed) { [string]$parsed.status } else { $null }
+    $status = if ($abnormalExit -and $parsedStatus -eq 'pass') {
+        'crash_after_result'
+    } elseif ($parsed) {
+        $parsedStatus
+    } elseif ($timedOut) {
+        'timeout'
+    } else {
+        'error'
+    }
     [pscustomobject][ordered]@{
         test = $Name
         status = $status
+        capability_status = $parsedStatus
         elapsed_ms = [math]::Round($sw.Elapsed.TotalMilliseconds, 1)
         timed_out = [bool]$timedOut
         process_hung_after_result = [bool]($timedOut -and $parsed)
-        process_exit = if ($timedOut) { $null } else { $p.ExitCode }
+        process_crashed_after_result = [bool]($abnormalExit -and $parsed)
+        process_exit = $exitCode
         result = $parsed
         stdout = $stdout.TrimEnd()
         stderr = $stderr.TrimEnd()
@@ -132,9 +146,10 @@ foreach ($name in $Tests) {
         'pass'        { Write-Host ' PASS' -ForegroundColor Green }
         'unsupported' { Write-Host ' UNSUPPORTED' -ForegroundColor Yellow }
         'incorrect'   { Write-Host ' INCORRECT' -ForegroundColor Red }
-        'timeout'     { Write-Host ' TIMEOUT' -ForegroundColor Red }
-        'unavailable' { Write-Host ' UNAVAILABLE' -ForegroundColor Yellow }
-        default       { Write-Host (" {0}" -f $entry.status.ToUpperInvariant()) -ForegroundColor Red }
+        'timeout'            { Write-Host ' TIMEOUT' -ForegroundColor Red }
+        'crash_after_result' { Write-Host ' CRASH_AFTER_RESULT' -ForegroundColor Red }
+        'unavailable'        { Write-Host ' UNAVAILABLE' -ForegroundColor Yellow }
+        default              { Write-Host (" {0}" -f $entry.status.ToUpperInvariant()) -ForegroundColor Red }
     }
 }
 
@@ -143,7 +158,8 @@ $unsupported = @($results | Where-Object { $_.status -in @('unsupported','unavai
 $incorrect = @($results | Where-Object status -eq 'incorrect')
 $timeouts = @($results | Where-Object status -eq 'timeout')
 $processHangs = @($results | Where-Object { $_.timed_out })
-$errors = @($results | Where-Object status -eq 'error')
+$processCrashes = @($results | Where-Object { $_.process_crashed_after_result })
+$errors = @($results | Where-Object { $_.status -in @('error','crash_after_result') })
 $total = $results.Count
 $score = if ($total) { [math]::Round(100.0 * $passed.Count / $total, 1) } else { 0.0 }
 
@@ -163,11 +179,13 @@ $report = [ordered]@{
     incorrect = $incorrect.Count
     timeouts = $timeouts.Count
     process_hangs = $processHangs.Count
+    process_crashes = $processCrashes.Count
     errors = $errors.Count
     tested_capability_score_percent = $score
     all_tested_capabilities_pass = [bool]($passed.Count -eq $total)
     no_silent_corruption = [bool]($incorrect.Count -eq 0)
     no_hangs = [bool]($processHangs.Count -eq 0)
+    no_process_crashes = [bool]($processCrashes.Count -eq 0)
     results = $results
 }
 New-Item -ItemType Directory -Force -Path (Split-Path $ReportPath -Parent) | Out-Null
@@ -179,9 +197,11 @@ Write-Host "Unsupported : $($unsupported.Count)"
 Write-Host "Incorrect   : $($incorrect.Count)"
 Write-Host "Timeouts    : $($timeouts.Count)"
 Write-Host "Proc hangs  : $($processHangs.Count)"
+Write-Host "Proc crashes: $($processCrashes.Count)"
 Write-Host "Errors      : $($errors.Count)"
 Write-Host "Tested capability score: ${score}%"
 Write-Host "Report: $ReportPath"
 if ($incorrect.Count -gt 0) { Write-Warning 'At least one tested capability returned numerically incorrect output.' }
 if ($processHangs.Count -gt 0) { Write-Warning 'At least one probe process had to be killed after reaching the timeout.' }
-if ($Strict -and ($passed.Count -ne $total)) { throw 'Not every tested CUDA-facing capability passed.' }
+if ($processCrashes.Count -gt 0) { Write-Warning 'At least one probe returned a result but the process crashed during teardown.' }
+if ($Strict -and ($passed.Count -ne $total)) { throw 'Not every tested CUDA-facing capability passed cleanly.' }

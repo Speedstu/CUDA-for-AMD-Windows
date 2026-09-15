@@ -11,6 +11,14 @@ typedef void* hipStream_t;
 
 static HMODULE g_hipsolver = NULL;
 
+static int process_shutdown_in_progress(void) {
+    typedef unsigned char (WINAPI *rtl_shutdown_fn)(void);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return 0;
+    rtl_shutdown_fn fn = (rtl_shutdown_fn)GetProcAddress(ntdll, "RtlDllShutdownInProgress");
+    return fn ? (fn() != 0) : 0;
+}
+
 static int cuda_status_from_hip(int s) {
     switch (s) {
         case 0: return 0;  /* SUCCESS */
@@ -55,6 +63,7 @@ EXPORT int cusolverDnCreate(void** handle) {
 }
 
 EXPORT int cusolverDnDestroy(void* handle) {
+    if (process_shutdown_in_progress()) return 0;
     typedef int (*fn_t)(hipsolverHandle_t);
     LOAD_FN("hipsolverDnDestroy", fn_t);
     return cuda_status_from_hip(fn((hipsolverHandle_t)handle));

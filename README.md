@@ -135,7 +135,7 @@ Reports are written to:
 .runtime\functional-test.json
 ```
 
-For broader bring-up work, `scripts/test-capabilities.ps1` adds isolated probes for CUDA-facing runtime/device behavior, memory copies, streams/events, GEMM variants, convolution, FFT, sparse operations, linear algebra, RNG, AMP, optimizers, SDPA and NVML. It records numerical failures, clean unsupported results and process hangs separately instead of reducing compatibility to a single load test.
+For broader bring-up work, `scripts/test-capabilities.ps1` adds isolated probes for CUDA-facing runtime/device behavior, memory copies, streams/events, GEMM variants, convolution, FFT, sparse operations, linear algebra, RNG, AMP, optimizers, SDPA and NVML. It records numerical failures, clean unsupported results, timeouts, teardown hangs and **post-result process crashes** separately instead of reducing compatibility to a single load test. A numerically correct operation is not counted as a clean pass if the child process later crashes during shutdown.
 
 `core_correctness_ok` represents the dense/GEMM path used by the validated PPO workload. `correctness_ok` remains stricter and covers every probed capability. `-Strict` fails if any tested capability is incorrect, errors, or hangs; this is useful when validating a broader CUDA application rather than the PPO reference profile.
 
