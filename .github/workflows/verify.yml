@@ -25,6 +25,17 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      - name: Validate Python functional probe
+        shell: pwsh
+        run: |
+          python -m py_compile scripts/functional_probe.py
+          $tests = @(python scripts/functional_probe.py --list-tests)
+          $expected = @('matmul','conv2d','sdpa_math','sdpa_mem_efficient')
+          foreach ($name in $expected) {
+            if ($tests -notcontains $name) { throw "Missing functional probe: $name" }
+          }
+          Write-Host "Functional probe modes: $($tests -join ', ')"
+
       - name: Validate JSON manifests
         shell: pwsh
         run: |
@@ -32,13 +43,17 @@ jobs:
             Write-Host "Parsing $($_.Name)"
             Get-Content $_.FullName -Raw | ConvertFrom-Json | Out-Null
           }
+          $profiles = Get-Content manifests/windows-gpu-profiles.json -Raw | ConvertFrom-Json
+          if ($profiles.schema -lt 2) { throw 'GPU profile schema did not include functional compatibility metadata' }
+          if ($profiles.architectures.gfx1150.minimum_hip_sdk -ne '7.2') { throw 'gfx1150 HIP floor missing' }
+          if ($profiles.architectures.gfx1150.community_report.status -ne 'partial') { throw 'gfx1150 partial report missing' }
 
       - name: GPU scanner no-GPU smoke test
         shell: pwsh
         run: |
           $json = & ./scripts/gpu-scan.ps1 -AsJson
           $report = $json | ConvertFrom-Json
-          if ($report.schema -ne 1) { throw 'Unexpected scanner schema' }
+          if ($report.schema -ne 2) { throw 'Unexpected scanner schema' }
           Write-Host "Scanner schema $($report.schema) OK"
 
       - name: Verify pinned ZLUDA release asset
