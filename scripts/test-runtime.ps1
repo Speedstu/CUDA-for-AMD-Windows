@@ -42,11 +42,11 @@ $p.StartInfo = $psi
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
-if ($timedOut) { try { $p.Kill($true) } catch {}; $p.WaitForExit() }
+if ($timedOut) { try { $p.Kill($true) } catch { try { $p.Kill() } catch {} }; try { $p.WaitForExit() } catch {} }
 $stdout = $p.StandardOutput.ReadToEnd()
 $stderr = $p.StandardError.ReadToEnd()
 
-Write-Host '=== ZLUDA cuda_check ==='
+Write-Host '=== ZLUDA cuda_check (runtime smoke only) ==='
 if ($stdout) { Write-Host $stdout.TrimEnd() }
 if ($stderr) { Write-Warning $stderr.TrimEnd() }
 
@@ -65,7 +65,8 @@ foreach ($group in $requiredGroups.GetEnumerator()) {
     }
     $checks[$group.Key] = $ok
 }
-$coreOk = -not ($checks.Values -contains $false)
+$coreGroupsOk = -not ($checks.Values -contains $false)
+$runtimeSmokeOk = $coreGroupsOk -and -not $timedOut
 $cudnnOk = [bool]($stdout -match '(?m)^cudnn[89]\s*:\s*OK')
 
 Write-Host ''
@@ -73,15 +74,22 @@ foreach ($entry in $checks.GetEnumerator()) {
     Write-Host ("[{0}] {1}" -f ($(if($entry.Value){'PASS'}else{'FAIL'})), $entry.Key)
 }
 if ($cudnnOk) { Write-Host '[PASS] cudnn' }
-else { Write-Warning '[OPTIONAL] cuDNN unavailable. The stable Windows HIP SDK does not ship MIOpen; convolution-heavy workloads can need a newer/nightly stack.' }
-if ($timedOut) { Write-Warning "cuda_check timed out after ${TimeoutSeconds}s." }
+else { Write-Warning '[OPTIONAL] cuDNN unavailable. Convolution-heavy workloads may require a different/newer stack.' }
+if ($timedOut) { Write-Warning "cuda_check timed out after ${TimeoutSeconds}s. A timeout is a runtime-smoke failure even if earlier library probes printed OK." }
+
+Write-Host ''
+Write-Warning 'cuda_check validates library/runtime loading only. It does NOT prove numerical correctness.'
+Write-Host 'Run .\scripts\test-functional.ps1 with a CUDA-facing PyTorch environment to test matmul, conv2d and SDPA numerics.'
 
 $result = [ordered]@{
-    schema = 1
+    schema = 2
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
-    core_ok = [bool]$coreOk
+    core_ok = [bool]$runtimeSmokeOk
+    core_groups_ok = [bool]$coreGroupsOk
+    runtime_smoke_ok = [bool]$runtimeSmokeOk
+    numerical_correctness_tested = $false
     timed_out = [bool]$timedOut
-    process_exit = $p.ExitCode
+    process_exit = if ($timedOut) { $null } else { $p.ExitCode }
     cudnn_ok = [bool]$cudnnOk
     checks = [pscustomobject]$checks
     stdout = $stdout.TrimEnd()
@@ -90,4 +98,4 @@ $result = [ordered]@{
 New-Item -ItemType Directory -Force -Path (Split-Path $ReportPath -Parent) | Out-Null
 $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 $ReportPath
 Write-Host "Report: $ReportPath"
-if (-not $coreOk) { throw 'Core ZLUDA/HIP runtime validation failed.' }
+if (-not $runtimeSmokeOk) { throw 'Core ZLUDA/HIP runtime smoke validation failed.' }
