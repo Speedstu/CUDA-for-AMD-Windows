@@ -21,20 +21,48 @@ if (-not (Test-Path $launcher)) { throw "Missing zluda.exe: $launcher" }
 if (-not (Test-Path $probe)) { throw "Missing cuda_check.exe: $probe" }
 if (-not $hip -or -not (Test-Path (Join-Path $hip 'bin'))) { throw "HIP SDK bin directory is missing: $hip" }
 
+function Quote-ProcessArgument {
+    param([string]$Value)
+    if ($null -eq $Value) { return '""' }
+    return '"' + ($Value -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
+}
+
+function Set-ProcessEnvironment {
+    param([System.Diagnostics.ProcessStartInfo]$Info, [string]$Name, [string]$Value)
+    if ($Info.PSObject.Properties.Name -contains 'Environment') {
+        $Info.Environment[$Name] = $Value
+    } else {
+        $Info.EnvironmentVariables[$Name] = $Value
+    }
+}
+
+function Stop-ProcessTree {
+    param([System.Diagnostics.Process]$Process)
+    try {
+        $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+        if (Test-Path $taskkill) {
+            & $taskkill /PID $Process.Id /T /F 2>$null | Out-Null
+        } else {
+            $Process.Kill()
+        }
+    } catch {
+        try { $Process.Kill() } catch {}
+    }
+}
+
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $launcher
-$psi.ArgumentList.Add('--')
-$psi.ArgumentList.Add($probe)
+$psi.Arguments = '-- ' + (Quote-ProcessArgument $probe)
 $psi.WorkingDirectory = $zluda
 $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
-$psi.Environment['HIP_PATH'] = $hip
-$psi.Environment['ZLUDA_CC'] = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
-$psi.Environment['ROCBLAS_TENSILE_LIBPATH'] = Join-Path $hip 'bin\rocblas\library'
-$psi.Environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\library'
-$psi.Environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
+Set-ProcessEnvironment $psi 'HIP_PATH' $hip
+Set-ProcessEnvironment $psi 'ZLUDA_CC' $(if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' })
+Set-ProcessEnvironment $psi 'ROCBLAS_TENSILE_LIBPATH' (Join-Path $hip 'bin\rocblas\library')
+Set-ProcessEnvironment $psi 'HIPBLASLT_TENSILE_LIBPATH' (Join-Path $hip 'bin\hipblaslt\library')
+Set-ProcessEnvironment $psi 'PATH' "$hip\bin;$zluda;$env:PATH"
 
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $psi
@@ -42,7 +70,10 @@ $p.StartInfo = $psi
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
-if ($timedOut) { try { $p.Kill($true) } catch { try { $p.Kill() } catch {} }; try { $p.WaitForExit() } catch {} }
+if ($timedOut) {
+    Stop-ProcessTree $p
+    try { $p.WaitForExit() } catch {}
+}
 $stdout = $p.StandardOutput.ReadToEnd()
 $stderr = $p.StandardError.ReadToEnd()
 

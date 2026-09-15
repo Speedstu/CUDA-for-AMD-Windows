@@ -195,6 +195,12 @@ $hardFailureStatuses = @('incorrect', 'error', 'timeout', 'unavailable')
 $hardFailures = @($tests | Where-Object { $hardFailureStatuses -contains $_.status })
 $unsupported = @($tests | Where-Object { $_.status -eq 'unsupported' })
 $passed = @($tests | Where-Object { $_.status -eq 'pass' })
+
+# Dense PPO validation only requires the GEMM path. Extended probes remain
+# visible and can fail independently without misrepresenting PPO support.
+$coreTestNames = @('matmul')
+$coreTests = @($tests | Where-Object { $coreTestNames -contains $_.test })
+$coreCorrectnessOk = ($coreTests.Count -eq $coreTestNames.Count) -and -not ($coreTests | Where-Object { $_.status -ne 'pass' })
 $correctnessOk = ($hardFailures.Count -eq 0)
 $fullSupport = ($passed.Count -eq $tests.Count)
 
@@ -205,6 +211,9 @@ $result = [ordered]@{
     python = $PythonExe
     pytorch = ($torchCheck | Out-String).Trim()
     gpu = if ($config.gpu) { $config.gpu } else { $null }
+    core_profile = 'dense-ppo-gemm'
+    core_tests = $coreTestNames
+    core_correctness_ok = [bool]$coreCorrectnessOk
     correctness_ok = [bool]$correctnessOk
     full_support = [bool]$fullSupport
     safe_refusals = $unsupported.Count
@@ -213,6 +222,12 @@ $result = [ordered]@{
 }
 
 Write-Host ''
+if ($coreCorrectnessOk) {
+    Write-Host '[CORE PASS] Dense/GEMM numerical path passed.'
+} else {
+    Write-Warning '[CORE FAIL] Dense/GEMM numerical path failed; do not trust PPO/GEMM workloads.'
+}
+
 if ($correctnessOk) {
     if ($fullSupport) {
         Write-Host '[PASS] All tested operations completed with numerically valid results.'
@@ -220,6 +235,6 @@ if ($correctnessOk) {
         Write-Warning '[PARTIAL] Tested operations were numerically safe, but one or more backends refused unsupported work.'
     }
 } else {
-    Write-Warning '[FAIL] Functional validation found an incorrect result, error, or hang. Do not treat this GPU/runtime as validated.'
+    Write-Warning '[CAPABILITY FAIL] One or more extended operations returned an incorrect result, error, or hang. Review the per-operation report; do not use failing capabilities even when the dense/GEMM core passes.'
 }
 Write-ReportAndMaybeFail -Data $result -Failure $(if ($correctnessOk) { $null } else { 'ZLUDA functional correctness validation failed.' })

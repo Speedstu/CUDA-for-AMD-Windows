@@ -6,6 +6,8 @@ local-artifacts/
 *.tar.gz
 *.log
 *.pdb
+*.pyc
+__pycache__/
 build/
 build-*/
 .vs/

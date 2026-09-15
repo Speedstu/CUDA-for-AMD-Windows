@@ -41,6 +41,8 @@ This does **not** mean every CUDA program or AI model works. CUDA API/library co
 
 For `gfx1150`/RDNA 3.5, the project records **HIP SDK 7.2 or newer** as the minimum compatible floor. Do not install HIP 6.4 merely to match the historical RX 9060 XT reference profile.
 
+The memory-efficient SDPA corruption reported on `gfx1150` is **not treated as architecture-specific**: the same probe currently reproduces an incorrect result on the validated `gfx1200` reference path. The repository therefore reports compatibility per capability/workload instead of turning one failing optional backend into a blanket GPU verdict.
+
 ## How it works
 
 ```text
@@ -131,6 +133,18 @@ Reports are written to:
 .runtime\runtime-test.json
 .runtime\functional-test.json
 ```
+
+`core_correctness_ok` represents the dense/GEMM path used by the validated PPO workload. `correctness_ok` remains stricter and covers every probed capability. `-Strict` fails if any tested capability is incorrect, errors, or hangs; this is useful when validating a broader CUDA application rather than the PPO reference profile.
+
+## Optional real PPO integration smoke
+
+Maintainers with a local VelocityRL checkout can validate the same runtime with a real PPO update instead of relying only on synthetic kernels:
+
+```powershell
+.\scripts\test-velocityrl.ps1 -VelocityRoot D:\VelocityRL -Agents 4096 -Rollout 16 -Minibatch 16384 -SmokeUpdates 1
+```
+
+This runs VelocityRL through the ZLUDA/HIP runtime produced by this repository, performs rollout + forward + PPO backward/optimizer work, writes its temporary run under `.runtime\velocityrl-smoke\`, and records `.runtime\velocityrl-smoke.json`. VelocityRL is an optional external integration workload and is not downloaded by the installer.
 
 ## Run a CUDA-targeted application
 

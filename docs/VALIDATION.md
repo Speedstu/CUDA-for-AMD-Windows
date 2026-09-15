@@ -59,6 +59,47 @@ The process was stopped after the completed iteration because the purpose of thi
 
 This verifies more than device enumeration: the workload performed CUDA-facing inference plus a real PPO learning/update phase using CUDA-enabled LibTorch on the AMD GPU stack.
 
+## 2026-09-15 VelocityRL regression smoke
+
+The recovered issue-validation work was rerun locally with the repository runtime itself and a real VelocityRL PPO workload.
+
+Runtime smoke:
+
+```text
+nvcuda     PASS
+cuBLAS     PASS
+cuBLASLt   PASS
+cuSPARSE   PASS
+cuFFT      PASS
+cuDNN      unavailable (expected on this stable Windows HIP SDK)
+```
+
+Capability probes using VelocityRL's CUDA-facing PyTorch environment (`2.0.1+cu118`) produced:
+
+```text
+matmul                 PASS
+conv2d                 UNSUPPORTED (MIOpen.dll unavailable)
+sdpa_math               PASS
+sdpa_mem_efficient      INCORRECT RESULT
+```
+
+The memory-efficient SDPA failure was reproduced on the RX 9060 XT reference as well, so it must not be presented as a `gfx1150`-only defect. It remains an explicit capability failure for workloads that select that backend.
+
+A real VelocityRL smoke then ran through this repository's ZLUDA launcher with **4,096 agents x 16 rollout steps = 65,536 decisions** and one PPO update:
+
+```text
+Checkpoint transfer max_abs: 0
+Device: AMD Radeon RX 9060 XT [ZLUDA]
+Trainable parameters: 986,239
+PPO decisions added: 65,536
+SPS: 6,933
+KL: 0.00001
+Entropy: 1.690
+Checkpoint written: yes
+```
+
+This is the workload-level gate for the dense/GEMM PPO profile. Synthetic extended probes are still retained because a successful PPO update does not imply that convolution or every attention backend is safe.
+
 ## Historical performance
 
 Older tuned runs of the same ZLUDA/LibTorch family retained approximately **70k-109k overall steps/s**. Those numbers are historical performance evidence and should not be confused with the short validation run above.

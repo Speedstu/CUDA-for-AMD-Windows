@@ -197,6 +197,12 @@ def main() -> int:
     except RuntimeError as exc:
         text = str(exc)
         lower = text.lower()
+        if test == "conv2d" and (
+            "miopen.dll could not be found" in lower
+            or "miopen could not be found" in lower
+        ):
+            emit(test, "unsupported", reason="miopen_unavailable", error=text)
+            return 3
         if test.startswith("sdpa_") and (
             "no available kernel" in lower
             or "not supported" in lower
