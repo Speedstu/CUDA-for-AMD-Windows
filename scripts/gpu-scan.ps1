@@ -21,7 +21,8 @@ function Find-HipRoot {
     $base = Join-Path $env:ProgramFiles 'AMD\ROCm'
     if (Test-Path $base) {
         $dirs = Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Sort-Object {
-            try { [version]$_.Name } catch { [version]'0.0' }
+            $m = [regex]::Match($_.Name, '(\d+)\.(\d+)')
+            if ($m.Success) { [version]("{0}.{1}" -f $m.Groups[1].Value, $m.Groups[2].Value) } else { [version]'0.0' }
         } -Descending
         foreach ($dir in $dirs) {
             if (Test-Path (Join-Path $dir.FullName 'bin\hipInfo.exe')) { return $dir.FullName }
@@ -44,6 +45,17 @@ function Get-ArchMetadata {
     $prop = $profiles.architectures.PSObject.Properties[$Arch]
     if ($prop) { return $prop.Value }
     return $null
+}
+
+function Get-ProjectStatus {
+    param([string]$Name, [string]$Arch, $Meta, [bool]$IsReference)
+    if ($IsReference) { return 'validated-reference' }
+    if ($Meta -and $Meta.community_report -and $Meta.community_report.status -eq 'partial') {
+        # The current partial evidence is specifically from Radeon 890M / gfx1150 issue #3.
+        if ($Arch -eq 'gfx1150' -and $Name -match '890M') { return 'community-partial' }
+    }
+    if ($Meta -and $Meta.current_windows_hip_sdk) { return 'unverified-candidate' }
+    return 'experimental'
 }
 
 $resolvedHip = Find-HipRoot $HipRoot
@@ -86,6 +98,7 @@ if ($hipDevices.Count -gt 0) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
         $isReference = ($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200')
+        $status = Get-ProjectStatus -Name $d.name -Arch $d.gfx -Meta $meta -IsReference $isReference
         $devices += [pscustomobject][ordered]@{
             index = $d.index
             name = $d.name
@@ -95,8 +108,11 @@ if ($hipDevices.Count -gt 0) {
             driver_version = if ($wmi) { $wmi.driver_version } else { $null }
             detection = 'hipInfo'
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
+            minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
+            community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
             project_tested = $isReference
-            project_status = if ($isReference) { 'validated-reference' } elseif ($meta -and $meta.current_windows_hip_sdk) { 'unverified-candidate' } else { 'experimental' }
+            project_status = $status
+            functional_validation_required = [bool](-not $isReference)
         }
     }
 } else {
@@ -105,6 +121,7 @@ if ($hipDevices.Count -gt 0) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
         $isReference = ($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200')
+        $status = Get-ProjectStatus -Name $wmi.name -Arch $arch -Meta $meta -IsReference $isReference
         $devices += [pscustomobject][ordered]@{
             index = $i++
             name = $wmi.name
@@ -114,8 +131,11 @@ if ($hipDevices.Count -gt 0) {
             driver_version = $wmi.driver_version
             detection = 'WMI-fallback'
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
+            minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
+            community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
             project_tested = $isReference
-            project_status = if ($isReference) { 'validated-reference' } elseif ($meta -and $meta.current_windows_hip_sdk) { 'unverified-candidate' } else { 'experimental' }
+            project_status = $status
+            functional_validation_required = [bool](-not $isReference)
         }
     }
 }
@@ -127,7 +147,7 @@ $hipVersion = $null
 if ($resolvedHip) { $hipVersion = Split-Path $resolvedHip -Leaf }
 
 $report = [pscustomobject][ordered]@{
-    schema = 1
+    schema = 2
     generated_utc = [DateTime]::UtcNow.ToString('o')
     windows = [Environment]::OSVersion.VersionString
     hip_root = $resolvedHip
@@ -136,17 +156,17 @@ $report = [pscustomobject][ordered]@{
     selected_gpu_index = if ($selected) { $selected.index } else { $null }
     selected_gpu = $selected
     devices = $devices
-    notes = 'Only RX 9060 XT / gfx1200 has been validated by this project. Other GPUs are scanner candidates until confirmed by community reports.'
+    notes = 'Runtime detection is not proof of numerical correctness. Non-reference GPUs require scripts/test-functional.ps1 before they should be treated as validated.'
 }
 
 if ($OutputPath) {
     $parent = Split-Path $OutputPath -Parent
     if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-    $report | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $OutputPath
+    $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $OutputPath
 }
 
 if ($AsJson) {
-    $report | ConvertTo-Json -Depth 6
+    $report | ConvertTo-Json -Depth 8
 } elseif (-not $Quiet) {
     Write-Host 'CUDA for AMD - GPU scanner'
     Write-Host '--------------------------'
@@ -158,11 +178,14 @@ if ($AsJson) {
         Write-Host ''
         if ($selected.project_tested) {
             Write-Host '[validated] This is the reference GPU tested by the project.'
+        } elseif ($selected.project_status -eq 'community-partial') {
+            Write-Warning 'This GPU has a community partial report: runtime/GEMM worked, but at least one functional operation failed or returned incorrect results. Run test-functional.ps1 on your exact stack.'
         } elseif ($selected.current_windows_hip_sdk) {
-            Write-Warning 'This GPU is a current Windows HIP SDK candidate, but this project has not validated it yet.'
+            Write-Warning 'This GPU is a current Windows HIP SDK candidate, but this project has not validated it yet. Run test-functional.ps1 before trusting workload output.'
         } else {
             Write-Warning 'This GPU is experimental for this project and/or not in the current Windows HIP SDK support set.'
         }
+        if ($selected.minimum_hip_sdk) { Write-Host "Minimum recorded HIP SDK for this architecture: $($selected.minimum_hip_sdk)" }
         if ($OutputPath) { Write-Host "Report: $OutputPath" }
     }
 }
