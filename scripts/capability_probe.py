@@ -350,14 +350,34 @@ def run_sparse_mm(torch):
 
 def run_linalg_solve(torch):
     torch.manual_seed(106)
-    m = torch.randn(32, 32)
-    a = m.T @ m + torch.eye(32) * 0.5
-    b = torch.randn(32, 4)
-    ref = torch.linalg.solve(a, b)
-    got = torch.linalg.solve(a.cuda(), b.cuda())
-    sync(torch)
-    check = tensor_metrics(torch, got, ref, 3e-3, 3e-3)
-    return {"ok": check["ok"], "numerics": check}
+    cases = []
+    specs = [
+        ("fp32", torch.float32, 3e-3, 3e-3),
+        ("fp64", torch.float64, 1e-8, 1e-8),
+        ("complex64", torch.complex64, 5e-3, 5e-3),
+        ("complex128", torch.complex128, 2e-8, 2e-8),
+    ]
+    results = {}
+    for name, dtype, atol, rtol in specs:
+        if dtype.is_complex:
+            base = torch.randn(24, 24, dtype=torch.float64)
+            imag = torch.randn(24, 24, dtype=torch.float64)
+            m = (base + 1j * imag).to(dtype)
+            br = torch.randn(24, 4, dtype=torch.float64)
+            bi = torch.randn(24, 4, dtype=torch.float64)
+            b = (br + 1j * bi).to(dtype)
+            a = m.mH @ m + torch.eye(24, dtype=dtype) * 0.5
+        else:
+            m = torch.randn(24, 24, dtype=dtype)
+            a = m.T @ m + torch.eye(24, dtype=dtype) * 0.5
+            b = torch.randn(24, 4, dtype=dtype)
+        ref = torch.linalg.solve(a, b)
+        got = torch.linalg.solve(a.cuda(), b.cuda())
+        sync(torch)
+        check = tensor_metrics(torch, got, ref, atol, rtol)
+        results[name] = check
+        cases.append(check)
+    return {"ok": all(c["ok"] for c in cases), "dtypes": results}
 
 
 def run_softmax(torch):

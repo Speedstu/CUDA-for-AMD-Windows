@@ -151,6 +151,12 @@ On the RX 9060 XT / `gfx1200` development system, the current patch set has nume
 
 The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. A combined strict regression now passes NVML + `torch.sparse.mm` + FFT together. These are experimental results for the tested stack, not a claim of complete CUDA coverage. CUDA Graphs are not changed by this patch set and are tracked separately.
 
+### Experimental cuSOLVER → hipSOLVER proxy
+
+The repository also includes a source-only, reversible cuSOLVER proxy under [`native/cusolver_proxy`](native/cusolver_proxy/README.md). Its builder preserves the export surface of the user's installed `cusolver64_11.dll`, routes the validated LU `getrf/getrs` paths to hipSOLVER, and forwards not-yet-ported exports to the user's original DLL.
+
+On the current `gfx1200` ZLUDA v7 + TheRock test stack, a generated proxy preserved **940/940 exports** and `torch.linalg.solve` passed CPU-reference checks for FP32, FP64, complex64 and complex128. The original cuSOLVER DLL was restored with the same SHA-256 after the staging test. This is an incremental compatibility layer, not a claim that every cuSOLVER routine is AMD-native yet.
+
 ## Optional real PPO integration smoke
 
 Maintainers with a local VelocityRL checkout can validate the same runtime with a real PPO update instead of relying only on synthetic kernels:
