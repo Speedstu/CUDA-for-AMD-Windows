@@ -105,8 +105,8 @@ This is the workload-level gate for the dense/GEMM PPO profile. Synthetic extend
 The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` with TheRock 7.14.1 and PyTorch `2.0.1+cu118`, produced the following isolated capability result:
 
 ```text
-23/25 PASS
-2/25 UNSUPPORTED (safe refusal)
+24/26 PASS
+2/26 UNSUPPORTED (safe refusal)
 0 incorrect
 0 timeouts
 0 process hangs
@@ -115,6 +115,8 @@ The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` wit
 ```
 
 The two safe refusals are `sdpa_flash` and `sdpa_mem_efficient`. Diagnosis showed that their low-architecture PTX fallback modules do not contain the real fused compute path: memory-efficient attention is a diagnostic stub, while Flash FMHA retains surrounding control/softmax plumbing but its score accumulators are never populated because the fused GEMM lives in NVIDIA cubins. The patch now returns `NO_BINARY_FOR_GPU` for those specific fallback modules instead of allowing a silent incorrect tensor. `sdpa_math` remains numerically correct.
+
+With the optional reversible cuSOLVER → hipSOLVER proxy staged, the added `linalg_cholesky` capability also passes. The tested proxy preserves **940/940 exports** and routes **49 entry points** to hipSOLVER, including LU plus legacy and generic-X Cholesky paths. `torch.linalg.cholesky`, `torch.cholesky_solve` and `torch.cholesky_inverse` were checked against CPU references for FP32, FP64, complex64 and complex128 in both single and batched tensor cases. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
 
 The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **70,124 SPS** and **70,113 SPS**, for a **70,118.5 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the 4096² delta was **+9.86%**.
 ## Historical performance

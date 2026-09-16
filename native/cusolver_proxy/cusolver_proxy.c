@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,33 @@ static int hip_op_from_cuda(int op) {
     }
 }
 
+static int hip_fill_from_cuda(int uplo) {
+    switch (uplo) {
+        case 0: return 122; /* CUBLAS_FILL_MODE_LOWER -> HIPBLAS_FILL_MODE_LOWER */
+        case 1: return 121; /* CUBLAS_FILL_MODE_UPPER -> HIPBLAS_FILL_MODE_UPPER */
+        case 2: return 123; /* CUBLAS_FILL_MODE_FULL  -> HIPBLAS_FILL_MODE_FULL */
+        default: return -1;
+    }
+}
+
+static int hip_data_type_from_cuda(int data_type) {
+    switch (data_type) {
+        case 0: return 0; /* CUDA_R_32F -> HIP_R_32F */
+        case 1: return 1; /* CUDA_R_64F -> HIP_R_64F */
+        case 4: return 4; /* CUDA_C_32F -> HIP_C_32F */
+        case 5: return 5; /* CUDA_C_64F -> HIP_C_64F */
+        default: return -1;
+    }
+}
+
+static int hip_alg_from_cuda(int alg) {
+    switch (alg) {
+        case 0: return 231; /* CUSOLVER_ALG_0 -> HIPSOLVER_ALG_0 */
+        case 1: return 232; /* CUSOLVER_ALG_1 -> HIPSOLVER_ALG_1 */
+        default: return -1;
+    }
+}
+
 static FARPROC hip_symbol(const char* name) {
     if (!g_hipsolver) {
         g_hipsolver = LoadLibraryW(L"hipsolver.dll");
@@ -75,6 +103,61 @@ EXPORT int cusolverDnSetStream(void* handle, void* stream) {
     return cuda_status_from_hip(fn((hipsolverHandle_t)handle, (hipStream_t)stream));
 }
 
+EXPORT int cusolverDnCreateParams(void** params) {
+    typedef int (*fn_t)(void**);
+    LOAD_FN("hipsolverDnCreateParams", fn_t);
+    return cuda_status_from_hip(fn(params));
+}
+
+EXPORT int cusolverDnDestroyParams(void* params) {
+    if (process_shutdown_in_progress()) return 0;
+    typedef int (*fn_t)(void*);
+    LOAD_FN("hipsolverDnDestroyParams", fn_t);
+    return cuda_status_from_hip(fn(params));
+}
+
+EXPORT int cusolverDnSetAdvOptions(void* params, int func, int alg) {
+    if (func != 0) return 9; /* only CUSOLVERDN_GETRF is defined for this API family */
+    int halg = hip_alg_from_cuda(alg);
+    if (halg < 0) return 9;
+    typedef int (*fn_t)(void*, int, int);
+    LOAD_FN("hipsolverDnSetAdvOptions", fn_t);
+    return cuda_status_from_hip(fn(params, 0, halg));
+}
+
+EXPORT int cusolverDnXpotrf_bufferSize(void* handle, void* params, int uplo, int64_t n, int dataTypeA, const void* A, int64_t lda, int computeType, size_t* lworkOnDevice, size_t* lworkOnHost) {
+    int huplo = hip_fill_from_cuda(uplo);
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (huplo < 0) return 3;
+    if (htypeA < 0 || hcompute < 0) return 9;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int, const void*, int64_t, int, size_t*, size_t*);
+    LOAD_FN("hipsolverDnXpotrf_bufferSize", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, htypeA, A, lda, hcompute, lworkOnDevice, lworkOnHost));
+}
+
+EXPORT int cusolverDnXpotrf(void* handle, void* params, int uplo, int64_t n, int dataTypeA, void* A, int64_t lda, int computeType, void* workOnDevice, size_t lworkOnDevice, void* workOnHost, size_t lworkOnHost, int* info) {
+    int huplo = hip_fill_from_cuda(uplo);
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (huplo < 0) return 3;
+    if (htypeA < 0 || hcompute < 0) return 9;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int, void*, int64_t, int, void*, size_t, void*, size_t, int*);
+    LOAD_FN("hipsolverDnXpotrf", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, htypeA, A, lda, hcompute, workOnDevice, lworkOnDevice, workOnHost, lworkOnHost, info));
+}
+
+EXPORT int cusolverDnXpotrs(void* handle, void* params, int uplo, int64_t n, int64_t nrhs, int dataTypeA, const void* A, int64_t lda, int dataTypeB, void* B, int64_t ldb, int* info) {
+    int huplo = hip_fill_from_cuda(uplo);
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int htypeB = hip_data_type_from_cuda(dataTypeB);
+    if (huplo < 0) return 3;
+    if (htypeA < 0 || htypeB < 0) return 9;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int64_t, int, const void*, int64_t, int, void*, int64_t, int*);
+    LOAD_FN("hipsolverDnXpotrs", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, nrhs, htypeA, A, lda, htypeB, B, ldb, info));
+}
+
 #define DEFINE_GETRF_BUFFER(T, PREFIX) \
 EXPORT int cusolverDn##PREFIX##getrf_bufferSize(void* handle, int m, int n, T* A, int lda, int* lwork) { \
     typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, int*); \
@@ -98,6 +181,69 @@ EXPORT int cusolverDn##PREFIX##getrs(void* handle, int trans, int n, int nrhs, c
     return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hop, n, nrhs, A, lda, devIpiv, B, ldb, devInfo)); \
 }
 
+#define DEFINE_POTRF_BUFFER(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potrf_bufferSize(void* handle, int uplo, int n, T* A, int lda, int* lwork) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "potrf_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, A, lda, lwork)); \
+}
+
+#define DEFINE_POTRF(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potrf(void* handle, int uplo, int n, T* A, int lda, T* work, int lwork, int* devInfo) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "potrf", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, A, lda, work, lwork, devInfo)); \
+}
+
+#define DEFINE_POTRF_BATCHED(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potrfBatched(void* handle, int uplo, int n, T** Aarray, int lda, int* devInfo, int batchCount) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T**, int, int*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX "potrfBatched", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, Aarray, lda, devInfo, batchCount)); \
+}
+
+#define DEFINE_POTRI_BUFFER(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potri_bufferSize(void* handle, int uplo, int n, T* A, int lda, int* lwork) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "potri_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, A, lda, lwork)); \
+}
+
+#define DEFINE_POTRI(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potri(void* handle, int uplo, int n, T* A, int lda, T* work, int lwork, int* devInfo) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "potri", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, A, lda, work, lwork, devInfo)); \
+}
+
+#define DEFINE_POTRS(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potrs(void* handle, int uplo, int n, int nrhs, const T* A, int lda, T* B, int ldb, int* devInfo) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "potrs", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, nrhs, A, lda, B, ldb, devInfo)); \
+}
+
+#define DEFINE_POTRS_BATCHED(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##potrsBatched(void* handle, int uplo, int n, int nrhs, T** Aarray, int lda, T** Barray, int ldb, int* devInfo, int batchCount) { \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T**, int, T**, int, int*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX "potrsBatched", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, nrhs, Aarray, lda, Barray, ldb, devInfo, batchCount)); \
+}
+
 typedef struct { float x, y; } cfloat2;
 typedef struct { double x, y; } cdouble2;
 
@@ -115,6 +261,20 @@ DEFINE_GETRS(float, S)
 DEFINE_GETRS(double, D)
 DEFINE_GETRS(cfloat2, C)
 DEFINE_GETRS(cdouble2, Z)
+
+#define DEFINE_CHOLESKY_FAMILY(T, PREFIX) \
+    DEFINE_POTRF_BUFFER(T, PREFIX) \
+    DEFINE_POTRF(T, PREFIX) \
+    DEFINE_POTRF_BATCHED(T, PREFIX) \
+    DEFINE_POTRI_BUFFER(T, PREFIX) \
+    DEFINE_POTRI(T, PREFIX) \
+    DEFINE_POTRS(T, PREFIX) \
+    DEFINE_POTRS_BATCHED(T, PREFIX)
+
+DEFINE_CHOLESKY_FAMILY(float, S)
+DEFINE_CHOLESKY_FAMILY(double, D)
+DEFINE_CHOLESKY_FAMILY(cfloat2, C)
+DEFINE_CHOLESKY_FAMILY(cdouble2, Z)
 
 #ifdef __cplusplus
 }

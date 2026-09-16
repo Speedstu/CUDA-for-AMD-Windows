@@ -30,6 +30,7 @@ TESTS = (
     "fft",
     "sparse_mm",
     "linalg_solve",
+    "linalg_cholesky",
     "softmax",
     "layernorm",
     "gather_scatter",
@@ -385,6 +386,68 @@ def run_linalg_solve(torch):
     return {"ok": all(c["ok"] for c in cases), "dtypes": results}
 
 
+def run_linalg_cholesky(torch):
+    torch.manual_seed(116)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    specs = [
+        ("fp32", torch.float32, 3e-4, 3e-4),
+        ("fp64", torch.float64, 1e-10, 1e-10),
+        ("complex64", torch.complex64, 5e-4, 5e-4),
+        ("complex128", torch.complex128, 2e-10, 2e-10),
+    ]
+    results = {}
+    checks = []
+    for name, dtype, atol, rtol in specs:
+        dtype_results = {}
+        for batched in (False, True):
+            n = 8
+            shape = (3, n, n) if batched else (n, n)
+            if dtype.is_complex:
+                base_dtype = torch.float64 if dtype == torch.complex128 else torch.float32
+                xr = torch.randn(*shape, dtype=base_dtype)
+                xi = torch.randn(*shape, dtype=base_dtype)
+                x = torch.complex(xr, xi).to(dtype)
+            else:
+                x = torch.randn(*shape, dtype=dtype)
+            a = x @ x.mH + torch.eye(n, dtype=dtype) * (n + 1)
+            l_ref = torch.linalg.cholesky(a)
+            l_gpu = torch.linalg.cholesky(a.cuda())
+            sync(torch)
+            l_check = tensor_metrics(torch, l_gpu, l_ref, atol, rtol)
+
+            bshape = (3, n, 2) if batched else (n, 2)
+            if dtype.is_complex:
+                base_dtype = torch.float64 if dtype == torch.complex128 else torch.float32
+                br = torch.randn(*bshape, dtype=base_dtype)
+                bi = torch.randn(*bshape, dtype=base_dtype)
+                b = torch.complex(br, bi).to(dtype)
+            else:
+                b = torch.randn(*bshape, dtype=dtype)
+            solve_ref = torch.cholesky_solve(b, l_ref)
+            solve_gpu = torch.cholesky_solve(b.cuda(), l_gpu)
+            sync(torch)
+            solve_check = tensor_metrics(torch, solve_gpu, solve_ref, atol, rtol)
+
+            inv_ref = torch.cholesky_inverse(l_ref)
+            inv_gpu = torch.cholesky_inverse(l_gpu)
+            sync(torch)
+            inv_check = tensor_metrics(torch, inv_gpu, inv_ref, atol, rtol)
+
+            case_ok = l_check["ok"] and solve_check["ok"] and inv_check["ok"]
+            dtype_results["batch" if batched else "single"] = {
+                "ok": case_ok,
+                "cholesky": l_check,
+                "solve": solve_check,
+                "inverse": inv_check,
+            }
+            checks.extend((l_check, solve_check, inv_check))
+        results[name] = dtype_results
+    return {"ok": all(c["ok"] for c in checks), "dtypes": results, "backend": "cusolver"}
+
+
 def run_softmax(torch):
     import torch.nn.functional as F
     torch.manual_seed(107)
@@ -578,6 +641,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "fft": run_fft,
     "sparse_mm": run_sparse_mm,
     "linalg_solve": run_linalg_solve,
+    "linalg_cholesky": run_linalg_cholesky,
     "softmax": run_softmax,
     "layernorm": run_layernorm,
     "gather_scatter": run_gather_scatter,

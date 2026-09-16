@@ -40,9 +40,18 @@ if (-not $Objdump -or -not (Test-Path $Objdump)) {
 
 $overrideNames = @(
     'cusolverDnCreate', 'cusolverDnDestroy', 'cusolverDnSetStream',
+    'cusolverDnCreateParams', 'cusolverDnDestroyParams', 'cusolverDnSetAdvOptions',
+    'cusolverDnXpotrf_bufferSize', 'cusolverDnXpotrf', 'cusolverDnXpotrs',
     'cusolverDnSgetrf_bufferSize', 'cusolverDnDgetrf_bufferSize', 'cusolverDnCgetrf_bufferSize', 'cusolverDnZgetrf_bufferSize',
     'cusolverDnSgetrf', 'cusolverDnDgetrf', 'cusolverDnCgetrf', 'cusolverDnZgetrf',
-    'cusolverDnSgetrs', 'cusolverDnDgetrs', 'cusolverDnCgetrs', 'cusolverDnZgetrs'
+    'cusolverDnSgetrs', 'cusolverDnDgetrs', 'cusolverDnCgetrs', 'cusolverDnZgetrs',
+    'cusolverDnSpotrf_bufferSize', 'cusolverDnDpotrf_bufferSize', 'cusolverDnCpotrf_bufferSize', 'cusolverDnZpotrf_bufferSize',
+    'cusolverDnSpotrf', 'cusolverDnDpotrf', 'cusolverDnCpotrf', 'cusolverDnZpotrf',
+    'cusolverDnSpotrfBatched', 'cusolverDnDpotrfBatched', 'cusolverDnCpotrfBatched', 'cusolverDnZpotrfBatched',
+    'cusolverDnSpotri_bufferSize', 'cusolverDnDpotri_bufferSize', 'cusolverDnCpotri_bufferSize', 'cusolverDnZpotri_bufferSize',
+    'cusolverDnSpotri', 'cusolverDnDpotri', 'cusolverDnCpotri', 'cusolverDnZpotri',
+    'cusolverDnSpotrs', 'cusolverDnDpotrs', 'cusolverDnCpotrs', 'cusolverDnZpotrs',
+    'cusolverDnSpotrsBatched', 'cusolverDnDpotrsBatched', 'cusolverDnCpotrsBatched', 'cusolverDnZpotrsBatched'
 )
 $overrideSet = @{}
 foreach ($name in $overrideNames) { $overrideSet[$name] = $true }
