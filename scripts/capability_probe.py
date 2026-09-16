@@ -47,6 +47,7 @@ TESTS = (
     "optimizer_adam",
     "amp",
     "conv2d",
+    "batch_norm",
     "sdpa_math",
     "sdpa_flash",
     "sdpa_mem_efficient",
@@ -859,6 +860,49 @@ def run_conv2d(torch):
     return {"ok": check["ok"], "numerics": check}
 
 
+
+def run_batch_norm(torch):
+    import torch.nn.functional as F
+    torch.manual_seed(118)
+    if not torch.backends.cudnn.enabled:
+        return {"ok": False, "reason": "cudnn_disabled"}
+
+    x = torch.randn(2, 8, 8, 8, requires_grad=True)
+    w = torch.randn(8, requires_grad=True)
+    b = torch.randn(8, requires_grad=True)
+    ref = F.batch_norm(x, None, None, w, b, True, 0.1, 1e-5)
+    ref.square().mean().backward()
+    refs = (ref.detach(), x.grad.clone(), w.grad.clone(), b.grad.clone())
+
+    gx = x.detach().cuda().requires_grad_(True)
+    gw = w.detach().cuda().requires_grad_(True)
+    gb = b.detach().cuda().requires_grad_(True)
+    got = F.batch_norm(gx, None, None, gw, gb, True, 0.1, 1e-5)
+    got.square().mean().backward()
+    sync(torch)
+    train = tensor_metrics(torch, got, refs[0], 5e-4, 5e-4)
+    grad_x = tensor_metrics(torch, gx.grad, refs[1], 5e-4, 5e-4)
+    grad_w = tensor_metrics(torch, gw.grad, refs[2], 5e-4, 5e-4)
+    grad_b = tensor_metrics(torch, gb.grad, refs[3], 5e-4, 5e-4)
+
+    running_mean = torch.randn(8)
+    running_var = torch.rand(8) + 0.5
+    ref_inf = F.batch_norm(x.detach(), running_mean, running_var, w.detach(), b.detach(), False, 0.1, 1e-5)
+    got_inf = F.batch_norm(gx.detach(), running_mean.cuda(), running_var.cuda(), gw.detach(), gb.detach(), False, 0.1, 1e-5)
+    sync(torch)
+    inference = tensor_metrics(torch, got_inf, ref_inf, 5e-4, 5e-4)
+    checks = (train, grad_x, grad_w, grad_b, inference)
+    return {
+        "ok": all(c["ok"] for c in checks),
+        "cudnn_version": torch.backends.cudnn.version(),
+        "training": train,
+        "grad_input": grad_x,
+        "grad_scale": grad_w,
+        "grad_bias": grad_b,
+        "inference": inference,
+    }
+
+
 def _sdpa_ref(torch, q, k, v):
     return torch.softmax((q @ k.transpose(-2, -1)) / math.sqrt(q.shape[-1]), dim=-1) @ v
 
@@ -937,6 +981,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "optimizer_adam": run_optimizer_adam,
     "amp": run_amp,
     "conv2d": run_conv2d,
+    "batch_norm": run_batch_norm,
     "sdpa_math": lambda torch: run_sdpa(torch, "math"),
     "sdpa_flash": lambda torch: run_sdpa(torch, "flash"),
     "sdpa_mem_efficient": lambda torch: run_sdpa(torch, "memory-efficient"),

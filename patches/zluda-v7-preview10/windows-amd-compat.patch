@@ -1336,6 +1336,432 @@ index af41f7a..8036577 100644
      cusparseConstSpMatDescr_t => rocsparse_const_spmat_descr,
      cusparseDnMatDescr_t => rocsparse_dnmat_descr,
      cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
+diff --git a/zluda_dnn/src/impl.rs b/zluda_dnn/src/impl.rs
+index 45ec0ed..abbd2cf 100644
+--- a/zluda_dnn/src/impl.rs
++++ b/zluda_dnn/src/impl.rs
+@@ -860,6 +860,124 @@ pub(crate) unsafe fn get_convolution_forward_workspace_size(
+     )
+ }
+ 
++pub(crate) unsafe fn batch_normalization_forward_inference(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha: *const ::core::ffi::c_void,
++    beta: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    y_desc: miopenTensorDescriptor_t,
++    y: *mut ::core::ffi::c_void,
++    bn_scale_bias_mean_var_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    bn_bias: *const ::core::ffi::c_void,
++    estimated_mean: *const ::core::ffi::c_void,
++    estimated_variance: *const ::core::ffi::c_void,
++    epsilon: f64,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationForwardInference(
++        handle.base,
++        mode,
++        alpha.cast_mut(),
++        beta.cast_mut(),
++        x_desc,
++        x,
++        y_desc,
++        y,
++        bn_scale_bias_mean_var_desc,
++        bn_scale.cast_mut(),
++        bn_bias.cast_mut(),
++        estimated_mean.cast_mut(),
++        estimated_variance.cast_mut(),
++        epsilon,
++    )
++}
++
++pub(crate) unsafe fn batch_normalization_forward_training(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha: *const ::core::ffi::c_void,
++    beta: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    y_desc: miopenTensorDescriptor_t,
++    y: *mut ::core::ffi::c_void,
++    bn_scale_bias_mean_var_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    bn_bias: *const ::core::ffi::c_void,
++    exponential_average_factor: f64,
++    result_running_mean: *mut ::core::ffi::c_void,
++    result_running_variance: *mut ::core::ffi::c_void,
++    epsilon: f64,
++    result_save_mean: *mut ::core::ffi::c_void,
++    result_save_inv_variance: *mut ::core::ffi::c_void,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationForwardTraining(
++        handle.base,
++        mode,
++        alpha.cast_mut(),
++        beta.cast_mut(),
++        x_desc,
++        x,
++        y_desc,
++        y,
++        bn_scale_bias_mean_var_desc,
++        bn_scale.cast_mut(),
++        bn_bias.cast_mut(),
++        exponential_average_factor,
++        result_running_mean,
++        result_running_variance,
++        epsilon,
++        result_save_mean,
++        result_save_inv_variance,
++    )
++}
++
++pub(crate) unsafe fn batch_normalization_backward(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha_data_diff: *const ::core::ffi::c_void,
++    beta_data_diff: *const ::core::ffi::c_void,
++    alpha_param_diff: *const ::core::ffi::c_void,
++    beta_param_diff: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    dy_desc: miopenTensorDescriptor_t,
++    dy: *const ::core::ffi::c_void,
++    dx_desc: miopenTensorDescriptor_t,
++    dx: *mut ::core::ffi::c_void,
++    d_bn_scale_bias_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    d_bn_scale_result: *mut ::core::ffi::c_void,
++    d_bn_bias_result: *mut ::core::ffi::c_void,
++    epsilon: f64,
++    saved_mean: *const ::core::ffi::c_void,
++    saved_inv_variance: *const ::core::ffi::c_void,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationBackward(
++        handle.base,
++        mode,
++        alpha_data_diff,
++        beta_data_diff,
++        alpha_param_diff,
++        beta_param_diff,
++        x_desc,
++        x,
++        dy_desc,
++        dy,
++        dx_desc,
++        dx,
++        d_bn_scale_bias_desc,
++        bn_scale,
++        d_bn_scale_result,
++        d_bn_bias_result,
++        epsilon,
++        saved_mean,
++        saved_inv_variance,
++    )
++}
++
+ pub(crate) unsafe fn convolution_forward(
+     handle: &Context,
+     alpha: *const ::std::os::raw::c_void,
+@@ -1390,6 +1508,118 @@ pub mod dnn8 {
+         }
+     }
+ 
++    pub(crate) unsafe fn batch_normalization_forward_inference(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        estimated_mean: *const ::core::ffi::c_void,
++        estimated_variance: *const ::core::ffi::c_void,
++        epsilon: f64,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_forward_inference(
++            handle, mode, alpha, beta, x_desc, x, y_desc, y,
++            bn_scale_bias_mean_var_desc, bn_scale, bn_bias,
++            estimated_mean, estimated_variance, epsilon,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_training(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        exponential_average_factor: f64,
++        result_running_mean: *mut ::core::ffi::c_void,
++        result_running_variance: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        result_save_mean: *mut ::core::ffi::c_void,
++        result_save_inv_variance: *mut ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_forward_training(
++            handle, mode, alpha, beta, x_desc, x, y_desc, y,
++            bn_scale_bias_mean_var_desc, bn_scale, bn_bias,
++            exponential_average_factor, result_running_mean, result_running_variance,
++            epsilon, result_save_mean, result_save_inv_variance,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn batch_normalization_backward(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha_data_diff: *const ::core::ffi::c_void,
++        beta_data_diff: *const ::core::ffi::c_void,
++        alpha_param_diff: *const ::core::ffi::c_void,
++        beta_param_diff: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        dy_desc: cudnnTensorDescriptor_t,
++        dy: *const ::core::ffi::c_void,
++        dx_desc: cudnnTensorDescriptor_t,
++        dx: *mut ::core::ffi::c_void,
++        d_bn_scale_bias_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        d_bn_scale_result: *mut ::core::ffi::c_void,
++        d_bn_bias_result: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        saved_mean: *const ::core::ffi::c_void,
++        saved_inv_variance: *const ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_backward(
++            handle, mode, alpha_data_diff, beta_data_diff, alpha_param_diff, beta_param_diff,
++            x_desc, x, dy_desc, dy, dx_desc, dx, d_bn_scale_bias_desc, bn_scale,
++            d_bn_scale_result, d_bn_bias_result, epsilon, saved_mean, saved_inv_variance,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn get_batch_normalization_forward_training_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,x:cudnnTensorDescriptor_t,z:cudnnTensorDescriptor_t,y:cudnnTensorDescriptor_t,b:cudnnTensorDescriptor_t,a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_forward_training_ex_workspace_size(h,m,o,x,z,y,b,a,s)?; Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_backward_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,x:cudnnTensorDescriptor_t,y:cudnnTensorDescriptor_t,dy:cudnnTensorDescriptor_t,dz:cudnnTensorDescriptor_t,dx:cudnnTensorDescriptor_t,b:cudnnTensorDescriptor_t,a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_backward_ex_workspace_size(h,m,o,x,y,dy,dz,dx,b,a,s)?; Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_training_ex_reserve_space_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,a:cudnnActivationDescriptor_t,x:cudnnTensorDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_training_ex_reserve_space_size(h,m,o,a,x,s)?; Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_forward_training_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,ad:*const ::core::ffi::c_void,bd:*const ::core::ffi::c_void,
++        xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,zd:cudnnTensorDescriptor_t,z:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*mut ::core::ffi::c_void,bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,
++        eaf:f64,rm:*mut ::core::ffi::c_void,rv:*mut ::core::ffi::c_void,eps:f64,sm:*mut ::core::ffi::c_void,siv:*mut ::core::ffi::c_void,
++        act:cudnnActivationDescriptor_t,ws:*mut ::core::ffi::c_void,wss:usize,rs:*mut ::core::ffi::c_void,rss:usize)->Result<(),cudnnError_t>{
++        super::dnn9::batch_normalization_forward_training_ex(h,m,o,ad,bd,xd,x,zd,z,yd,y,bnd,scale,bias,eaf,rm,rv,eps,sm,siv,act,ws,wss,rs,rss)?; Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_backward_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,add:*const ::core::ffi::c_void,bdd:*const ::core::ffi::c_void,
++        apd:*const ::core::ffi::c_void,bpd:*const ::core::ffi::c_void,xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*const ::core::ffi::c_void,dyd:cudnnTensorDescriptor_t,dy:*const ::core::ffi::c_void,
++        dzd:cudnnTensorDescriptor_t,dz:*mut ::core::ffi::c_void,dxd:cudnnTensorDescriptor_t,dx:*mut ::core::ffi::c_void,
++        bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,dscale:*mut ::core::ffi::c_void,dbias:*mut ::core::ffi::c_void,
++        eps:f64,sm:*const ::core::ffi::c_void,siv:*const ::core::ffi::c_void,act:cudnnActivationDescriptor_t,ws:*mut ::core::ffi::c_void,wss:usize,
++        rs:*mut ::core::ffi::c_void,rss:usize)->Result<(),cudnnError_t>{
++        super::dnn9::batch_normalization_backward_ex(h,m,o,add,bdd,apd,bpd,xd,x,yd,y,dyd,dy,dzd,dz,dxd,dx,bnd,scale,bias,dscale,dbias,eps,sm,siv,act,ws,wss,rs,rss)?; Ok(())
++    }
++
+     pub(crate) unsafe fn get_convolution_forward_algorithm_v7(
+         handle: cudnnHandle_t,
+         x_desc: cudnnTensorDescriptor_t,
+@@ -1585,6 +1815,148 @@ pub mod dnn9 {
+         .as_ptr()
+     }
+ 
++    fn batch_norm_mode(mode: cudnnBatchNormMode_t) -> Result<miopen_sys::miopenBatchNormMode_t, cudnnError_t> {
++        if mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_PER_ACTIVATION {
++            Ok(miopen_sys::miopenBatchNormMode_t::miopenBNPerActivation)
++        } else if mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_SPATIAL
++            || mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_SPATIAL_PERSISTENT
++        {
++            Ok(miopen_sys::miopenBatchNormMode_t::miopenBNSpatial)
++        } else {
++            Err(cudnnError_t::BAD_PARAM)
++        }
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_inference(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        estimated_mean: *const ::core::ffi::c_void,
++        estimated_variance: *const ::core::ffi::c_void,
++        epsilon: f64,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_forward_inference(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?,
++            batch_norm_mode(mode)?, alpha, beta,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&y_desc)?, y,
++            FromCuda::<_, cudnnError_t>::from_cuda(&bn_scale_bias_mean_var_desc)?,
++            bn_scale, bn_bias, estimated_mean, estimated_variance, epsilon,
++        ).map_err(Into::into)
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_training(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        exponential_average_factor: f64,
++        result_running_mean: *mut ::core::ffi::c_void,
++        result_running_variance: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        result_save_mean: *mut ::core::ffi::c_void,
++        result_save_inv_variance: *mut ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_forward_training(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?,
++            batch_norm_mode(mode)?, alpha, beta,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&y_desc)?, y,
++            FromCuda::<_, cudnnError_t>::from_cuda(&bn_scale_bias_mean_var_desc)?,
++            bn_scale, bn_bias, exponential_average_factor,
++            result_running_mean, result_running_variance, epsilon,
++            result_save_mean, result_save_inv_variance,
++        ).map_err(Into::into)
++    }
++
++    pub(crate) unsafe fn batch_normalization_backward(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha_data_diff: *const ::core::ffi::c_void,
++        beta_data_diff: *const ::core::ffi::c_void,
++        alpha_param_diff: *const ::core::ffi::c_void,
++        beta_param_diff: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        dy_desc: cudnnTensorDescriptor_t,
++        dy: *const ::core::ffi::c_void,
++        dx_desc: cudnnTensorDescriptor_t,
++        dx: *mut ::core::ffi::c_void,
++        d_bn_scale_bias_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        d_bn_scale_result: *mut ::core::ffi::c_void,
++        d_bn_bias_result: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        saved_mean: *const ::core::ffi::c_void,
++        saved_inv_variance: *const ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_backward(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?, batch_norm_mode(mode)?,
++            alpha_data_diff, beta_data_diff, alpha_param_diff, beta_param_diff,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&dy_desc)?, dy,
++            FromCuda::<_, cudnnError_t>::from_cuda(&dx_desc)?, dx,
++            FromCuda::<_, cudnnError_t>::from_cuda(&d_bn_scale_bias_desc)?,
++            bn_scale, d_bn_scale_result, d_bn_bias_result, epsilon,
++            saved_mean, saved_inv_variance,
++        ).map_err(Into::into)
++    }
++
++    fn batch_norm_ops_only(o:cudnnBatchNormOps_t)->Result<(),cudnnError_t>{
++        if o==cudnnBatchNormOps_t::CUDNN_BATCHNORM_OPS_BN{Ok(())}else{Err(cudnnError_t::NOT_SUPPORTED)}
++    }
++    pub(crate) unsafe fn get_batch_normalization_forward_training_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_x:cudnnTensorDescriptor_t,_z:cudnnTensorDescriptor_t,_y:cudnnTensorDescriptor_t,_b:cudnnTensorDescriptor_t,_a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_backward_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_x:cudnnTensorDescriptor_t,_y:cudnnTensorDescriptor_t,_dy:cudnnTensorDescriptor_t,_dz:cudnnTensorDescriptor_t,_dx:cudnnTensorDescriptor_t,_b:cudnnTensorDescriptor_t,_a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_training_ex_reserve_space_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_a:cudnnActivationDescriptor_t,_x:cudnnTensorDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_forward_training_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,ad:*const ::core::ffi::c_void,bd:*const ::core::ffi::c_void,
++        xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,_zd:cudnnTensorDescriptor_t,_z:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*mut ::core::ffi::c_void,bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,
++        eaf:f64,rm:*mut ::core::ffi::c_void,rv:*mut ::core::ffi::c_void,eps:f64,sm:*mut ::core::ffi::c_void,siv:*mut ::core::ffi::c_void,
++        _act:cudnnActivationDescriptor_t,_ws:*mut ::core::ffi::c_void,_wss:usize,_rs:*mut ::core::ffi::c_void,_rss:usize)->Result<(),cudnnError_t>{
++        batch_norm_ops_only(o)?;
++        super::batch_normalization_forward_training(FromCuda::<_,cudnnError_t>::from_cuda(&h)?,batch_norm_mode(m)?,ad,bd,
++            FromCuda::<_,cudnnError_t>::from_cuda(&xd)?,x,FromCuda::<_,cudnnError_t>::from_cuda(&yd)?,y,
++            FromCuda::<_,cudnnError_t>::from_cuda(&bnd)?,scale,bias,eaf,rm,rv,eps,sm,siv).map_err(Into::into)
++    }
++    pub(crate) unsafe fn batch_normalization_backward_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,add:*const ::core::ffi::c_void,bdd:*const ::core::ffi::c_void,
++        apd:*const ::core::ffi::c_void,bpd:*const ::core::ffi::c_void,xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,
++        _yd:cudnnTensorDescriptor_t,_y:*const ::core::ffi::c_void,dyd:cudnnTensorDescriptor_t,dy:*const ::core::ffi::c_void,
++        _dzd:cudnnTensorDescriptor_t,_dz:*mut ::core::ffi::c_void,dxd:cudnnTensorDescriptor_t,dx:*mut ::core::ffi::c_void,
++        bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,_bias:*const ::core::ffi::c_void,dscale:*mut ::core::ffi::c_void,dbias:*mut ::core::ffi::c_void,
++        eps:f64,sm:*const ::core::ffi::c_void,siv:*const ::core::ffi::c_void,_act:cudnnActivationDescriptor_t,_ws:*mut ::core::ffi::c_void,_wss:usize,
++        _rs:*mut ::core::ffi::c_void,_rss:usize)->Result<(),cudnnError_t>{
++        batch_norm_ops_only(o)?;
++        super::batch_normalization_backward(FromCuda::<_,cudnnError_t>::from_cuda(&h)?,batch_norm_mode(m)?,add,bdd,apd,bpd,
++            FromCuda::<_,cudnnError_t>::from_cuda(&xd)?,x,FromCuda::<_,cudnnError_t>::from_cuda(&dyd)?,dy,
++            FromCuda::<_,cudnnError_t>::from_cuda(&dxd)?,dx,FromCuda::<_,cudnnError_t>::from_cuda(&bnd)?,scale,dscale,dbias,eps,sm,siv).map_err(Into::into)
++    }
++
+     pub(crate) unsafe fn get_convolution_forward_algorithm_v7(
+         handle: cudnnHandle_t,
+         x_desc: cudnnTensorDescriptor_t,
+diff --git a/zluda_dnn/src/lib.rs b/zluda_dnn/src/lib.rs
+index 21b72fc..3e82e1f 100644
+--- a/zluda_dnn/src/lib.rs
++++ b/zluda_dnn/src/lib.rs
+@@ -80,6 +80,14 @@ macro_rules! dual_function_declarations {
+ dual_function_declarations! {
+     unimplemented,
+     (implemented_dnn8|implemented_dnn9) <= [
++        cudnnBatchNormalizationBackward,
++        cudnnBatchNormalizationBackwardEx,
++        cudnnBatchNormalizationForwardInference,
++        cudnnBatchNormalizationForwardTraining,
++        cudnnBatchNormalizationForwardTrainingEx,
++        cudnnGetBatchNormalizationBackwardExWorkspaceSize,
++        cudnnGetBatchNormalizationForwardTrainingExWorkspaceSize,
++        cudnnGetBatchNormalizationTrainingExReserveSpaceSize,
+         cudnnGetConvolutionBackwardDataAlgorithm_v7,
+         cudnnGetConvolutionBackwardFilterAlgorithm_v7,
+         cudnnGetConvolutionForwardAlgorithm_v7,
+@@ -189,6 +197,9 @@ cuda_macros::miopen_function_declarations!(
+     noop,
+     os::vtable_impl
+         <= [
++            miopenBatchNormalizationBackward,
++            miopenBatchNormalizationForwardInference,
++            miopenBatchNormalizationForwardTraining,
+             miopenCreate,
+             miopenCreateConvolutionDescriptor,
+             miopenCreateConvProblem,
 diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
 index 6b672fa..8b965c2 100644
 --- a/zluda_fft/Cargo.toml

@@ -53,11 +53,11 @@ Latest post-guard release-candidate validation using **4 paired repetitions per 
 
 | SGEMM | Direct median wall time | ZLUDA median wall time | Paired median overhead | Paired throughput ratio |
 | --- | ---: | ---: | ---: | ---: |
-| 1024 × 1024 | 0.4400 ms | 0.4485 ms | +2.50% | 97.6% |
-| 2048 × 2048 | 3.4822 ms | 3.2653 ms | +0.58% | 99.4% |
-| 4096 × 4096 | 17.5410 ms | 17.5600 ms | +0.32% | 99.7% |
+| 1024 × 1024 | 0.4408 ms | 0.4487 ms | +1.79% | 98.2% |
+| 2048 × 2048 | 3.4145 ms | 3.4299 ms | +0.45% | 99.6% |
+| 4096 × 4096 | 18.1698 ms | 20.9452 ms | +2.20% | 97.8% |
 
-The final clean-patch run keeps the translation path within the repository's **20% paired-median overhead budget** at every tested size. The largest paired-median delta is **+2.50%** at 1024²; 2048² and 4096² are within one percent in this run. Individual samples still move with clocks, thermals and kernel selection, which is why the runner alternates execution order, keeps every pair, and applies its regression threshold to the paired median rather than a single sample.
+The final clean-patch run keeps the translation path within the repository's **20% paired-median overhead budget** at every tested size. The largest paired-median delta is **+2.20%** at 4096²; the 1024² and 2048² paired medians are **+1.79%** and **+0.45%**. Individual samples still move with clocks, thermals and kernel selection, which is why the runner alternates execution order, keeps every pair, and applies its regression threshold to the paired median rather than a single sample.
 
 These results measure the compatibility path against an AMD-native backend on the same physical GPU; they are not an AMD-vs-NVIDIA comparison.
 
@@ -65,10 +65,12 @@ These results measure the compatibility path against an AMD-native backend on th
 
 ZLUDA's persistent compute cache matters strongly for PyTorch training. During diagnosis, the first uncached `clamp.backward()` took about **50 s** and an uncached `minimum.backward()` about **96 s**. Once compiled, the same kernel families dropped to roughly millisecond/sub-millisecond latency.
 
-A real VelocityRL test at `512 agents × rollout 16` on the final clean-patch runtime produced **467 SPS** for a non-representative cold first update, followed by **72,895 SPS** and **71,641 SPS** on updates 2 and 3. The report records a **72,268 SPS median steady-state**. The cold update is intentionally separated because its value moves dramatically with first-use compilation/cache state.
+A real VelocityRL test at `512 agents × rollout 16` on the final clean-patch runtime produced **545 SPS** for a non-representative cold first update, followed by **72,306 SPS** and **70,333 SPS** on updates 2 and 3. The report records a **71,319.5 SPS median steady-state**. The cold update is intentionally separated because its value moves dramatically with first-use compilation/cache state.
 
 The helper below builds the local cache without shipping machine-specific compiled artifacts:
 
 ```powershell
 .\scripts\warmup-pytorch.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
+# Broader one-time warmup for especially cold NN/sort/linalg kernels:
+.\scripts\warmup-pytorch.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe -Extended
 ```

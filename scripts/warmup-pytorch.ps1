@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$PythonExe,
     [switch]$SkipStaticPrecompile,
     [switch]$SkipTrainingWarmup,
+    [switch]$Extended,
     [int]$TimeoutSeconds = 600,
     [string]$ReportPath
 )
@@ -79,7 +80,9 @@ $dynamic = $null
 $parsed = $null
 if (-not $SkipTrainingWarmup) {
     Write-Host 'Dynamic training-kernel warmup...'
-    $dynamic = Invoke-Captured $launcher ("-- {0} {1}" -f (Quote-Arg $PythonExe),(Quote-Arg $probe)) $zluda
+    $warmupArgs = "-- {0} {1}" -f (Quote-Arg $PythonExe),(Quote-Arg $probe)
+    if ($Extended) { $warmupArgs += " --extended" }
+    $dynamic = Invoke-Captured $launcher $warmupArgs $zluda
     if ($dynamic.stdout.Trim()) { Write-Host $dynamic.stdout.TrimEnd() }
     if ($dynamic.stderr.Trim()) {
         $visible = @($dynamic.stderr -split "`r?`n" | Where-Object { $_ -and $_ -notlike 'CUDAAMD_WARMUP:*' })
@@ -99,6 +102,7 @@ $result = [ordered]@{
     torch_cuda = $torchCuda
     gpu = $config.gpu
     static_precompile = if($static){[ordered]@{exit=$static.exit;seconds=$static.seconds}}else{$null}
+    extended = [bool]$Extended
     dynamic_warmup = $parsed
     cache = [ordered]@{path=$cachePath;exists=(Test-Path $cachePath);bytes=if(Test-Path $cachePath){(Get-Item $cachePath).Length}else{$null}}
 }

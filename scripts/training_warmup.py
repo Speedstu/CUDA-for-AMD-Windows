@@ -2,6 +2,7 @@
 """Warm common CUDA-facing PyTorch training kernels into ZLUDA's persistent cache."""
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -9,8 +10,13 @@ from typing import Callable
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--extended", action="store_true", help="Warm slower general-purpose PyTorch kernels too")
+    args = parser.parse_args()
+
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
 
     torch.manual_seed(20260916)
     if not torch.cuda.is_available():
@@ -91,11 +97,61 @@ def main() -> int:
         optimizer.step()
     timed("adamw_training_step", optimizer_step)
 
+    if args.extended:
+        sort_x = torch.randn(8, 2048, device=device)
+        def sort_topk_step() -> None:
+            torch.sort(sort_x, dim=-1)
+            torch.topk(sort_x, 37, dim=-1)
+        timed("sort_topk", sort_topk_step)
+
+        det_x = torch.eye(12, device=device) + 0.05 * torch.randn(12, 12, device=device)
+        def det_step() -> None:
+            torch.linalg.det(det_x)
+            torch.linalg.slogdet(det_x)
+        timed("det_slogdet", det_step)
+
+        batch_norm = nn.BatchNorm2d(16, affine=True, track_running_stats=False).to(device)
+        x_bn = torch.randn(8, 16, 16, 16, device=device, requires_grad=True)
+        def batch_norm_step() -> None:
+            batch_norm.zero_grad(set_to_none=True)
+            x_bn.grad = None
+            batch_norm(x_bn).square().mean().backward()
+        timed("batchnorm_backward", batch_norm_step)
+
+        group_norm = nn.GroupNorm(4, 16).to(device)
+        x_gn = torch.randn(8, 16, 16, 16, device=device, requires_grad=True)
+        def group_norm_step() -> None:
+            group_norm.zero_grad(set_to_none=True)
+            x_gn.grad = None
+            group_norm(x_gn).square().mean().backward()
+        timed("groupnorm_backward", group_norm_step)
+
+        x_drop = torch.ones(100000, device=device, requires_grad=True)
+        def dropout_step() -> None:
+            x_drop.grad = None
+            F.dropout(x_drop, p=0.25, training=True).sum().backward()
+        timed("dropout_backward", dropout_step)
+
+        x_grid = torch.randn(2, 3, 16, 18, device=device, requires_grad=True)
+        grid = torch.empty(2, 12, 14, 2, device=device).uniform_(-1, 1).requires_grad_(True)
+        def grid_sample_step() -> None:
+            x_grid.grad = None
+            grid.grad = None
+            F.grid_sample(x_grid, grid, mode="bilinear", padding_mode="zeros", align_corners=False).square().mean().backward()
+        timed("grid_sample_backward", grid_sample_step)
+
+        x_deconv = torch.randn(2, 4, 16, 16, device=device)
+        w_deconv = torch.randn(4, 6, 3, 3, device=device)
+        def conv_transpose_step() -> None:
+            F.conv_transpose2d(x_deconv, w_deconv, stride=2, padding=1)
+        timed("conv_transpose2d", conv_transpose_step)
+
     payload = {
         "schema": 1,
         "device": torch.cuda.get_device_name(0),
         "torch_version": torch.__version__,
         "cuda_version": torch.version.cuda,
+        "extended": args.extended,
         "results": results,
         "ok": True,
     }
