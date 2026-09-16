@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 75fa768..bf9764a 100644
+index 75fa7688aa61f75e99d32f6626c405e2d594cf26..bf9764a3d0d3b6b236518e510ce340c5e7598c4e 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -5214,6 +5214,10 @@ version = "0.0.0"
@@ -30,7 +30,7 @@ index 75fa768..bf9764a 100644
   "rocsparse-sys",
   "unwrap_or",
 diff --git a/zluda/src/impl/event.rs b/zluda/src/impl/event.rs
-index 0392e73..9700376 100644
+index 0392e73533da0649bfae8b6e3a47eb1011ed99e1..9700376d48b9515dcc81b0824847110d03fa73a1 100644
 --- a/zluda/src/impl/event.rs
 +++ b/zluda/src/impl/event.rs
 @@ -10,8 +10,15 @@ pub(crate) unsafe fn elapsed_time(
@@ -52,7 +52,7 @@ index 0392e73..9700376 100644
  
  pub(crate) unsafe fn elapsed_time_v2(
 diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
-index c9d4bbd..c4e8695 100644
+index c9d4bbdf30a95d16421c1c36ef4f0ba55a894930..c4e86958b2f09967870610eddf437e4eb1fe3f0f 100644
 --- a/zluda/src/impl/module.rs
 +++ b/zluda/src/impl/module.rs
 @@ -185,6 +185,24 @@ fn get_best_ptx_and_compile(
@@ -81,7 +81,7 @@ index c9d4bbd..c4e8695 100644
          .iter()
          .rev() // TODO: actually sort by SM
 diff --git a/zluda/src/impl/stream.rs b/zluda/src/impl/stream.rs
-index 708b043..b559e89 100644
+index 708b043726b82c2622c2640260299c3d44c20e22..b559e89e0ca667a24969b04ec48381403efbcd75 100644
 --- a/zluda/src/impl/stream.rs
 +++ b/zluda/src/impl/stream.rs
 @@ -20,6 +20,10 @@ pub(crate) fn destroy_v2(stream: hipStream_t) -> hipError_t {
@@ -111,7 +111,7 @@ index 708b043..b559e89 100644
      stream: hipStream_t,
      capture_status: *mut hipStreamCaptureStatus,
 diff --git a/zluda/src/lib.rs b/zluda/src/lib.rs
-index ed2df7a..4422e4e 100644
+index ed2df7a57325d630c87f90b328b680461645b16a..4422e4e2a0bdff935ba9354f995adf81c32b6522 100644
 --- a/zluda/src/lib.rs
 +++ b/zluda/src/lib.rs
 @@ -189,11 +189,13 @@ cuda_macros::cuda_function_declarations!(
@@ -128,8 +128,641 @@ index ed2df7a..4422e4e 100644
              cuStreamGetCaptureInfo_v2,
              cuStreamGetCaptureInfo_v3,
              cuStreamIsCapturing,
+diff --git a/zluda_blas/src/impl.rs b/zluda_blas/src/impl.rs
+index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d906de7b072 100644
+--- a/zluda_blas/src/impl.rs
++++ b/zluda_blas/src/impl.rs
+@@ -14,6 +14,111 @@ fn rocblas() -> Result<&'static super::RocblasVtable, rocblas_error> {
+     unwrapped.as_ref().map_err(|x| *x)
+ }
+ 
++
++#[cfg(windows)]
++struct HipsolverVtable {
++    _hip_lib: libloading::os::windows::Library,
++    _lib: libloading::os::windows::Library,
++    hip_memcpy: unsafe extern "C" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_void, usize, i32) -> i32,
++    hip_malloc: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void, usize) -> i32,
++    hip_free: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    hip_stream_synchronize: unsafe extern "C" fn(hipStream_t) -> i32,
++    create: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32,
++    destroy: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    set_stream: unsafe extern "C" fn(*mut ::core::ffi::c_void, hipStream_t) -> i32,
++    create_params: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32,
++    destroy_params: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    xgeqrf_buffer_size: unsafe extern "C" fn(
++        *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++        i64, i64, i32, *const ::core::ffi::c_void, i64,
++        i32, *const ::core::ffi::c_void, i32, *mut usize, *mut usize,
++    ) -> i32,
++    xgeqrf: unsafe extern "C" fn(
++        *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++        i64, i64, i32, *mut ::core::ffi::c_void, i64,
++        i32, *mut ::core::ffi::c_void, i32,
++        *mut ::core::ffi::c_void, usize,
++        *mut ::core::ffi::c_void, usize,
++        *mut i32,
++    ) -> i32,
++}
++
++#[cfg(windows)]
++impl HipsolverVtable {
++    unsafe fn new() -> Result<Self, cublasError_t> {
++        // Load the HIP runtime from HIP_PATH first. Keeping this dynamic is crucial on
++        // Windows: a static amdhip64_7 import would resolve to System32 before ZLUDA
++        // can anchor the performance-library stack to the selected HIP/TheRock tree.
++        let hip_module = zluda_windows::try_load_from_self_or_hip_with_message(&["amdhip64_7.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_lib = libloading::os::windows::Library::from_raw(hip_module.0 as _);
++        let hip_memcpy = *hip_lib
++            .get::<unsafe extern "C" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_void, usize, i32) -> i32>(b"hipMemcpy\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_malloc = *hip_lib
++            .get::<unsafe extern "C" fn(*mut *mut ::core::ffi::c_void, usize) -> i32>(b"hipMalloc\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_free = *hip_lib
++            .get::<unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32>(b"hipFree\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_stream_synchronize = *hip_lib
++            .get::<unsafe extern "C" fn(hipStream_t) -> i32>(b"hipStreamSynchronize\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["hipsolver.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let lib = libloading::os::windows::Library::from_raw(hmodule.0 as _);
++        macro_rules! sym {
++            ($name:literal, $ty:ty) => {
++                *lib.get::<$ty>(concat!($name, "\0").as_bytes())
++                    .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?
++            };
++        }
++        let create = sym!("hipsolverDnCreate", unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32);
++        let destroy = sym!("hipsolverDnDestroy", unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32);
++        let set_stream = sym!("hipsolverDnSetStream", unsafe extern "C" fn(*mut ::core::ffi::c_void, hipStream_t) -> i32);
++        let create_params = sym!("hipsolverDnCreateParams", unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32);
++        let destroy_params = sym!("hipsolverDnDestroyParams", unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32);
++        let xgeqrf_buffer_size = sym!("hipsolverDnXgeqrf_bufferSize", unsafe extern "C" fn(
++            *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++            i64, i64, i32, *const ::core::ffi::c_void, i64,
++            i32, *const ::core::ffi::c_void, i32, *mut usize, *mut usize,
++        ) -> i32);
++        let xgeqrf = sym!("hipsolverDnXgeqrf", unsafe extern "C" fn(
++            *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++            i64, i64, i32, *mut ::core::ffi::c_void, i64,
++            i32, *mut ::core::ffi::c_void, i32,
++            *mut ::core::ffi::c_void, usize,
++            *mut ::core::ffi::c_void, usize,
++            *mut i32,
++        ) -> i32);
++        Ok(Self { _hip_lib: hip_lib, _lib: lib, hip_memcpy, hip_malloc, hip_free, hip_stream_synchronize, create, destroy, set_stream, create_params, destroy_params, xgeqrf_buffer_size, xgeqrf })
++    }
++}
++
++#[cfg(windows)]
++fn hipsolver() -> Result<&'static HipsolverVtable, cublasError_t> {
++    static LOCK: OnceLock<Result<HipsolverVtable, cublasError_t>> = OnceLock::new();
++    LOCK.get_or_init(|| unsafe { HipsolverVtable::new() })
++        .as_ref()
++        .map_err(|e| *e)
++}
++
++#[cfg(windows)]
++fn cublas_error_from_hipsolver(status: i32) -> Result<(), cublasError_t> {
++    match status {
++        0 => Ok(()),
++        1 | 9 => Err(cublasError_t::r#NOT_INITIALIZED),
++        2 => Err(cublasError_t::r#ALLOC_FAILED),
++        3 | 10 => Err(cublasError_t::r#INVALID_VALUE),
++        4 => Err(cublasError_t::r#MAPPING_ERROR),
++        5 => Err(cublasError_t::r#EXECUTION_FAILED),
++        7 | 13 => Err(cublasError_t::r#NOT_SUPPORTED),
++        8 => Err(cublasError_t::r#ARCH_MISMATCH),
++        _ => Err(cublasError_t::r#INTERNAL_ERROR),
++    }
++}
++
+ // This is repr(c) because it needs to be compatible with BlasHandle in zluda_blaslt.
+ #[repr(C)]
+ pub struct Handle {
+@@ -122,6 +227,169 @@ pub(crate) fn get_cudart_version() -> usize {
+     todo!()
+ }
+ 
++
++#[cfg(windows)]
++unsafe fn copy_device_pointer_array<T>(
++    hs: &HipsolverVtable,
++    array: *const *mut T,
++    batch_count: i32,
++) -> Result<Vec<*mut T>, cublasError_t> {
++    let mut ptrs = vec![ptr::null_mut::<T>(); batch_count.max(0) as usize];
++    if ptrs.is_empty() {
++        return Ok(ptrs);
++    }
++    let status = (hs.hip_memcpy)(
++        ptrs.as_mut_ptr().cast(),
++        array.cast(),
++        ptrs.len() * mem::size_of::<*mut T>(),
++        2, // hipMemcpyDeviceToHost
++    );
++    if status != 0 || ptrs.iter().any(|p| p.is_null()) {
++        Err(cublasError_t::r#EXECUTION_FAILED)
++    } else {
++        Ok(ptrs)
++    }
++}
++
++#[cfg(windows)]
++macro_rules! impl_geqrf_batched {
++    ($name:ident, $ty:ty, $cuda_type:expr) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            m: i32,
++            n: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            tau_array: *const *mut $ty,
++            info: *mut i32,
++            batch_count: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if m < 0 { *info = -2; return Err(cublasError_t::r#INVALID_VALUE); }
++            if n < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(m) { *info = -5; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_count < 0 { *info = -8; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_count == 0 || m == 0 || n == 0 { return Ok(()); }
++            if a_array.is_null() || tau_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++
++            let hs = hipsolver()?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            // PyTorch materializes the pointer arrays on the active CUDA stream.
++            // Synchronize that stream before copying Aarray/TauArray back to host;
++            // otherwise a synchronous D2H copy can race or deadlock with work queued
++            // on a non-default stream that will be reused for the solver launch.
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array(hs, a_array, batch_count)?;
++            let tau_ptrs = copy_device_pointer_array(hs, tau_array, batch_count)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            let mut params = ptr::null_mut::<::core::ffi::c_void>();
++            if let Err(e) = cublas_error_from_hipsolver((hs.create_params)(&mut params)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut workspace_device_bytes = 0usize;
++            let mut workspace_host_bytes = 0usize;
++            let query_status = (hs.xgeqrf_buffer_size)(
++                solver_handle, params, m as i64, n as i64,
++                $cuda_type, a_ptrs[0].cast(), lda as i64,
++                $cuda_type, tau_ptrs[0].cast(), $cuda_type,
++                &mut workspace_device_bytes, &mut workspace_host_bytes,
++            );
++            if let Err(e) = cublas_error_from_hipsolver(query_status) {
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut workspace_device = ptr::null_mut::<::core::ffi::c_void>();
++            if workspace_device_bytes > 0 {
++                if (hs.hip_malloc)(&mut workspace_device, workspace_device_bytes) != 0 {
++                    let _ = (hs.destroy_params)(params);
++                    let _ = (hs.destroy)(solver_handle);
++                    return Err(cublasError_t::r#ALLOC_FAILED);
++                }
++            }
++            let mut dev_info = ptr::null_mut::<::core::ffi::c_void>();
++            if (hs.hip_malloc)(&mut dev_info, mem::size_of::<i32>()) != 0 {
++                if !workspace_device.is_null() { let _ = (hs.hip_free)(workspace_device); }
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++            let mut workspace_host = vec![0u8; workspace_host_bytes.max(1)];
++            let workspace_host_ptr = if workspace_host_bytes == 0 { ptr::null_mut() } else { workspace_host.as_mut_ptr().cast() };
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_count as usize {
++                let status = (hs.xgeqrf)(
++                    solver_handle, params, m as i64, n as i64,
++                    $cuda_type, a_ptrs[i].cast(), lda as i64,
++                    $cuda_type, tau_ptrs[i].cast(), $cuda_type,
++                    workspace_device, workspace_device_bytes,
++                    workspace_host_ptr, workspace_host_bytes,
++                    dev_info.cast::<i32>(),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++
++            // Synchronize the actual cuBLAS stream before releasing per-call solver
++            // workspaces. On non-default streams, relying on hipFree's implicit sync
++            // can deadlock or free storage before the queued QR work has completed.
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let info_free = (hs.hip_free)(dev_info);
++            if info_free != 0 && result.is_ok() {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            if !workspace_device.is_null() {
++                let work_free = (hs.hip_free)(workspace_device);
++                if work_free != 0 && result.is_ok() {
++                    result = Err(cublasError_t::r#EXECUTION_FAILED);
++                }
++            }
++            let destroy_params_status = (hs.destroy_params)(params);
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_params_status)?;
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_geqrf_batched!(sgeqrf_batched, f32, 0);
++#[cfg(windows)]
++impl_geqrf_batched!(dgeqrf_batched, f64, 1);
++#[cfg(windows)]
++impl_geqrf_batched!(cgeqrf_batched, cuda_types::cublas::cuComplex, 4);
++#[cfg(windows)]
++impl_geqrf_batched!(zgeqrf_batched, cuda_types::cublas::cuDoubleComplex, 5);
++
+ pub(crate) fn set_math_mode(handle: &Handle, mode: rocblas_math_mode) -> cublasStatus_t {
+     unsafe { rocblas()?.rocblas_set_math_mode(handle.rocm_handle, mode) }?;
+     Ok(())
+@@ -172,6 +440,54 @@ pub(crate) fn sgemm_strided_batched(
+     Ok(())
+ }
+ 
++
++pub(crate) fn dgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const f64,
++    a: *const f64, lda: i32, stride_a: i64,
++    b: *const f64, ldb: i32, stride_b: i64,
++    beta: *const f64, c: *mut f64, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_dgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha,
++        a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
++pub(crate) fn cgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex, lda: i32, stride_a: i64,
++    b: *const cuda_types::cublas::cuComplex, ldb: i32, stride_b: i64,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_cgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha.cast(),
++        a.cast(), lda, stride_a, b.cast(), ldb, stride_b, beta.cast(), c.cast(), ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
++pub(crate) fn zgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex, lda: i32, stride_a: i64,
++    b: *const cuda_types::cublas::cuDoubleComplex, ldb: i32, stride_b: i64,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_zgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha.cast(),
++        a.cast(), lda, stride_a, b.cast(), ldb, stride_b, beta.cast(), c.cast(), ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
+ pub(crate) fn sgemm_v2(
+     handle: &Handle,
+     transa: rocblas_operation,
+@@ -209,6 +525,82 @@ pub(crate) fn sgemm_v2(
+     Ok(())
+ }
+ 
++
++pub(crate) fn dgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const f64,
++    a: *const f64,
++    lda: ::core::ffi::c_int,
++    b: *const f64,
++    ldb: ::core::ffi::c_int,
++    beta: *const f64,
++    c: *mut f64,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_dgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha, a, lda, b, ldb, beta, c, ldc,
++        )
++    }?;
++    Ok(())
++}
++
++pub(crate) fn cgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex,
++    lda: ::core::ffi::c_int,
++    b: *const cuda_types::cublas::cuComplex,
++    ldb: ::core::ffi::c_int,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_cgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha.cast(), a.cast(), lda, b.cast(), ldb, beta.cast(), c.cast(), ldc,
++        )
++    }?;
++    Ok(())
++}
++
++pub(crate) fn zgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex,
++    lda: ::core::ffi::c_int,
++    b: *const cuda_types::cublas::cuDoubleComplex,
++    ldb: ::core::ffi::c_int,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_zgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha.cast(), a.cast(), lda, b.cast(), ldb, beta.cast(), c.cast(), ldc,
++        )
++    }?;
++    Ok(())
++}
++
+ pub(crate) fn destroy_v2(handle: cublasHandle_t) -> cublasStatus_t {
+     zluda_common::drop_checked::<Handle>(handle)
+ }
+diff --git a/zluda_blas/src/lib.rs b/zluda_blas/src/lib.rs
+index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269c85c3a9f 100644
+--- a/zluda_blas/src/lib.rs
++++ b/zluda_blas/src/lib.rs
+@@ -30,6 +30,10 @@ macro_rules! implemented {
+     };
+ }
+ 
++macro_rules! manual_implementation {
++    ($($tt:tt)*) => {};
++}
++
+ macro_rules! implemented_and_always_succeeds {
+     ($($abi:literal fn $fn_name:ident( $($arg_id:ident : $arg_type:ty),* ) -> $ret_type:ty;)*) => {
+         $(
+@@ -43,6 +47,151 @@ macro_rules! implemented_and_always_succeeds {
+     };
+ }
+ 
++
++
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const f64,a:*const f64,lda:i32,stride_a:i64,
++    b:*const f64,ldb:i32,stride_b:i64,beta:*const f64,c:*mut f64,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::dgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const cuda_types::cublas::cuComplex,
++    a:*const cuda_types::cublas::cuComplex,lda:i32,stride_a:i64,
++    b:*const cuda_types::cublas::cuComplex,ldb:i32,stride_b:i64,
++    beta:*const cuda_types::cublas::cuComplex,c:*mut cuda_types::cublas::cuComplex,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::cgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const cuda_types::cublas::cuDoubleComplex,
++    a:*const cuda_types::cublas::cuDoubleComplex,lda:i32,stride_a:i64,
++    b:*const cuda_types::cublas::cuDoubleComplex,ldb:i32,stride_b:i64,
++    beta:*const cuda_types::cublas::cuDoubleComplex,c:*mut cuda_types::cublas::cuDoubleComplex,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::zgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const f64,
++    a: *const f64, lda: i32,
++    b: *const f64, ldb: i32,
++    beta: *const f64,
++    c: *mut f64, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::dgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex, lda: i32,
++    b: *const cuda_types::cublas::cuComplex, ldb: i32,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::cgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex, lda: i32,
++    b: *const cuda_types::cublas::cuDoubleComplex, ldb: i32,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::zgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasSgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut f32, lda: i32, tau_array: *const *mut f32,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::sgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut f64, lda: i32, tau_array: *const *mut f64,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::dgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut cuda_types::cublas::cuComplex, lda: i32,
++    tau_array: *const *mut cuda_types::cublas::cuComplex,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::cgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut cuda_types::cublas::cuDoubleComplex, lda: i32,
++    tau_array: *const *mut cuda_types::cublas::cuDoubleComplex,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::zgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
+ cuda_macros::cublas_function_declarations!(
+     unimplemented,
+     implemented
+@@ -63,6 +212,19 @@ cuda_macros::cublas_function_declarations!(
+             cublasSgemmStridedBatched,
+             cublasSgemm_v2,
+         ],
++    manual_implementation
++        <= [
++            cublasDgemm_v2,
++            cublasCgemm_v2,
++            cublasZgemm_v2,
++            cublasDgemmStridedBatched,
++            cublasCgemmStridedBatched,
++            cublasZgemmStridedBatched,
++            cublasSgeqrfBatched,
++            cublasDgeqrfBatched,
++            cublasCgeqrfBatched,
++            cublasZgeqrfBatched,
++        ],
+     implemented_and_always_succeeds
+         <= [
+             cublasGetStatusName,
+@@ -146,14 +308,21 @@ cuda_macros::rocblas_function_declarations!(
+             rocblas_gemm_ex,
+             rocblas_gemm_strided_batched_ex,
+             rocblas_get_math_mode,
++            rocblas_get_stream,
+             rocblas_get_vector,
+             rocblas_hgemm,
++            rocblas_dgemm,
++            rocblas_cgemm,
++            rocblas_zgemm,
+             rocblas_set_math_mode,
+             rocblas_set_pointer_mode,
+             rocblas_set_stream,
+             rocblas_set_vector,
+             rocblas_set_workspace,
+             rocblas_sgemm_strided_batched,
++            rocblas_dgemm_strided_batched,
++            rocblas_cgemm_strided_batched,
++            rocblas_zgemm_strided_batched,
+             rocblas_sgemm,
+         ]
+ );
 diff --git a/zluda_common/src/lib.rs b/zluda_common/src/lib.rs
-index af41f7a..8036577 100644
+index af41f7a8cfd9702d15d352caba5347801e38f599..803657781b87d516673c16ee7e471dcbc9ae3dff 100644
 --- a/zluda_common/src/lib.rs
 +++ b/zluda_common/src/lib.rs
 @@ -281,6 +281,7 @@ from_cuda_transmute!(
@@ -141,7 +774,7 @@ index af41f7a..8036577 100644
      cusparseDnMatDescr_t => rocsparse_dnmat_descr,
      cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
 diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
-index 6b672fa..8b965c2 100644
+index 6b672fa7567c2dea2b6cafa3ec6134cbe7c3ef29..8b965c2ba998dd30ea15a53f4ea3263f70730bc9 100644
 --- a/zluda_fft/Cargo.toml
 +++ b/zluda_fft/Cargo.toml
 @@ -10,6 +10,7 @@ name = "cufft"
@@ -164,7 +797,7 @@ index 6b672fa..8b965c2 100644
 +embed-resource = "3.0"
 diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
 new file mode 100644
-index 0000000..2b58647
+index 0000000000000000000000000000000000000000..2b586473d1c72c3f4a987fac28b6775d9bcfa252
 --- /dev/null
 +++ b/zluda_fft/build.rs
 @@ -0,0 +1,10 @@
@@ -179,7 +812,7 @@ index 0000000..2b58647
 +#[cfg(not(windows))]
 +fn main() {}
 diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
-index 94cc02b..a9c0bc9 100644
+index 94cc02beffac15aab7e40bfcb565902637c1cb71..a9c0bc95de1e410b7456b30b66e0711b92919c04 100644
 --- a/zluda_fft/src/impl.rs
 +++ b/zluda_fft/src/impl.rs
 @@ -1,4 +1,12 @@
@@ -670,7 +1303,7 @@ index 94cc02b..a9c0bc9 100644
 +    from_hipfft(f(type_.0 as c_int, value))
  }
 diff --git a/zluda_fft/src/lib.rs b/zluda_fft/src/lib.rs
-index 9de500c..aefce62 100644
+index 9de500c0ca5b934b56e26895bb9c26059ba68b3b..aefce620c6c19ad33883f4c05bd21c681aecf39e 100644
 --- a/zluda_fft/src/lib.rs
 +++ b/zluda_fft/src/lib.rs
 @@ -14,4 +14,57 @@ macro_rules! unimplemented {
@@ -733,7 +1366,7 @@ index 9de500c..aefce62 100644
 +    ]
 +);
 diff --git a/zluda_ml/Cargo.toml b/zluda_ml/Cargo.toml
-index 592d87c..acbf071 100644
+index 592d87cd0ea79f78305682bfee5b4ef59caf6788..acbf0718489a3bd3b19edc462c92290d6294321f 100644
 --- a/zluda_ml/Cargo.toml
 +++ b/zluda_ml/Cargo.toml
 @@ -21,3 +21,6 @@ linux_symlinks = [
@@ -744,7 +1377,7 @@ index 592d87c..acbf071 100644
 +[target.'cfg(windows)'.dependencies]
 +libloading = "0.8"
 diff --git a/zluda_ml/src/impl_win.rs b/zluda_ml/src/impl_win.rs
-index 99c93cc..63981f7 100644
+index 99c93cc24a9ada4e241768d368462ba4303f71b6..63981f7fc8a9371a41a01c645abc8fdb06b6d34e 100644
 --- a/zluda_ml/src/impl_win.rs
 +++ b/zluda_ml/src/impl_win.rs
 @@ -1,77 +1,227 @@
@@ -1013,7 +1646,7 @@ index 99c93cc..63981f7 100644
 +    nvmlReturn_t::SUCCESS
  }
 diff --git a/zluda_sparse/Cargo.toml b/zluda_sparse/Cargo.toml
-index a6614c9..44ff977 100644
+index a6614c907b516d1150de8aea54069a0bad6d5858..44ff9779ba79f35d0a2ad498e5cbc8b1a8e7aa02 100644
 --- a/zluda_sparse/Cargo.toml
 +++ b/zluda_sparse/Cargo.toml
 @@ -11,6 +11,7 @@ name = "cusparse"
@@ -1030,7 +1663,7 @@ index a6614c9..44ff977 100644
  embed-resource = "3.0"
 -
 diff --git a/zluda_sparse/src/impl.rs b/zluda_sparse/src/impl.rs
-index ead8614..6bf4856 100644
+index ead861435b25700df4c325090d35e0e3a79ec074..6bf4856fda1ce2b3998c9be0244441f99b275bff 100644
 --- a/zluda_sparse/src/impl.rs
 +++ b/zluda_sparse/src/impl.rs
 @@ -1,4 +1,5 @@
@@ -1095,7 +1728,7 @@ index ead8614..6bf4856 100644
  }
  
 diff --git a/zluda_sparse/src/lib.rs b/zluda_sparse/src/lib.rs
-index 6ae899d..ddb0166 100644
+index 6ae899d9039eb8aaf83d3ec46243b6ba81c024dc..ddb016646dd6ad8ff2a5b14199832e0a9f4bf611 100644
 --- a/zluda_sparse/src/lib.rs
 +++ b/zluda_sparse/src/lib.rs
 @@ -75,6 +75,9 @@ cuda_macros::cusparse_function_declarations!(
@@ -1125,7 +1758,7 @@ index 6ae899d..ddb0166 100644
          ]
  );
 diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
-index 1a293a9..a9f714d 100644
+index 1a293a94d2208c9477463303ccd984c37c08ff1e..a9f714d1f242c1e1e22c8f0f319f294c12304cf8 100644
 --- a/zluda_windows/src/lib.rs
 +++ b/zluda_windows/src/lib.rs
 @@ -10,6 +10,15 @@ use std::{

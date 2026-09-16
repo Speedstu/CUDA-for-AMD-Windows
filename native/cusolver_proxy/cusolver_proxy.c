@@ -55,6 +55,14 @@ static int hip_fill_from_cuda(int uplo) {
     }
 }
 
+static int hip_side_from_cuda(int side) {
+    switch (side) {
+        case 0: return 141; /* CUBLAS_SIDE_LEFT  -> HIPBLAS_SIDE_LEFT */
+        case 1: return 142; /* CUBLAS_SIDE_RIGHT -> HIPBLAS_SIDE_RIGHT */
+        default: return -1;
+    }
+}
+
 static int hip_data_type_from_cuda(int data_type) {
     switch (data_type) {
         case 0: return 0; /* CUDA_R_32F -> HIP_R_32F */
@@ -83,6 +91,26 @@ static FARPROC hip_symbol(const char* name) {
 
 #define LOAD_FN(name, type) type fn = (type)hip_symbol(name); if (!fn) return 1
 #define EXPORT __declspec(dllexport)
+
+static int resolve_params(void* params, void** effective, void** owned) {
+    *effective = params;
+    *owned = NULL;
+    if (params) return 0;
+    typedef int (*create_fn_t)(void**);
+    create_fn_t create_fn = (create_fn_t)hip_symbol("hipsolverDnCreateParams");
+    if (!create_fn) return 1;
+    int status = create_fn(owned);
+    if (status != 0) return cuda_status_from_hip(status);
+    *effective = *owned;
+    return 0;
+}
+
+static void release_owned_params(void* owned) {
+    if (!owned || process_shutdown_in_progress()) return;
+    typedef int (*destroy_fn_t)(void*);
+    destroy_fn_t destroy_fn = (destroy_fn_t)hip_symbol("hipsolverDnDestroyParams");
+    if (destroy_fn) (void)destroy_fn(owned);
+}
 
 EXPORT int cusolverDnCreate(void** handle) {
     typedef int (*fn_t)(hipsolverHandle_t*);
@@ -131,9 +159,14 @@ EXPORT int cusolverDnXpotrf_bufferSize(void* handle, void* params, int uplo, int
     int hcompute = hip_data_type_from_cuda(computeType);
     if (huplo < 0) return 3;
     if (htypeA < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
     typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int, const void*, int64_t, int, size_t*, size_t*);
     LOAD_FN("hipsolverDnXpotrf_bufferSize", fn_t);
-    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, htypeA, A, lda, hcompute, lworkOnDevice, lworkOnHost));
+    int hs = fn((hipsolverHandle_t)handle, effective, huplo, n, htypeA, A, lda, hcompute, lworkOnDevice, lworkOnHost);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
 }
 
 EXPORT int cusolverDnXpotrf(void* handle, void* params, int uplo, int64_t n, int dataTypeA, void* A, int64_t lda, int computeType, void* workOnDevice, size_t lworkOnDevice, void* workOnHost, size_t lworkOnHost, int* info) {
@@ -142,9 +175,14 @@ EXPORT int cusolverDnXpotrf(void* handle, void* params, int uplo, int64_t n, int
     int hcompute = hip_data_type_from_cuda(computeType);
     if (huplo < 0) return 3;
     if (htypeA < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
     typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int, void*, int64_t, int, void*, size_t, void*, size_t, int*);
     LOAD_FN("hipsolverDnXpotrf", fn_t);
-    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, htypeA, A, lda, hcompute, workOnDevice, lworkOnDevice, workOnHost, lworkOnHost, info));
+    int hs = fn((hipsolverHandle_t)handle, effective, huplo, n, htypeA, A, lda, hcompute, workOnDevice, lworkOnDevice, workOnHost, lworkOnHost, info);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
 }
 
 EXPORT int cusolverDnXpotrs(void* handle, void* params, int uplo, int64_t n, int64_t nrhs, int dataTypeA, const void* A, int64_t lda, int dataTypeB, void* B, int64_t ldb, int* info) {
@@ -153,9 +191,44 @@ EXPORT int cusolverDnXpotrs(void* handle, void* params, int uplo, int64_t n, int
     int htypeB = hip_data_type_from_cuda(dataTypeB);
     if (huplo < 0) return 3;
     if (htypeA < 0 || htypeB < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
     typedef int (*fn_t)(hipsolverHandle_t, void*, int, int64_t, int64_t, int, const void*, int64_t, int, void*, int64_t, int*);
     LOAD_FN("hipsolverDnXpotrs", fn_t);
-    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, params, huplo, n, nrhs, htypeA, A, lda, htypeB, B, ldb, info));
+    int hs = fn((hipsolverHandle_t)handle, effective, huplo, n, nrhs, htypeA, A, lda, htypeB, B, ldb, info);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
+}
+
+EXPORT int cusolverDnXgeqrf_bufferSize(void* handle, void* params, int64_t m, int64_t n, int dataTypeA, const void* A, int64_t lda, int dataTypeTau, const void* tau, int computeType, size_t* lworkOnDevice, size_t* lworkOnHost) {
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int htypeTau = hip_data_type_from_cuda(dataTypeTau);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (htypeA < 0 || htypeTau < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int64_t, int64_t, int, const void*, int64_t, int, const void*, int, size_t*, size_t*);
+    LOAD_FN("hipsolverDnXgeqrf_bufferSize", fn_t);
+    int hs = fn((hipsolverHandle_t)handle, effective, m, n, htypeA, A, lda, htypeTau, tau, hcompute, lworkOnDevice, lworkOnHost);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
+}
+
+EXPORT int cusolverDnXgeqrf(void* handle, void* params, int64_t m, int64_t n, int dataTypeA, void* A, int64_t lda, int dataTypeTau, void* tau, int computeType, void* workOnDevice, size_t lworkOnDevice, void* workOnHost, size_t lworkOnHost, int* info) {
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int htypeTau = hip_data_type_from_cuda(dataTypeTau);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (htypeA < 0 || htypeTau < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int64_t, int64_t, int, void*, int64_t, int, void*, int, void*, size_t, void*, size_t, int*);
+    LOAD_FN("hipsolverDnXgeqrf", fn_t);
+    int hs = fn((hipsolverHandle_t)handle, effective, m, n, htypeA, A, lda, htypeTau, tau, hcompute, workOnDevice, lworkOnDevice, workOnHost, lworkOnHost, info);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
 }
 
 #define DEFINE_GETRF_BUFFER(T, PREFIX) \
@@ -179,6 +252,55 @@ EXPORT int cusolverDn##PREFIX##getrs(void* handle, int trans, int n, int nrhs, c
     typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const int*, T*, int, int*); \
     LOAD_FN("hipsolverDn" #PREFIX "getrs", fn_t); \
     return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hop, n, nrhs, A, lda, devIpiv, B, ldb, devInfo)); \
+}
+
+
+#define DEFINE_GEQRF_BUFFER(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##geqrf_bufferSize(void* handle, int m, int n, T* A, int lda, int* lwork) { \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "geqrf_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, m, n, A, lda, lwork)); \
+}
+
+#define DEFINE_GEQRF(T, PREFIX) \
+EXPORT int cusolverDn##PREFIX##geqrf(void* handle, int m, int n, T* A, int lda, T* tau, T* work, int lwork, int* devInfo) { \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, T*, int, T*, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX "geqrf", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, m, n, A, lda, tau, work, lwork, devInfo)); \
+}
+
+#define DEFINE_QGEN_BUFFER(T, PREFIX, HIPNAME) \
+EXPORT int cusolverDn##PREFIX##HIPNAME##_bufferSize(void* handle, int m, int n, int k, const T* A, int lda, const T* tau, int* lwork) { \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const T*, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #HIPNAME "_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, m, n, k, A, lda, tau, lwork)); \
+}
+
+#define DEFINE_QGEN(T, PREFIX, HIPNAME) \
+EXPORT int cusolverDn##PREFIX##HIPNAME(void* handle, int m, int n, int k, T* A, int lda, const T* tau, T* work, int lwork, int* devInfo) { \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T*, int, const T*, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #HIPNAME, fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, m, n, k, A, lda, tau, work, lwork, devInfo)); \
+}
+
+#define DEFINE_QAPPLY_BUFFER(T, PREFIX, HIPNAME) \
+EXPORT int cusolverDn##PREFIX##HIPNAME##_bufferSize(void* handle, int side, int trans, int m, int n, int k, const T* A, int lda, const T* tau, const T* C, int ldc, int* lwork) { \
+    int hside = hip_side_from_cuda(side); \
+    int hop = hip_op_from_cuda(trans); \
+    if (hside < 0 || hop < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, int, int, const T*, int, const T*, const T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #HIPNAME "_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hside, hop, m, n, k, A, lda, tau, C, ldc, lwork)); \
+}
+
+#define DEFINE_QAPPLY(T, PREFIX, HIPNAME) \
+EXPORT int cusolverDn##PREFIX##HIPNAME(void* handle, int side, int trans, int m, int n, int k, const T* A, int lda, const T* tau, T* C, int ldc, T* work, int lwork, int* devInfo) { \
+    int hside = hip_side_from_cuda(side); \
+    int hop = hip_op_from_cuda(trans); \
+    if (hside < 0 || hop < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, int, int, const T*, int, const T*, T*, int, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #HIPNAME, fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hside, hop, m, n, k, A, lda, tau, C, ldc, work, lwork, devInfo)); \
 }
 
 #define DEFINE_POTRF_BUFFER(T, PREFIX) \
@@ -261,6 +383,33 @@ DEFINE_GETRS(float, S)
 DEFINE_GETRS(double, D)
 DEFINE_GETRS(cfloat2, C)
 DEFINE_GETRS(cdouble2, Z)
+
+DEFINE_GEQRF_BUFFER(float, S)
+DEFINE_GEQRF_BUFFER(double, D)
+DEFINE_GEQRF_BUFFER(cfloat2, C)
+DEFINE_GEQRF_BUFFER(cdouble2, Z)
+DEFINE_GEQRF(float, S)
+DEFINE_GEQRF(double, D)
+DEFINE_GEQRF(cfloat2, C)
+DEFINE_GEQRF(cdouble2, Z)
+
+DEFINE_QGEN_BUFFER(float, S, orgqr)
+DEFINE_QGEN_BUFFER(double, D, orgqr)
+DEFINE_QGEN_BUFFER(cfloat2, C, ungqr)
+DEFINE_QGEN_BUFFER(cdouble2, Z, ungqr)
+DEFINE_QGEN(float, S, orgqr)
+DEFINE_QGEN(double, D, orgqr)
+DEFINE_QGEN(cfloat2, C, ungqr)
+DEFINE_QGEN(cdouble2, Z, ungqr)
+
+DEFINE_QAPPLY_BUFFER(float, S, ormqr)
+DEFINE_QAPPLY_BUFFER(double, D, ormqr)
+DEFINE_QAPPLY_BUFFER(cfloat2, C, unmqr)
+DEFINE_QAPPLY_BUFFER(cdouble2, Z, unmqr)
+DEFINE_QAPPLY(float, S, ormqr)
+DEFINE_QAPPLY(double, D, ormqr)
+DEFINE_QAPPLY(cfloat2, C, unmqr)
+DEFINE_QAPPLY(cdouble2, Z, unmqr)
 
 #define DEFINE_CHOLESKY_FAMILY(T, PREFIX) \
     DEFINE_POTRF_BUFFER(T, PREFIX) \

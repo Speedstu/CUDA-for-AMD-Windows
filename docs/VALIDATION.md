@@ -83,7 +83,7 @@ sdpa_math               PASS
 sdpa_mem_efficient      INCORRECT RESULT
 ```
 
-The memory-efficient SDPA failure was reproduced on the RX 9060 XT reference as well, so it must not be presented as a `gfx1150`-only defect. It remains an explicit capability failure for workloads that select that backend.
+At that 2026-09-15 stage, the memory-efficient SDPA failure was reproduced on the RX 9060 XT reference as well, proving it was not a `gfx1150`-only defect. The later experimental v7 patch below changes this specific cubin-only path from a silent numerical failure into an explicit safe refusal.
 
 A real VelocityRL smoke then ran through this repository's ZLUDA launcher with **4,096 agents x 16 rollout steps = 65,536 decisions** and one PPO update:
 
@@ -105,8 +105,8 @@ This is the workload-level gate for the dense/GEMM PPO profile. Synthetic extend
 The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` with TheRock 7.14.1 and PyTorch `2.0.1+cu118`, produced the following isolated capability result:
 
 ```text
-24/26 PASS
-2/26 UNSUPPORTED (safe refusal)
+25/27 PASS
+2/27 UNSUPPORTED (safe refusal)
 0 incorrect
 0 timeouts
 0 process hangs
@@ -116,9 +116,9 @@ The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` wit
 
 The two safe refusals are `sdpa_flash` and `sdpa_mem_efficient`. Diagnosis showed that their low-architecture PTX fallback modules do not contain the real fused compute path: memory-efficient attention is a diagnostic stub, while Flash FMHA retains surrounding control/softmax plumbing but its score accumulators are never populated because the fused GEMM lives in NVIDIA cubins. The patch now returns `NO_BINARY_FOR_GPU` for those specific fallback modules instead of allowing a silent incorrect tensor. `sdpa_math` remains numerically correct.
 
-With the optional reversible cuSOLVER → hipSOLVER proxy staged, the added `linalg_cholesky` capability also passes. The tested proxy preserves **940/940 exports** and routes **49 entry points** to hipSOLVER, including LU plus legacy and generic-X Cholesky paths. `torch.linalg.cholesky`, `torch.cholesky_solve` and `torch.cholesky_inverse` were checked against CPU references for FP32, FP64, complex64 and complex128 in both single and batched tensor cases. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
+With the optional reversible cuSOLVER → hipSOLVER proxy staged, both `linalg_cholesky` and `linalg_qr` pass. The tested proxy preserves **940/940 exports** and routes **75 entry points** to hipSOLVER, including LU, legacy/generic-X Cholesky, and legacy/generic-X QR paths. QR validation covers FP32, FP64, complex64 and complex128, single and batched tall/wide/square matrices, `torch.linalg.qr`, `torch.geqrf` + `orgqr`/`ungqr`, and `ormqr`/`unmqr`; a separate multi-stream regression also passes on two reused non-default streams. The ZLUDA BLAS bridge adds FP64/complex GEMM and strided-batched GEMM plus cuBLAS batched GEQRF → hipSOLVER generic-X. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
 
-The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **70,124 SPS** and **70,113 SPS**, for a **70,118.5 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the 4096² delta was **+9.86%**.
+The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **72,135 SPS** and **70,822 SPS**, for a **71,478.5 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the clean-run deltas were **+3.07%**, **+16.94%**, and **+3.74%** respectively.
 ## Historical performance
 
 Older tuned runs of the same ZLUDA/LibTorch family retained approximately **70k-109k overall steps/s**. Those numbers are historical performance evidence and should not be confused with the short validation run above.

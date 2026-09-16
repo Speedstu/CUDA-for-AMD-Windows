@@ -31,6 +31,7 @@ TESTS = (
     "sparse_mm",
     "linalg_solve",
     "linalg_cholesky",
+    "linalg_qr",
     "softmax",
     "layernorm",
     "gather_scatter",
@@ -255,18 +256,43 @@ def run_reductions(torch):
 
 def run_matmul(torch):
     torch.manual_seed(103)
-    a = torch.randn(384, 512)
-    b = torch.randn(512, 320)
-    ref32 = a @ b
-    got32 = a.cuda() @ b.cuda()
-    sync(torch)
-    c32 = tensor_metrics(torch, got32, ref32, 6e-3, 7e-4)
-    a16, b16 = a[:256, :256].half(), b[:256, :256].half()
+    results = {}
+    checks = []
+    specs = [
+        ("fp32", torch.float32, 6e-3, 7e-4),
+        ("fp64", torch.float64, 1e-10, 1e-10),
+        ("complex64", torch.complex64, 8e-3, 1e-3),
+        ("complex128", torch.complex128, 2e-10, 2e-10),
+    ]
+    for name, dtype, atol, rtol in specs:
+        base_dtype = torch.float64 if dtype in (torch.float64, torch.complex128) else torch.float32
+        if dtype.is_complex:
+            ar = torch.randn(96, 128, dtype=base_dtype)
+            ai = torch.randn(96, 128, dtype=base_dtype)
+            br = torch.randn(128, 80, dtype=base_dtype)
+            bi = torch.randn(128, 80, dtype=base_dtype)
+            a = torch.complex(ar, ai).to(dtype)
+            b = torch.complex(br, bi).to(dtype)
+        else:
+            a = torch.randn(96, 128, dtype=dtype)
+            b = torch.randn(128, 80, dtype=dtype)
+        ref = a @ b
+        got = a.cuda() @ b.cuda()
+        sync(torch)
+        check = tensor_metrics(torch, got, ref, atol, rtol)
+        results[name] = check
+        checks.append(check)
+
+    # Keep the historical FP16 check as a separate mixed-precision path.
+    a16 = torch.randn(128, 128).half()
+    b16 = torch.randn(128, 128).half()
     ref16 = a16.float() @ b16.float()
     got16 = a16.cuda() @ b16.cuda()
     sync(torch)
     c16 = tensor_metrics(torch, got16, ref16, 9e-2, 2e-2)
-    return {"ok": c32["ok"] and c16["ok"], "fp32": c32, "fp16": c16}
+    results["fp16"] = c16
+    checks.append(c16)
+    return {"ok": all(c["ok"] for c in checks), "dtypes": results}
 
 
 def run_bf16_matmul(torch):
@@ -446,6 +472,86 @@ def run_linalg_cholesky(torch):
             checks.extend((l_check, solve_check, inv_check))
         results[name] = dtype_results
     return {"ok": all(c["ok"] for c in checks), "dtypes": results, "backend": "cusolver"}
+
+
+
+def run_linalg_qr(torch):
+    torch.manual_seed(117)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+
+    specs = [
+        ("fp32", torch.float32, 8e-4),
+        ("fp64", torch.float64, 5e-9),
+        ("complex64", torch.complex64, 1e-3),
+        ("complex128", torch.complex128, 8e-9),
+    ]
+    results = {}
+    all_ok = True
+    for name, dtype, tol in specs:
+        dtype_rows = []
+        base_dtype = torch.float64 if dtype in (torch.float64, torch.complex128) else torch.float32
+        for shape in ((12, 7), (3, 12, 7)):
+            if dtype.is_complex:
+                x = torch.complex(
+                    torch.randn(*shape, dtype=base_dtype),
+                    torch.randn(*shape, dtype=base_dtype),
+                ).to(dtype)
+            else:
+                x = torch.randn(*shape, dtype=dtype)
+            xg = x.cuda()
+            q, r = torch.linalg.qr(xg, mode="reduced")
+            sync(torch)
+            recon = q @ r
+            adj = q.mH if dtype.is_complex else q.transpose(-2, -1)
+            k = q.shape[-1]
+            eye = torch.eye(k, dtype=dtype, device="cuda").expand(*q.shape[:-2], k, k)
+            orth = adj @ q
+            sync(torch)
+            rec_check = tensor_metrics(torch, recon, x, tol, tol)
+            orth_check = tensor_metrics(torch, orth, eye.cpu(), tol, tol)
+            row_ok = rec_check["ok"] and orth_check["ok"]
+            dtype_rows.append({"shape": list(shape), "reconstruction": rec_check, "orthogonality": orth_check, "ok": row_ok})
+            all_ok = all_ok and row_ok
+
+        # Explicit Householder generation exercises legacy geqrf + orgqr/ungqr.
+        shape = (12, 7)
+        if dtype.is_complex:
+            x = torch.complex(
+                torch.randn(*shape, dtype=base_dtype),
+                torch.randn(*shape, dtype=base_dtype),
+            ).to(dtype)
+        else:
+            x = torch.randn(*shape, dtype=dtype)
+        ag, tau = torch.geqrf(x.cuda())
+        qg = torch.orgqr(ag, tau)
+        sync(torch)
+        r = torch.triu(ag[: shape[1], :])
+        householder_check = tensor_metrics(torch, qg @ r, x, tol, tol)
+
+        # Apply Q through ormqr/unmqr and compare with a CPU reference generated
+        # from the exact GPU reflectors, avoiding QR sign-convention ambiguity.
+        other = torch.randn(shape[0], 3, dtype=base_dtype)
+        if dtype.is_complex:
+            other = torch.complex(other, torch.randn_like(other)).to(dtype)
+        else:
+            other = other.to(dtype)
+        ag_cpu, tau_cpu = ag.cpu(), tau.cpu()
+        orm_gpu = torch.ormqr(ag, tau, other.cuda(), left=True, transpose=True)
+        sync(torch)
+        orm_ref = torch.ormqr(ag_cpu, tau_cpu, other, left=True, transpose=True)
+        orm_check = tensor_metrics(torch, orm_gpu, orm_ref, tol * 4, tol * 4)
+        dtype_ok = all(r["ok"] for r in dtype_rows) and householder_check["ok"] and orm_check["ok"]
+        all_ok = all_ok and dtype_ok
+        results[name] = {
+            "qr": dtype_rows,
+            "geqrf_orgqr": householder_check,
+            "ormqr": orm_check,
+            "ok": dtype_ok,
+        }
+    return {"ok": all_ok, "dtypes": results}
 
 
 def run_softmax(torch):
@@ -642,6 +748,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "sparse_mm": run_sparse_mm,
     "linalg_solve": run_linalg_solve,
     "linalg_cholesky": run_linalg_cholesky,
+    "linalg_qr": run_linalg_qr,
     "softmax": run_softmax,
     "layernorm": run_layernorm,
     "gather_scatter": run_gather_scatter,

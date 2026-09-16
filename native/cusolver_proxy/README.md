@@ -15,6 +15,8 @@ Validated functions are implemented locally and routed to `hipsolver.dll`:
 - LU: `cusolverDn[S/D/C/Z]getrf_bufferSize`, `getrf`, and `getrs`
 - legacy Cholesky: `cusolverDn[S/D/C/Z]potrf_bufferSize`, `potrf`, `potrfBatched`, `potri_bufferSize`, `potri`, `potrs`, and `potrsBatched`
 - generic-X Cholesky used by current PyTorch: `cusolverDnXpotrf_bufferSize`, `cusolverDnXpotrf`, and `cusolverDnXpotrs`
+- legacy QR: `cusolverDn[S/D/C/Z]geqrf_bufferSize`, `geqrf`, `orgqr`/`ungqr`, and `ormqr`/`unmqr` families
+- generic-X QR used by current PyTorch: `cusolverDnXgeqrf_bufferSize` and `cusolverDnXgeqrf`
 
 Every other export is retained as a forwarder to a user-supplied copy of the original library named `cusolver64_11_nvidia.dll`. This preserves the original DLL's export/load surface while AMD-native coverage is expanded family by family. A forwarded symbol is **not** a claim that the original NVIDIA implementation can execute on AMD; handle-dependent unported routines should be treated as unvalidated until they receive an explicit hipSOLVER route.
 
@@ -49,13 +51,15 @@ Restore the original DLL with:
 
 ## Validation
 
-On the RX 9060 XT / `gfx1200` experimental ZLUDA v7 + TheRock stack, the generated proxy preserved **940/940 exports** of the tested CUDA 11 cuSOLVER DLL and currently routes **49 entry points** to hipSOLVER. The proxy also skips `hipsolverDnDestroy` only when Windows reports that DLL shutdown is already in progress; this prevents the same late-teardown `0xC0000409` fast-fail seen with other ROCm-backed cached handles while preserving normal runtime destruction.
+On the RX 9060 XT / `gfx1200` experimental ZLUDA v7 + TheRock stack, the generated proxy preserved **940/940 exports** of the tested CUDA 11 cuSOLVER DLL and currently routes **75 entry points** to hipSOLVER. The proxy also skips `hipsolverDnDestroy` only when Windows reports that DLL shutdown is already in progress; this prevents the same late-teardown `0xC0000409` fast-fail seen with other ROCm-backed cached handles while preserving normal runtime destruction.
 
 `torch.linalg.solve` was validated against CPU references for FP32, FP64, complex64 and complex128. Cholesky coverage was additionally validated for the same four dtypes, in both single-matrix and batched tensor cases, using:
 
 - `torch.linalg.cholesky`
 - `torch.cholesky_solve`
 - `torch.cholesky_inverse`
+
+QR coverage is additionally validated with `torch.linalg.qr`, `torch.geqrf`, `torch.orgqr`/`ungqr`, and `torch.ormqr`/`unmqr` across FP32, FP64, complex64 and complex128, including batched matrices.
 
 The test can be repeated with:
 
@@ -67,4 +71,4 @@ The test can be repeated with:
   -Strict
 ```
 
-The generic-X bridge deliberately maps only the validated FP32, FP64, complex64 and complex128 data types; unknown generic-X data types return `NOT_SUPPORTED` instead of being passed through unchecked. QR, SVD, eigenvalue/eigenvector and many other solver families still need AMD-native coverage.
+The generic-X bridge deliberately maps only the validated FP32, FP64, complex64 and complex128 data types; unknown generic-X data types return `NOT_SUPPORTED` instead of being passed through unchecked. SVD, eigenvalue/eigenvector and many other solver families still need AMD-native coverage.
