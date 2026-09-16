@@ -105,7 +105,7 @@ This is the workload-level gate for the dense/GEMM PPO profile. Synthetic extend
 The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` with TheRock 7.14.1 and PyTorch `2.0.1+cu118`, produced the following isolated capability result:
 
 ```text
-32/34 PASS
+33/35 PASS
 2/34 UNSUPPORTED (safe refusal)
 0 incorrect
 0 timeouts
@@ -114,7 +114,7 @@ The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` wit
 0 errors
 ```
 
-The two safe refusals are `sdpa_flash` and `sdpa_mem_efficient`. Diagnosis showed that their low-architecture PTX fallback modules do not contain the real fused compute path: memory-efficient attention is a diagnostic stub, while Flash FMHA retains surrounding control/softmax plumbing but its score accumulators are never populated because the fused GEMM lives in NVIDIA cubins. The patch now returns `NO_BINARY_FOR_GPU` for those specific fallback modules instead of allowing a silent incorrect tensor. `sdpa_math` remains numerically correct.
+The two safe refusals are `sdpa_flash` and `sdpa_mem_efficient`. The capability matrix also includes a direct `cuDeviceGetPCIBusId` regression probe because current llama.cpp uses that API during CUDA backend registration; v6-preview.69 reproduces error 801 on the reference machine, while pinned upstream v7-preview.10 and the patched v7 runtime return a valid PCI BDF string. Diagnosis showed that their low-architecture PTX fallback modules do not contain the real fused compute path: memory-efficient attention is a diagnostic stub, while Flash FMHA retains surrounding control/softmax plumbing but its score accumulators are never populated because the fused GEMM lives in NVIDIA cubins. The patch now returns `NO_BINARY_FOR_GPU` for those specific fallback modules instead of allowing a silent incorrect tensor. `sdpa_math` remains numerically correct.
 
 The patched cuDNN compatibility DLLs now route the standard PyTorch BatchNorm training, backward and inference path (`CUDNN_BATCHNORM_OPS_BN`) through MIOpen, including the cuDNN `ForwardTrainingEx`/`BackwardEx` workspace APIs used by PyTorch 2.0.1. The isolated `batch_norm` capability passes against CPU references with no hang/crash/error; fused BatchNorm+activation/add variants remain deliberately unsupported until separately validated.
 

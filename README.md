@@ -42,6 +42,14 @@ This does **not** mean every CUDA program or AI model works. CUDA API/library co
 
 For `gfx1150`/RDNA 3.5, the project records **HIP SDK 7.2 or newer** as the minimum compatible floor. Do not install HIP 6.4 merely to match the historical RX 9060 XT reference profile.
 
+Recent llama.cpp builds require `cuDeviceGetPCIBusId`, which ZLUDA v6-preview.69 returns as `CUDA_ERROR_NOT_SUPPORTED` (801). The repo now exposes the pinned upstream v7 channel, where that driver API is implemented:
+
+```powershell
+.\scripts\install.ps1 -SkipLibTorch -ZludaChannel latest
+```
+
+This selects the pinned upstream `v7-preview.10` archive and verifies its SHA-256. It does **not** imply that every v7 CUDA path is safe on `gfx1150`; keep the capability tests/fail-closed attention guidance below in place.
+
 The memory-efficient SDPA corruption reported on `gfx1150` is **not treated as architecture-specific**: the same failure was reproduced during `gfx1200` bring-up. The experimental v7 patch now detects the affected cubin-only fallback and fails closed with `NO_BINARY_FOR_GPU` instead of allowing a numerically invalid tensor to escape. Compatibility is therefore reported per capability/workload rather than as a blanket GPU verdict.
 
 ## How it works
@@ -152,7 +160,7 @@ On the RX 9060 XT / `gfx1200` development system, the current patch set has nume
 - legacy CUDA Graph stream-capture ABI compatibility used by PyTorch (`cuStreamBeginCapture` and `cuStreamGetCaptureInfo`), mapped onto the existing HIP graph backend;
 - CUDA event timing compatibility for a Windows HIP backend issue where completed in-order events can occasionally report a negative elapsed time; only impossible negative values are clamped to `0 ms`, while valid positive timings are left untouched.
 
-The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. The patch also restores the legacy CUDA 10.x stream-capture entry points requested through `cuGetProcAddress`; a real `torch.cuda.CUDAGraph` capture/replay probe now passes on the tested stack. Direct HIP testing on the reference GPU also reproduced occasional negative `hipEventElapsedTime` results for completed in-order events; the CUDA-facing wrapper now clamps only those impossible negative values to zero. A combined strict regression passes NVML + `torch.sparse.mm` + FFT, and the full isolated capability matrix currently records **32/34 clean passes (94.1%) plus 2 safe refusals**, with **0 incorrect results, 0 timeouts, 0 hangs, 0 post-result process crashes and 0 errors**. The two refusals are PyTorch 2.0.1 Flash SDPA and memory-efficient SDPA: their low-architecture PTX fallbacks do not contain the real fused compute path, which lives in NVIDIA cubins, so the patch returns `NO_BINARY_FOR_GPU` rather than silently producing invalid output. The validated math SDPA backend remains correct. These are experimental results for the tested stack, not a claim of complete CUDA coverage.
+The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. The patch also restores the legacy CUDA 10.x stream-capture entry points requested through `cuGetProcAddress`; a real `torch.cuda.CUDAGraph` capture/replay probe now passes on the tested stack. Direct HIP testing on the reference GPU also reproduced occasional negative `hipEventElapsedTime` results for completed in-order events; the CUDA-facing wrapper now clamps only those impossible negative values to zero. A combined strict regression passes NVML + `torch.sparse.mm` + FFT, and the full isolated capability matrix currently records **33/35 clean passes (94.3%) plus 2 safe refusals**, with **0 incorrect results, 0 timeouts, 0 hangs, 0 post-result process crashes and 0 errors**. The two refusals are PyTorch 2.0.1 Flash SDPA and memory-efficient SDPA: their low-architecture PTX fallbacks do not contain the real fused compute path, which lives in NVIDIA cubins, so the patch returns `NO_BINARY_FOR_GPU` rather than silently producing invalid output. The validated math SDPA backend remains correct. These are experimental results for the tested stack, not a claim of complete CUDA coverage.
 
 ### Experimental cuSOLVER → hipSOLVER proxy
 

@@ -5,6 +5,8 @@ param(
     [string]$LibTorchRoot,
     [int]$GpuIndex = 0,
     [string]$FunctionalPython,
+    [ValidateSet('stable','latest')]
+    [string]$ZludaChannel = 'stable',
     [switch]$SkipLibTorch,
     [switch]$SkipRuntimeTest,
     [switch]$SkipFunctionalTest
@@ -35,6 +37,7 @@ $setupArgs = @{
     GpuIndex = $GpuIndex
     HipRoot = $HipRoot
     DownloadZluda = $true
+    ZludaChannel = $ZludaChannel
 }
 if ($LibTorchRoot) { $setupArgs.LibTorchRoot = $LibTorchRoot }
 elseif (-not $SkipLibTorch) { $setupArgs.DownloadLibTorch = $true }

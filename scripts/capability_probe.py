@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 TESTS = (
     "device_info",
+    "driver_pci_bus_id",
     "driver_api",
     "nvml",
     "memory_copy",
@@ -102,6 +103,36 @@ def _load_win_dll(name: str):
     if not hasattr(ctypes, "WinDLL"):
         raise RuntimeError("WinDLL unavailable on this platform")
     return ctypes.WinDLL(name)
+
+
+def run_driver_pci_bus_id(torch):
+    import ctypes
+    import re
+
+    nvcuda = ctypes.WinDLL("nvcuda.dll")
+    nvcuda.cuInit.argtypes = [ctypes.c_uint]
+    nvcuda.cuInit.restype = ctypes.c_int
+    nvcuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    nvcuda.cuDeviceGet.restype = ctypes.c_int
+    nvcuda.cuDeviceGetPCIBusId.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    nvcuda.cuDeviceGetPCIBusId.restype = ctypes.c_int
+    init_rc = nvcuda.cuInit(0)
+    dev = ctypes.c_int()
+    get_rc = nvcuda.cuDeviceGet(ctypes.byref(dev), 0) if init_rc == 0 else -1
+    buf = ctypes.create_string_buffer(64)
+    pci_rc = nvcuda.cuDeviceGetPCIBusId(buf, len(buf), dev.value) if get_rc == 0 else -1
+    value = buf.value.decode("ascii", errors="replace")
+    format_ok = bool(re.fullmatch(r"[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-7]", value))
+    ok = init_rc == 0 and get_rc == 0 and pci_rc == 0 and format_ok
+    return {
+        "ok": ok,
+        "cuInit": init_rc,
+        "cuDeviceGet": get_rc,
+        "cuDeviceGetPCIBusId": pci_rc,
+        "driver_device": dev.value,
+        "pci_bus_id": value,
+        "format_ok": format_ok,
+    }
 
 
 def run_driver_api(torch):
@@ -953,6 +984,7 @@ def run_cuda_graph(torch):
 
 RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "device_info": run_device_info,
+    "driver_pci_bus_id": run_driver_pci_bus_id,
     "driver_api": run_driver_api,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,
