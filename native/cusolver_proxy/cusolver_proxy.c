@@ -63,6 +63,14 @@ static int hip_side_from_cuda(int side) {
     }
 }
 
+static int hip_eig_mode_from_cuda(int jobz) {
+    switch (jobz) {
+        case 0: return 201; /* CUSOLVER_EIG_MODE_NOVECTOR -> HIPSOLVER_EIG_MODE_NOVECTOR */
+        case 1: return 202; /* CUSOLVER_EIG_MODE_VECTOR   -> HIPSOLVER_EIG_MODE_VECTOR */
+        default: return -1;
+    }
+}
+
 static int hip_data_type_from_cuda(int data_type) {
     switch (data_type) {
         case 0: return 0; /* CUDA_R_32F -> HIP_R_32F */
@@ -153,6 +161,126 @@ EXPORT int cusolverDnSetAdvOptions(void* params, int func, int alg) {
     return cuda_status_from_hip(fn(params, 0, halg));
 }
 
+EXPORT int cusolverDnCreateGesvdjInfo(void** info) {
+    typedef int (*fn_t)(void**);
+    LOAD_FN("hipsolverDnCreateGesvdjInfo", fn_t);
+    return cuda_status_from_hip(fn(info));
+}
+
+EXPORT int cusolverDnDestroyGesvdjInfo(void* info) {
+    if (process_shutdown_in_progress()) return 0;
+    typedef int (*fn_t)(void*);
+    LOAD_FN("hipsolverDnDestroyGesvdjInfo", fn_t);
+    return cuda_status_from_hip(fn(info));
+}
+
+EXPORT int cusolverDnXgesvdjSetMaxSweeps(void* info, int max_sweeps) {
+    typedef int (*fn_t)(void*, int);
+    LOAD_FN("hipsolverDnXgesvdjSetMaxSweeps", fn_t);
+    return cuda_status_from_hip(fn(info, max_sweeps));
+}
+
+EXPORT int cusolverDnXgesvdjSetSortEig(void* info, int sort_eig) {
+    typedef int (*fn_t)(void*, int);
+    LOAD_FN("hipsolverDnXgesvdjSetSortEig", fn_t);
+    return cuda_status_from_hip(fn(info, sort_eig));
+}
+
+EXPORT int cusolverDnXgesvdjSetTolerance(void* info, double tolerance) {
+    typedef int (*fn_t)(void*, double);
+    LOAD_FN("hipsolverDnXgesvdjSetTolerance", fn_t);
+    return cuda_status_from_hip(fn(info, tolerance));
+}
+
+EXPORT int cusolverDnXgesvdjGetResidual(void* handle, void* info, double* residual) {
+    typedef int (*fn_t)(hipsolverHandle_t, void*, double*);
+    LOAD_FN("hipsolverDnXgesvdjGetResidual", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, info, residual));
+}
+
+EXPORT int cusolverDnXgesvdjGetSweeps(void* handle, void* info, int* executed_sweeps) {
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int*);
+    LOAD_FN("hipsolverDnXgesvdjGetSweeps", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, info, executed_sweeps));
+}
+EXPORT int cusolverDnCreateSyevjInfo(void** info) {
+    typedef int (*fn_t)(void**);
+    LOAD_FN("hipsolverDnCreateSyevjInfo", fn_t);
+    return cuda_status_from_hip(fn(info));
+}
+
+EXPORT int cusolverDnDestroySyevjInfo(void* info) {
+    if (process_shutdown_in_progress()) return 0;
+    typedef int (*fn_t)(void*);
+    LOAD_FN("hipsolverDnDestroySyevjInfo", fn_t);
+    return cuda_status_from_hip(fn(info));
+}
+
+EXPORT int cusolverDnXsyevjSetMaxSweeps(void* info, int max_sweeps) {
+    typedef int (*fn_t)(void*, int);
+    LOAD_FN("hipsolverDnXsyevjSetMaxSweeps", fn_t);
+    return cuda_status_from_hip(fn(info, max_sweeps));
+}
+
+EXPORT int cusolverDnXsyevjSetSortEig(void* info, int sort_eig) {
+    typedef int (*fn_t)(void*, int);
+    LOAD_FN("hipsolverDnXsyevjSetSortEig", fn_t);
+    return cuda_status_from_hip(fn(info, sort_eig));
+}
+
+EXPORT int cusolverDnXsyevjSetTolerance(void* info, double tolerance) {
+    typedef int (*fn_t)(void*, double);
+    LOAD_FN("hipsolverDnXsyevjSetTolerance", fn_t);
+    return cuda_status_from_hip(fn(info, tolerance));
+}
+
+EXPORT int cusolverDnXsyevjGetResidual(void* handle, void* info, double* residual) {
+    typedef int (*fn_t)(hipsolverHandle_t, void*, double*);
+    LOAD_FN("hipsolverDnXsyevjGetResidual", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, info, residual));
+}
+
+EXPORT int cusolverDnXsyevjGetSweeps(void* handle, void* info, int* executed_sweeps) {
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int*);
+    LOAD_FN("hipsolverDnXsyevjGetSweeps", fn_t);
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, info, executed_sweeps));
+}
+
+EXPORT int cusolverDnXsyevd_bufferSize(void* handle, void* params, int jobz, int uplo, int64_t n, int dataTypeA, const void* A, int64_t lda, int dataTypeW, const void* W, int computeType, size_t* lworkOnDevice, size_t* lworkOnHost) {
+    int hjobz = hip_eig_mode_from_cuda(jobz);
+    int huplo = hip_fill_from_cuda(uplo);
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int htypeW = hip_data_type_from_cuda(dataTypeW);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (hjobz < 0 || huplo < 0) return 3;
+    if (htypeA < 0 || htypeW < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int, int, int64_t, int, const void*, int64_t, int, const void*, int, size_t*, size_t*);
+    LOAD_FN("hipsolverDnXsyevd_bufferSize", fn_t);
+    int hs = fn((hipsolverHandle_t)handle, effective, hjobz, huplo, n, htypeA, A, lda, htypeW, W, hcompute, lworkOnDevice, lworkOnHost);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
+}
+
+EXPORT int cusolverDnXsyevd(void* handle, void* params, int jobz, int uplo, int64_t n, int dataTypeA, void* A, int64_t lda, int dataTypeW, void* W, int computeType, void* workOnDevice, size_t lworkOnDevice, void* workOnHost, size_t lworkOnHost, int* devInfo) {
+    int hjobz = hip_eig_mode_from_cuda(jobz);
+    int huplo = hip_fill_from_cuda(uplo);
+    int htypeA = hip_data_type_from_cuda(dataTypeA);
+    int htypeW = hip_data_type_from_cuda(dataTypeW);
+    int hcompute = hip_data_type_from_cuda(computeType);
+    if (hjobz < 0 || huplo < 0) return 3;
+    if (htypeA < 0 || htypeW < 0 || hcompute < 0) return 9;
+    void *effective = NULL, *owned = NULL;
+    int ps = resolve_params(params, &effective, &owned);
+    if (ps != 0) return ps;
+    typedef int (*fn_t)(hipsolverHandle_t, void*, int, int, int64_t, int, void*, int64_t, int, void*, int, void*, size_t, void*, size_t, int*);
+    LOAD_FN("hipsolverDnXsyevd", fn_t);
+    int hs = fn((hipsolverHandle_t)handle, effective, hjobz, huplo, n, htypeA, A, lda, htypeW, W, hcompute, workOnDevice, lworkOnDevice, workOnHost, lworkOnHost, devInfo);
+    release_owned_params(owned);
+    return cuda_status_from_hip(hs);
+}
 EXPORT int cusolverDnXpotrf_bufferSize(void* handle, void* params, int uplo, int64_t n, int dataTypeA, const void* A, int64_t lda, int computeType, size_t* lworkOnDevice, size_t* lworkOnHost) {
     int huplo = hip_fill_from_cuda(uplo);
     int htypeA = hip_data_type_from_cuda(dataTypeA);
@@ -366,8 +494,146 @@ EXPORT int cusolverDn##PREFIX##potrsBatched(void* handle, int uplo, int n, int n
     return cuda_status_from_hip(fn((hipsolverHandle_t)handle, huplo, n, nrhs, Aarray, lda, Barray, ldb, devInfo, batchCount)); \
 }
 
+#define DEFINE_SYEVD_BUFFER(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME##_bufferSize(void* handle, int jobz, int uplo, int n, const T* A, int lda, const RT* W, int* lwork) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const RT*, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME "_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, lwork)); \
+}
+
+#define DEFINE_SYEVD(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME(void* handle, int jobz, int uplo, int n, T* A, int lda, RT* W, T* work, int lwork, int* devInfo) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T*, int, RT*, T*, int, int*); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME, fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, work, lwork, devInfo)); \
+}
+
+#define DEFINE_SYEVJ_BUFFER(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME##_bufferSize(void* handle, int jobz, int uplo, int n, const T* A, int lda, const RT* W, int* lwork, void* params) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const RT*, int*, void*); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME "_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, lwork, params)); \
+}
+
+#define DEFINE_SYEVJ(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME(void* handle, int jobz, int uplo, int n, T* A, int lda, RT* W, T* work, int lwork, int* devInfo, void* params) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T*, int, RT*, T*, int, int*, void*); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME, fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, work, lwork, devInfo, params)); \
+}
+
+#define DEFINE_SYEVJ_BATCHED_BUFFER(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME##Batched_bufferSize(void* handle, int jobz, int uplo, int n, const T* A, int lda, const RT* W, int* lwork, void* params, int batch_count) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const RT*, int*, void*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME "Batched_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, lwork, params, batch_count)); \
+}
+
+#define DEFINE_SYEVJ_BATCHED(T, RT, PREFIX, NAME) \
+EXPORT int cusolverDn##PREFIX##NAME##Batched(void* handle, int jobz, int uplo, int n, T* A, int lda, RT* W, T* work, int lwork, int* devInfo, void* params, int batch_count) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    int huplo = hip_fill_from_cuda(uplo); \
+    if (hjobz < 0 || huplo < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T*, int, RT*, T*, int, int*, void*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX #NAME "Batched", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, huplo, n, A, lda, W, work, lwork, devInfo, params, batch_count)); \
+}
+#define DEFINE_GESVDJ_BUFFER(T, RT, PREFIX) \
+EXPORT int cusolverDn##PREFIX##gesvdj_bufferSize(void* handle, int jobz, int econ, int m, int n, const T* A, int lda, const RT* S, const T* U, int ldu, const T* V, int ldv, int* lwork, void* params) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    if (hjobz < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, int, const T*, int, const RT*, const T*, int, const T*, int, int*, void*); \
+    LOAD_FN("hipsolverDn" #PREFIX "gesvdj_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, econ, m, n, A, lda, S, U, ldu, V, ldv, lwork, params)); \
+}
+
+#define DEFINE_GESVDJ(T, RT, PREFIX) \
+EXPORT int cusolverDn##PREFIX##gesvdj(void* handle, int jobz, int econ, int m, int n, T* A, int lda, RT* S, T* U, int ldu, T* V, int ldv, T* work, int lwork, int* devInfo, void* params) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    if (hjobz < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, int, T*, int, RT*, T*, int, T*, int, T*, int, int*, void*); \
+    LOAD_FN("hipsolverDn" #PREFIX "gesvdj", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, econ, m, n, A, lda, S, U, ldu, V, ldv, work, lwork, devInfo, params)); \
+}
+
+#define DEFINE_GESVDJ_BATCHED_BUFFER(T, RT, PREFIX) \
+EXPORT int cusolverDn##PREFIX##gesvdjBatched_bufferSize(void* handle, int jobz, int m, int n, const T* A, int lda, const RT* S, const T* U, int ldu, const T* V, int ldv, int* lwork, void* params, int batch_count) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    if (hjobz < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, const T*, int, const RT*, const T*, int, const T*, int, int*, void*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX "gesvdjBatched_bufferSize", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, m, n, A, lda, S, U, ldu, V, ldv, lwork, params, batch_count)); \
+}
+
+#define DEFINE_GESVDJ_BATCHED(T, RT, PREFIX) \
+EXPORT int cusolverDn##PREFIX##gesvdjBatched(void* handle, int jobz, int m, int n, T* A, int lda, RT* S, T* U, int ldu, T* V, int ldv, T* work, int lwork, int* devInfo, void* params, int batch_count) { \
+    int hjobz = hip_eig_mode_from_cuda(jobz); \
+    if (hjobz < 0) return 3; \
+    typedef int (*fn_t)(hipsolverHandle_t, int, int, int, T*, int, RT*, T*, int, T*, int, T*, int, int*, void*, int); \
+    LOAD_FN("hipsolverDn" #PREFIX "gesvdjBatched", fn_t); \
+    return cuda_status_from_hip(fn((hipsolverHandle_t)handle, hjobz, m, n, A, lda, S, U, ldu, V, ldv, work, lwork, devInfo, params, batch_count)); \
+}
+
 typedef struct { float x, y; } cfloat2;
 typedef struct { double x, y; } cdouble2;
+
+DEFINE_SYEVD_BUFFER(float, float, S, syevd)
+DEFINE_SYEVD_BUFFER(double, double, D, syevd)
+DEFINE_SYEVD_BUFFER(cfloat2, float, C, heevd)
+DEFINE_SYEVD_BUFFER(cdouble2, double, Z, heevd)
+DEFINE_SYEVD(float, float, S, syevd)
+DEFINE_SYEVD(double, double, D, syevd)
+DEFINE_SYEVD(cfloat2, float, C, heevd)
+DEFINE_SYEVD(cdouble2, double, Z, heevd)
+
+DEFINE_SYEVJ_BUFFER(float, float, S, syevj)
+DEFINE_SYEVJ_BUFFER(double, double, D, syevj)
+DEFINE_SYEVJ_BUFFER(cfloat2, float, C, heevj)
+DEFINE_SYEVJ_BUFFER(cdouble2, double, Z, heevj)
+DEFINE_SYEVJ(float, float, S, syevj)
+DEFINE_SYEVJ(double, double, D, syevj)
+DEFINE_SYEVJ(cfloat2, float, C, heevj)
+DEFINE_SYEVJ(cdouble2, double, Z, heevj)
+DEFINE_SYEVJ_BATCHED_BUFFER(float, float, S, syevj)
+DEFINE_SYEVJ_BATCHED_BUFFER(double, double, D, syevj)
+DEFINE_SYEVJ_BATCHED_BUFFER(cfloat2, float, C, heevj)
+DEFINE_SYEVJ_BATCHED_BUFFER(cdouble2, double, Z, heevj)
+DEFINE_SYEVJ_BATCHED(float, float, S, syevj)
+DEFINE_SYEVJ_BATCHED(double, double, D, syevj)
+DEFINE_SYEVJ_BATCHED(cfloat2, float, C, heevj)
+DEFINE_SYEVJ_BATCHED(cdouble2, double, Z, heevj)
+DEFINE_GESVDJ_BUFFER(float, float, S)
+DEFINE_GESVDJ_BUFFER(double, double, D)
+DEFINE_GESVDJ_BUFFER(cfloat2, float, C)
+DEFINE_GESVDJ_BUFFER(cdouble2, double, Z)
+DEFINE_GESVDJ(float, float, S)
+DEFINE_GESVDJ(double, double, D)
+DEFINE_GESVDJ(cfloat2, float, C)
+DEFINE_GESVDJ(cdouble2, double, Z)
+
+DEFINE_GESVDJ_BATCHED_BUFFER(float, float, S)
+DEFINE_GESVDJ_BATCHED_BUFFER(double, double, D)
+DEFINE_GESVDJ_BATCHED_BUFFER(cfloat2, float, C)
+DEFINE_GESVDJ_BATCHED_BUFFER(cdouble2, double, Z)
+DEFINE_GESVDJ_BATCHED(float, float, S)
+DEFINE_GESVDJ_BATCHED(double, double, D)
+DEFINE_GESVDJ_BATCHED(cfloat2, float, C)
+DEFINE_GESVDJ_BATCHED(cdouble2, double, Z)
 
 DEFINE_GETRF_BUFFER(float, S)
 DEFINE_GETRF_BUFFER(double, D)

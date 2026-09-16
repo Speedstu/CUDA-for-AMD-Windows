@@ -43,6 +43,7 @@ $overrideNames = @(
     'cusolverDnCreateParams', 'cusolverDnDestroyParams', 'cusolverDnSetAdvOptions',
     'cusolverDnXpotrf_bufferSize', 'cusolverDnXpotrf', 'cusolverDnXpotrs',
     'cusolverDnXgeqrf_bufferSize', 'cusolverDnXgeqrf',
+    'cusolverDnXsyevd_bufferSize', 'cusolverDnXsyevd',
     'cusolverDnSgeqrf_bufferSize', 'cusolverDnDgeqrf_bufferSize', 'cusolverDnCgeqrf_bufferSize', 'cusolverDnZgeqrf_bufferSize',
     'cusolverDnSgeqrf', 'cusolverDnDgeqrf', 'cusolverDnCgeqrf', 'cusolverDnZgeqrf',
     'cusolverDnSorgqr_bufferSize', 'cusolverDnDorgqr_bufferSize', 'cusolverDnCungqr_bufferSize', 'cusolverDnZungqr_bufferSize',
@@ -58,7 +59,23 @@ $overrideNames = @(
     'cusolverDnSpotri_bufferSize', 'cusolverDnDpotri_bufferSize', 'cusolverDnCpotri_bufferSize', 'cusolverDnZpotri_bufferSize',
     'cusolverDnSpotri', 'cusolverDnDpotri', 'cusolverDnCpotri', 'cusolverDnZpotri',
     'cusolverDnSpotrs', 'cusolverDnDpotrs', 'cusolverDnCpotrs', 'cusolverDnZpotrs',
-    'cusolverDnSpotrsBatched', 'cusolverDnDpotrsBatched', 'cusolverDnCpotrsBatched', 'cusolverDnZpotrsBatched'
+    'cusolverDnSpotrsBatched', 'cusolverDnDpotrsBatched', 'cusolverDnCpotrsBatched', 'cusolverDnZpotrsBatched',
+    'cusolverDnCreateGesvdjInfo', 'cusolverDnDestroyGesvdjInfo',
+    'cusolverDnXgesvdjSetMaxSweeps', 'cusolverDnXgesvdjSetSortEig', 'cusolverDnXgesvdjSetTolerance',
+    'cusolverDnXgesvdjGetResidual', 'cusolverDnXgesvdjGetSweeps',
+    'cusolverDnSsyevd_bufferSize', 'cusolverDnDsyevd_bufferSize', 'cusolverDnCheevd_bufferSize', 'cusolverDnZheevd_bufferSize',
+    'cusolverDnSsyevd', 'cusolverDnDsyevd', 'cusolverDnCheevd', 'cusolverDnZheevd',
+    'cusolverDnSgesvdj_bufferSize', 'cusolverDnDgesvdj_bufferSize', 'cusolverDnCgesvdj_bufferSize', 'cusolverDnZgesvdj_bufferSize',
+    'cusolverDnSgesvdj', 'cusolverDnDgesvdj', 'cusolverDnCgesvdj', 'cusolverDnZgesvdj',
+    'cusolverDnSgesvdjBatched_bufferSize', 'cusolverDnDgesvdjBatched_bufferSize', 'cusolverDnCgesvdjBatched_bufferSize', 'cusolverDnZgesvdjBatched_bufferSize',
+    'cusolverDnSgesvdjBatched', 'cusolverDnDgesvdjBatched', 'cusolverDnCgesvdjBatched', 'cusolverDnZgesvdjBatched',
+    'cusolverDnCreateSyevjInfo', 'cusolverDnDestroySyevjInfo',
+    'cusolverDnXsyevjSetMaxSweeps', 'cusolverDnXsyevjSetSortEig', 'cusolverDnXsyevjSetTolerance',
+    'cusolverDnXsyevjGetResidual', 'cusolverDnXsyevjGetSweeps',
+    'cusolverDnSsyevj_bufferSize', 'cusolverDnDsyevj_bufferSize', 'cusolverDnCheevj_bufferSize', 'cusolverDnZheevj_bufferSize',
+    'cusolverDnSsyevj', 'cusolverDnDsyevj', 'cusolverDnCheevj', 'cusolverDnZheevj',
+    'cusolverDnSsyevjBatched_bufferSize', 'cusolverDnDsyevjBatched_bufferSize', 'cusolverDnCheevjBatched_bufferSize', 'cusolverDnZheevjBatched_bufferSize',
+    'cusolverDnSsyevjBatched', 'cusolverDnDsyevjBatched', 'cusolverDnCheevjBatched', 'cusolverDnZheevjBatched'
 )
 $overrideSet = @{}
 foreach ($name in $overrideNames) { $overrideSet[$name] = $true }

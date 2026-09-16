@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 75fa7688aa61f75e99d32f6626c405e2d594cf26..bf9764a3d0d3b6b236518e510ce340c5e7598c4e 100644
+index 75fa768..bf9764a 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -5214,6 +5214,10 @@ version = "0.0.0"
@@ -30,7 +30,7 @@ index 75fa7688aa61f75e99d32f6626c405e2d594cf26..bf9764a3d0d3b6b236518e510ce340c5
   "rocsparse-sys",
   "unwrap_or",
 diff --git a/zluda/src/impl/event.rs b/zluda/src/impl/event.rs
-index 0392e73533da0649bfae8b6e3a47eb1011ed99e1..9700376d48b9515dcc81b0824847110d03fa73a1 100644
+index 0392e73..9700376 100644
 --- a/zluda/src/impl/event.rs
 +++ b/zluda/src/impl/event.rs
 @@ -10,8 +10,15 @@ pub(crate) unsafe fn elapsed_time(
@@ -52,7 +52,7 @@ index 0392e73533da0649bfae8b6e3a47eb1011ed99e1..9700376d48b9515dcc81b0824847110d
  
  pub(crate) unsafe fn elapsed_time_v2(
 diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
-index c9d4bbdf30a95d16421c1c36ef4f0ba55a894930..c4e86958b2f09967870610eddf437e4eb1fe3f0f 100644
+index c9d4bbd..c4e8695 100644
 --- a/zluda/src/impl/module.rs
 +++ b/zluda/src/impl/module.rs
 @@ -185,6 +185,24 @@ fn get_best_ptx_and_compile(
@@ -81,7 +81,7 @@ index c9d4bbdf30a95d16421c1c36ef4f0ba55a894930..c4e86958b2f09967870610eddf437e4e
          .iter()
          .rev() // TODO: actually sort by SM
 diff --git a/zluda/src/impl/stream.rs b/zluda/src/impl/stream.rs
-index 708b043726b82c2622c2640260299c3d44c20e22..b559e89e0ca667a24969b04ec48381403efbcd75 100644
+index 708b043..b559e89 100644
 --- a/zluda/src/impl/stream.rs
 +++ b/zluda/src/impl/stream.rs
 @@ -20,6 +20,10 @@ pub(crate) fn destroy_v2(stream: hipStream_t) -> hipError_t {
@@ -111,7 +111,7 @@ index 708b043726b82c2622c2640260299c3d44c20e22..b559e89e0ca667a24969b04ec4838140
      stream: hipStream_t,
      capture_status: *mut hipStreamCaptureStatus,
 diff --git a/zluda/src/lib.rs b/zluda/src/lib.rs
-index ed2df7a57325d630c87f90b328b680461645b16a..4422e4e2a0bdff935ba9354f995adf81c32b6522 100644
+index ed2df7a..4422e4e 100644
 --- a/zluda/src/lib.rs
 +++ b/zluda/src/lib.rs
 @@ -189,11 +189,13 @@ cuda_macros::cuda_function_declarations!(
@@ -129,10 +129,10 @@ index ed2df7a57325d630c87f90b328b680461645b16a..4422e4e2a0bdff935ba9354f995adf81
              cuStreamGetCaptureInfo_v3,
              cuStreamIsCapturing,
 diff --git a/zluda_blas/src/impl.rs b/zluda_blas/src/impl.rs
-index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d906de7b072 100644
+index 671e24b..ac5817c 100644
 --- a/zluda_blas/src/impl.rs
 +++ b/zluda_blas/src/impl.rs
-@@ -14,6 +14,111 @@ fn rocblas() -> Result<&'static super::RocblasVtable, rocblas_error> {
+@@ -14,6 +14,177 @@ fn rocblas() -> Result<&'static super::RocblasVtable, rocblas_error> {
      unwrapped.as_ref().map_err(|x| *x)
  }
  
@@ -163,6 +163,18 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
 +        *mut ::core::ffi::c_void, usize,
 +        *mut i32,
 +    ) -> i32,
++    sgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    dgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    cgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    zgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    sgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    dgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    cgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    zgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    sgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    dgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    cgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    zgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
 +}
 +
 +#[cfg(windows)]
@@ -214,7 +226,22 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
 +            *mut ::core::ffi::c_void, usize,
 +            *mut i32,
 +        ) -> i32);
-+        Ok(Self { _hip_lib: hip_lib, _lib: lib, hip_memcpy, hip_malloc, hip_free, hip_stream_synchronize, create, destroy, set_stream, create_params, destroy_params, xgeqrf_buffer_size, xgeqrf })
++        type GetrfBufferFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32;
++        type GetrfFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32;
++        let sgetrf_buffer_size = sym!("hipsolverDnSgetrf_bufferSize", GetrfBufferFn);
++        let dgetrf_buffer_size = sym!("hipsolverDnDgetrf_bufferSize", GetrfBufferFn);
++        let cgetrf_buffer_size = sym!("hipsolverDnCgetrf_bufferSize", GetrfBufferFn);
++        let zgetrf_buffer_size = sym!("hipsolverDnZgetrf_bufferSize", GetrfBufferFn);
++        let sgetrf = sym!("hipsolverDnSgetrf", GetrfFn);
++        let dgetrf = sym!("hipsolverDnDgetrf", GetrfFn);
++        let cgetrf = sym!("hipsolverDnCgetrf", GetrfFn);
++        let zgetrf = sym!("hipsolverDnZgetrf", GetrfFn);
++        type GetrsFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32;
++        let sgetrs = sym!("hipsolverDnSgetrs", GetrsFn);
++        let dgetrs = sym!("hipsolverDnDgetrs", GetrsFn);
++        let cgetrs = sym!("hipsolverDnCgetrs", GetrsFn);
++        let zgetrs = sym!("hipsolverDnZgetrs", GetrsFn);
++        Ok(Self { _hip_lib: hip_lib, _lib: lib, hip_memcpy, hip_malloc, hip_free, hip_stream_synchronize, create, destroy, set_stream, create_params, destroy_params, xgeqrf_buffer_size, xgeqrf, sgetrf_buffer_size, dgetrf_buffer_size, cgetrf_buffer_size, zgetrf_buffer_size, sgetrf, dgetrf, cgetrf, zgetrf, sgetrs, dgetrs, cgetrs, zgetrs })
 +    }
 +}
 +
@@ -222,6 +249,45 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
 +fn hipsolver() -> Result<&'static HipsolverVtable, cublasError_t> {
 +    static LOCK: OnceLock<Result<HipsolverVtable, cublasError_t>> = OnceLock::new();
 +    LOCK.get_or_init(|| unsafe { HipsolverVtable::new() })
++        .as_ref()
++        .map_err(|e| *e)
++}
++
++#[cfg(windows)]
++struct RocsolverVtable {
++    _lib: libloading::os::windows::Library,
++    sgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f32, i32, *const *mut f32, i32, *mut i32, i32) -> rocblas_status,
++    dgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f64, i32, *const *mut f64, i32, *mut i32, i32) -> rocblas_status,
++    cgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_float_complex, i32, *const *mut rocblas_float_complex, i32, *mut i32, i32) -> rocblas_status,
++    zgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_double_complex, i32, *const *mut rocblas_double_complex, i32, *mut i32, i32) -> rocblas_status,
++}
++
++#[cfg(windows)]
++impl RocsolverVtable {
++    unsafe fn new() -> Result<Self, cublasError_t> {
++        // Anchor the selected HIP/TheRock runtime before loading rocSOLVER.
++        let _ = hipsolver()?;
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["rocsolver.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let lib = libloading::os::windows::Library::from_raw(hmodule.0 as _);
++        macro_rules! sym {
++            ($name:literal, $ty:ty) => {
++                *lib.get::<$ty>(concat!($name, "\0").as_bytes())
++                    .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?
++            };
++        }
++        let sgels_batched = sym!("rocsolver_sgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f32, i32, *const *mut f32, i32, *mut i32, i32) -> rocblas_status);
++        let dgels_batched = sym!("rocsolver_dgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f64, i32, *const *mut f64, i32, *mut i32, i32) -> rocblas_status);
++        let cgels_batched = sym!("rocsolver_cgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_float_complex, i32, *const *mut rocblas_float_complex, i32, *mut i32, i32) -> rocblas_status);
++        let zgels_batched = sym!("rocsolver_zgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_double_complex, i32, *const *mut rocblas_double_complex, i32, *mut i32, i32) -> rocblas_status);
++        Ok(Self { _lib: lib, sgels_batched, dgels_batched, cgels_batched, zgels_batched })
++    }
++}
++
++#[cfg(windows)]
++fn rocsolver() -> Result<&'static RocsolverVtable, cublasError_t> {
++    static LOCK: OnceLock<Result<RocsolverVtable, cublasError_t>> = OnceLock::new();
++    LOCK.get_or_init(|| unsafe { RocsolverVtable::new() })
 +        .as_ref()
 +        .map_err(|e| *e)
 +}
@@ -244,7 +310,7 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
  // This is repr(c) because it needs to be compatible with BlasHandle in zluda_blaslt.
  #[repr(C)]
  pub struct Handle {
-@@ -122,6 +227,169 @@ pub(crate) fn get_cudart_version() -> usize {
+@@ -122,6 +293,537 @@ pub(crate) fn get_cudart_version() -> usize {
      todo!()
  }
  
@@ -411,10 +477,378 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
 +#[cfg(windows)]
 +impl_geqrf_batched!(zgeqrf_batched, cuda_types::cublas::cuDoubleComplex, 5);
 +
++
++#[cfg(windows)]
++fn hipsolver_operation(trans: cublasOperation_t) -> Result<i32, cublasError_t> {
++    match trans.0 {
++        0 => Ok(111), // HIPBLAS_OP_N
++        1 => Ok(112), // HIPBLAS_OP_T
++        2 => Ok(113), // HIPBLAS_OP_C
++        _ => Err(cublasError_t::r#NOT_SUPPORTED),
++    }
++}
++
++#[cfg(windows)]
++macro_rules! impl_getrf_batched {
++    ($name:ident, $ty:ty, $buffer_field:ident, $run_field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            n: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            pivots: *mut i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if n < 0 || batch_size < 0 || lda < 1.max(n) {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            if batch_size == 0 || n == 0 {
++                return Ok(());
++            }
++            if a_array.is_null() || info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            let hs = hipsolver()?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array::<$ty>(hs, a_array, batch_size)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut lwork = 0i32;
++            let query_status = (hs.$buffer_field)(
++                solver_handle, n, n, a_ptrs[0].cast(), lda, &mut lwork,
++            );
++            if let Err(e) = cublas_error_from_hipsolver(query_status) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++            if lwork < 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#INTERNAL_ERROR);
++            }
++            let workspace_bytes = (lwork as usize).saturating_mul(mem::size_of::<$ty>());
++            let mut workspace = ptr::null_mut::<::core::ffi::c_void>();
++            if workspace_bytes > 0 && (hs.hip_malloc)(&mut workspace, workspace_bytes) != 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_size as usize {
++                let pivot_ptr = if pivots.is_null() { ptr::null_mut() } else { pivots.add(i * n as usize) };
++                let status = (hs.$run_field)(
++                    solver_handle,
++                    n,
++                    n,
++                    a_ptrs[i].cast(),
++                    lda,
++                    workspace,
++                    pivot_ptr,
++                    info.add(i),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            if !workspace.is_null() && (hs.hip_free)(workspace) != 0 && result.is_ok() {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_getrf_batched!(sgetrf_batched, f32, sgetrf_buffer_size, sgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(dgetrf_batched, f64, dgetrf_buffer_size, dgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(cgetrf_batched, cuda_types::cublas::cuComplex, cgetrf_buffer_size, cgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(zgetrf_batched, cuda_types::cublas::cuDoubleComplex, zgetrf_buffer_size, zgetrf);
++
++#[cfg(windows)]
++macro_rules! impl_getrs_batched {
++    ($name:ident, $ty:ty, $field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            trans: cublasOperation_t,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *const $ty,
++            lda: i32,
++            dev_ipiv: *const i32,
++            b_array: *const *mut $ty,
++            ldb: i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if n < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if nrhs < 0 { *info = -4; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(n) { *info = -6; return Err(cublasError_t::r#INVALID_VALUE); }
++            if ldb < 1.max(n) { *info = -9; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size < 0 { *info = -11; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size == 0 || n == 0 || nrhs == 0 {
++                return Ok(());
++            }
++            if a_array.is_null() || b_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            // cuBLAS permits a null pivot array for non-pivoted LU. hipSOLVER's
++            // GETRS ABI requires pivots, so report that backend gap explicitly.
++            if dev_ipiv.is_null() {
++                return Err(cublasError_t::r#NOT_SUPPORTED);
++            }
++
++            let hs = hipsolver()?;
++            let hip_op = hipsolver_operation(trans)?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            // PyTorch materializes the pointer arrays on the active CUDA stream.
++            // Synchronize before copying only those pointer arrays to host.
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array::<$ty>(hs, a_array as *const *mut $ty, batch_size)?;
++            let b_ptrs = copy_device_pointer_array::<$ty>(hs, b_array, batch_size)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            // cuBLAS GETRS exposes a single HOST info integer. hipSOLVER instead
++            // requires a DEVICE devInfo pointer, so keep a private temporary here.
++            let mut dev_info = ptr::null_mut::<::core::ffi::c_void>();
++            if (hs.hip_malloc)(&mut dev_info, mem::size_of::<i32>()) != 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_size as usize {
++                let pivots = dev_ipiv.add(i * n as usize);
++                let status = (hs.$field)(
++                    solver_handle,
++                    hip_op,
++                    n,
++                    nrhs,
++                    a_ptrs[i].cast(),
++                    lda,
++                    pivots,
++                    b_ptrs[i].cast(),
++                    ldb,
++                    dev_info.cast::<i32>(),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let info_free = (hs.hip_free)(dev_info);
++            if result.is_ok() && info_free != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_getrs_batched!(sgetrs_batched, f32, sgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(dgetrs_batched, f64, dgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(cgetrs_batched, cuda_types::cublas::cuComplex, cgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(zgetrs_batched, cuda_types::cublas::cuDoubleComplex, zgetrs);
++
++#[cfg(windows)]
++macro_rules! impl_gels_batched {
++    ($name:ident, $ty:ty, $roc_ty:ty, $field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            trans: cublasOperation_t,
++            m: i32,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            c_array: *const *mut $ty,
++            ldc: i32,
++            info: *mut i32,
++            dev_info_array: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if m < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if n < 0 { *info = -4; return Err(cublasError_t::r#INVALID_VALUE); }
++            if nrhs < 0 { *info = -5; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(m) { *info = -7; return Err(cublasError_t::r#INVALID_VALUE); }
++            if ldc < 1.max(m.max(n)) { *info = -9; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size < 0 { *info = -12; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size == 0 || m == 0 || n == 0 || nrhs == 0 { return Ok(()); }
++            if a_array.is_null() || c_array.is_null() || dev_info_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            let op = trsm_operation(trans)?;
++            // rocSOLVER's GELS uses conjugate-transpose for complex transposed solves,
++            // while cuBLAS passes CUBLAS_OP_T for real and CUBLAS_OP_C for complex.
++            let status = (rocsolver()?.$field)(
++                handle.rocm_handle,
++                op,
++                m,
++                n,
++                nrhs,
++                a_array.cast::<*mut $roc_ty>(),
++                lda,
++                c_array.cast::<*mut $roc_ty>(),
++                ldc,
++                dev_info_array,
++                batch_size,
++            );
++            status?;
++            Ok(())
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_gels_batched!(sgels_batched, f32, f32, sgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(dgels_batched, f64, f64, dgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(cgels_batched, cuda_types::cublas::cuComplex, rocblas_float_complex, cgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(zgels_batched, cuda_types::cublas::cuDoubleComplex, rocblas_double_complex, zgels_batched);
++
++fn trsm_side(side: cublasSideMode_t) -> Result<rocblas_side, cublasError_t> {
++    match side.0 {
++        0 => Ok(rocblas_side::rocblas_side_left),
++        1 => Ok(rocblas_side::rocblas_side_right),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++fn trsm_fill(uplo: cublasFillMode_t) -> Result<rocblas_fill, cublasError_t> {
++    match uplo.0 {
++        0 => Ok(rocblas_fill::rocblas_fill_lower),
++        1 => Ok(rocblas_fill::rocblas_fill_upper),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++fn trsm_operation(trans: cublasOperation_t) -> Result<rocblas_operation, cublasError_t> {
++    match trans.0 {
++        0 => Ok(rocblas_operation::rocblas_operation_none),
++        1 => Ok(rocblas_operation::rocblas_operation_transpose),
++        2 => Ok(rocblas_operation::rocblas_operation_conjugate_transpose),
++        _ => Err(cublasError_t::r#NOT_SUPPORTED),
++    }
++}
++
++fn trsm_diagonal(diag: cublasDiagType_t) -> Result<rocblas_diagonal, cublasError_t> {
++    match diag.0 {
++        0 => Ok(rocblas_diagonal::rocblas_diagonal_non_unit),
++        1 => Ok(rocblas_diagonal::rocblas_diagonal_unit),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++macro_rules! impl_trsm_batched {
++    ($name:ident, $ty:ty, $roc_ty:ty, $roc_fn:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            side: cublasSideMode_t,
++            uplo: cublasFillMode_t,
++            trans: cublasOperation_t,
++            diag: cublasDiagType_t,
++            m: i32,
++            n: i32,
++            alpha: *const $ty,
++            a: *const *const $ty,
++            lda: i32,
++            b: *const *mut $ty,
++            ldb: i32,
++            batch_count: i32,
++        ) -> cublasStatus_t {
++            if batch_count < 0 || m < 0 || n < 0 || alpha.is_null() || a.is_null() || b.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            if batch_count == 0 || m == 0 || n == 0 {
++                return Ok(());
++            }
++            let side = trsm_side(side)?;
++            let uplo = trsm_fill(uplo)?;
++            let trans = trsm_operation(trans)?;
++            let diag = trsm_diagonal(diag)?;
++            rocblas()?.$roc_fn(
++                handle.rocm_handle,
++                side,
++                uplo,
++                trans,
++                diag,
++                m,
++                n,
++                alpha.cast::<$roc_ty>(),
++                a.cast::<*const $roc_ty>(),
++                lda,
++                b.cast::<*mut $roc_ty>(),
++                ldb,
++                batch_count,
++            )?;
++            Ok(())
++        }
++    };
++}
++
++impl_trsm_batched!(strsm_batched, f32, f32, rocblas_strsm_batched);
++impl_trsm_batched!(dtrsm_batched, f64, f64, rocblas_dtrsm_batched);
++impl_trsm_batched!(ctrsm_batched, cuda_types::cublas::cuComplex, rocblas_float_complex, rocblas_ctrsm_batched);
++impl_trsm_batched!(ztrsm_batched, cuda_types::cublas::cuDoubleComplex, rocblas_double_complex, rocblas_ztrsm_batched);
++
  pub(crate) fn set_math_mode(handle: &Handle, mode: rocblas_math_mode) -> cublasStatus_t {
      unsafe { rocblas()?.rocblas_set_math_mode(handle.rocm_handle, mode) }?;
      Ok(())
-@@ -172,6 +440,54 @@ pub(crate) fn sgemm_strided_batched(
+@@ -172,6 +874,54 @@ pub(crate) fn sgemm_strided_batched(
      Ok(())
  }
  
@@ -469,7 +903,7 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
  pub(crate) fn sgemm_v2(
      handle: &Handle,
      transa: rocblas_operation,
-@@ -209,6 +525,82 @@ pub(crate) fn sgemm_v2(
+@@ -209,6 +959,82 @@ pub(crate) fn sgemm_v2(
      Ok(())
  }
  
@@ -553,7 +987,7 @@ index 671e24b8f4c3f2dffd4493fbe22dd20dded24240..8ce43295cfebab83c1c49155bf552d90
      zluda_common::drop_checked::<Handle>(handle)
  }
 diff --git a/zluda_blas/src/lib.rs b/zluda_blas/src/lib.rs
-index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269c85c3a9f 100644
+index f7b190d..f7a4fa2 100644
 --- a/zluda_blas/src/lib.rs
 +++ b/zluda_blas/src/lib.rs
 @@ -30,6 +30,10 @@ macro_rules! implemented {
@@ -567,12 +1001,121 @@ index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269
  macro_rules! implemented_and_always_succeeds {
      ($($abi:literal fn $fn_name:ident( $($arg_id:ident : $arg_type:ty),* ) -> $ret_type:ty;)*) => {
          $(
-@@ -43,6 +47,151 @@ macro_rules! implemented_and_always_succeeds {
+@@ -43,6 +47,260 @@ macro_rules! implemented_and_always_succeeds {
      };
  }
  
 +
 +
++
++
++
++macro_rules! manual_gels_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            m: i32,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            c_array: *const *mut $ty,
++            ldc: i32,
++            info: *mut i32,
++            dev_info_array: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, trans, m, n, nrhs, a_array, lda, c_array, ldc, info, dev_info_array, batch_size)
++        }
++    };
++}
++
++manual_gels_batched!(cublasSgelsBatched, sgels_batched, f32);
++manual_gels_batched!(cublasDgelsBatched, dgels_batched, f64);
++manual_gels_batched!(cublasCgelsBatched, cgels_batched, cuda_types::cublas::cuComplex);
++manual_gels_batched!(cublasZgelsBatched, zgels_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_getrf_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            n: i32,
++            a: *const *mut $ty,
++            lda: i32,
++            pivots: *mut i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, n, a, lda, pivots, info, batch_size)
++        }
++    };
++}
++
++manual_getrf_batched!(cublasSgetrfBatched, sgetrf_batched, f32);
++manual_getrf_batched!(cublasDgetrfBatched, dgetrf_batched, f64);
++manual_getrf_batched!(cublasCgetrfBatched, cgetrf_batched, cuda_types::cublas::cuComplex);
++manual_getrf_batched!(cublasZgetrfBatched, zgetrf_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_getrs_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *const $ty,
++            lda: i32,
++            dev_ipiv: *const i32,
++            b_array: *const *mut $ty,
++            ldb: i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, trans, n, nrhs, a_array, lda, dev_ipiv, b_array, ldb, info, batch_size)
++        }
++    };
++}
++
++manual_getrs_batched!(cublasSgetrsBatched, sgetrs_batched, f32);
++manual_getrs_batched!(cublasDgetrsBatched, dgetrs_batched, f64);
++manual_getrs_batched!(cublasCgetrsBatched, cgetrs_batched, cuda_types::cublas::cuComplex);
++manual_getrs_batched!(cublasZgetrsBatched, zgetrs_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_trsm_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            side: cuda_types::cublas::cublasSideMode_t,
++            uplo: cuda_types::cublas::cublasFillMode_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            diag: cuda_types::cublas::cublasDiagType_t,
++            m: i32,
++            n: i32,
++            alpha: *const $ty,
++            a: *const *const $ty,
++            lda: i32,
++            b: *const *mut $ty,
++            ldb: i32,
++            batch_count: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, side, uplo, trans, diag, m, n, alpha, a, lda, b, ldb, batch_count)
++        }
++    };
++}
++
++manual_trsm_batched!(cublasStrsmBatched, strsm_batched, f32);
++manual_trsm_batched!(cublasDtrsmBatched, dtrsm_batched, f64);
++manual_trsm_batched!(cublasCtrsmBatched, ctrsm_batched, cuda_types::cublas::cuComplex);
++manual_trsm_batched!(cublasZtrsmBatched, ztrsm_batched, cuda_types::cublas::cuDoubleComplex);
 +
 +#[cfg_attr(not(test), no_mangle)]
 +pub unsafe extern "system" fn cublasDgemmStridedBatched(
@@ -719,12 +1262,28 @@ index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269
  cuda_macros::cublas_function_declarations!(
      unimplemented,
      implemented
-@@ -63,6 +212,19 @@ cuda_macros::cublas_function_declarations!(
+@@ -63,6 +321,35 @@ cuda_macros::cublas_function_declarations!(
              cublasSgemmStridedBatched,
              cublasSgemm_v2,
          ],
 +    manual_implementation
 +        <= [
++            cublasSgelsBatched,
++            cublasDgelsBatched,
++            cublasCgelsBatched,
++            cublasZgelsBatched,
++            cublasSgetrfBatched,
++            cublasDgetrfBatched,
++            cublasCgetrfBatched,
++            cublasZgetrfBatched,
++            cublasSgetrsBatched,
++            cublasDgetrsBatched,
++            cublasCgetrsBatched,
++            cublasZgetrsBatched,
++            cublasStrsmBatched,
++            cublasDtrsmBatched,
++            cublasCtrsmBatched,
++            cublasZtrsmBatched,
 +            cublasDgemm_v2,
 +            cublasCgemm_v2,
 +            cublasZgemm_v2,
@@ -739,7 +1298,7 @@ index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269
      implemented_and_always_succeeds
          <= [
              cublasGetStatusName,
-@@ -146,14 +308,21 @@ cuda_macros::rocblas_function_declarations!(
+@@ -146,14 +433,25 @@ cuda_macros::rocblas_function_declarations!(
              rocblas_gemm_ex,
              rocblas_gemm_strided_batched_ex,
              rocblas_get_math_mode,
@@ -754,6 +1313,10 @@ index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269
              rocblas_set_stream,
              rocblas_set_vector,
              rocblas_set_workspace,
++            rocblas_strsm_batched,
++            rocblas_dtrsm_batched,
++            rocblas_ctrsm_batched,
++            rocblas_ztrsm_batched,
              rocblas_sgemm_strided_batched,
 +            rocblas_dgemm_strided_batched,
 +            rocblas_cgemm_strided_batched,
@@ -762,7 +1325,7 @@ index f7b190d270d76e66455f865c38f948e1b54540e3..dfcc186964b026779d6460dce1494269
          ]
  );
 diff --git a/zluda_common/src/lib.rs b/zluda_common/src/lib.rs
-index af41f7a8cfd9702d15d352caba5347801e38f599..803657781b87d516673c16ee7e471dcbc9ae3dff 100644
+index af41f7a..8036577 100644
 --- a/zluda_common/src/lib.rs
 +++ b/zluda_common/src/lib.rs
 @@ -281,6 +281,7 @@ from_cuda_transmute!(
@@ -774,7 +1337,7 @@ index af41f7a8cfd9702d15d352caba5347801e38f599..803657781b87d516673c16ee7e471dcb
      cusparseDnMatDescr_t => rocsparse_dnmat_descr,
      cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
 diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
-index 6b672fa7567c2dea2b6cafa3ec6134cbe7c3ef29..8b965c2ba998dd30ea15a53f4ea3263f70730bc9 100644
+index 6b672fa..8b965c2 100644
 --- a/zluda_fft/Cargo.toml
 +++ b/zluda_fft/Cargo.toml
 @@ -10,6 +10,7 @@ name = "cufft"
@@ -797,7 +1360,7 @@ index 6b672fa7567c2dea2b6cafa3ec6134cbe7c3ef29..8b965c2ba998dd30ea15a53f4ea3263f
 +embed-resource = "3.0"
 diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..2b586473d1c72c3f4a987fac28b6775d9bcfa252
+index 0000000..2b58647
 --- /dev/null
 +++ b/zluda_fft/build.rs
 @@ -0,0 +1,10 @@
@@ -812,7 +1375,7 @@ index 0000000000000000000000000000000000000000..2b586473d1c72c3f4a987fac28b6775d
 +#[cfg(not(windows))]
 +fn main() {}
 diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
-index 94cc02beffac15aab7e40bfcb565902637c1cb71..a9c0bc95de1e410b7456b30b66e0711b92919c04 100644
+index 94cc02b..a9c0bc9 100644
 --- a/zluda_fft/src/impl.rs
 +++ b/zluda_fft/src/impl.rs
 @@ -1,4 +1,12 @@
@@ -1303,7 +1866,7 @@ index 94cc02beffac15aab7e40bfcb565902637c1cb71..a9c0bc95de1e410b7456b30b66e0711b
 +    from_hipfft(f(type_.0 as c_int, value))
  }
 diff --git a/zluda_fft/src/lib.rs b/zluda_fft/src/lib.rs
-index 9de500c0ca5b934b56e26895bb9c26059ba68b3b..aefce620c6c19ad33883f4c05bd21c681aecf39e 100644
+index 9de500c..aefce62 100644
 --- a/zluda_fft/src/lib.rs
 +++ b/zluda_fft/src/lib.rs
 @@ -14,4 +14,57 @@ macro_rules! unimplemented {
@@ -1366,7 +1929,7 @@ index 9de500c0ca5b934b56e26895bb9c26059ba68b3b..aefce620c6c19ad33883f4c05bd21c68
 +    ]
 +);
 diff --git a/zluda_ml/Cargo.toml b/zluda_ml/Cargo.toml
-index 592d87cd0ea79f78305682bfee5b4ef59caf6788..acbf0718489a3bd3b19edc462c92290d6294321f 100644
+index 592d87c..acbf071 100644
 --- a/zluda_ml/Cargo.toml
 +++ b/zluda_ml/Cargo.toml
 @@ -21,3 +21,6 @@ linux_symlinks = [
@@ -1377,7 +1940,7 @@ index 592d87cd0ea79f78305682bfee5b4ef59caf6788..acbf0718489a3bd3b19edc462c92290d
 +[target.'cfg(windows)'.dependencies]
 +libloading = "0.8"
 diff --git a/zluda_ml/src/impl_win.rs b/zluda_ml/src/impl_win.rs
-index 99c93cc24a9ada4e241768d368462ba4303f71b6..63981f7fc8a9371a41a01c645abc8fdb06b6d34e 100644
+index 99c93cc..63981f7 100644
 --- a/zluda_ml/src/impl_win.rs
 +++ b/zluda_ml/src/impl_win.rs
 @@ -1,77 +1,227 @@
@@ -1646,7 +2209,7 @@ index 99c93cc24a9ada4e241768d368462ba4303f71b6..63981f7fc8a9371a41a01c645abc8fdb
 +    nvmlReturn_t::SUCCESS
  }
 diff --git a/zluda_sparse/Cargo.toml b/zluda_sparse/Cargo.toml
-index a6614c907b516d1150de8aea54069a0bad6d5858..44ff9779ba79f35d0a2ad498e5cbc8b1a8e7aa02 100644
+index a6614c9..44ff977 100644
 --- a/zluda_sparse/Cargo.toml
 +++ b/zluda_sparse/Cargo.toml
 @@ -11,6 +11,7 @@ name = "cusparse"
@@ -1663,7 +2226,7 @@ index a6614c907b516d1150de8aea54069a0bad6d5858..44ff9779ba79f35d0a2ad498e5cbc8b1
  embed-resource = "3.0"
 -
 diff --git a/zluda_sparse/src/impl.rs b/zluda_sparse/src/impl.rs
-index ead861435b25700df4c325090d35e0e3a79ec074..6bf4856fda1ce2b3998c9be0244441f99b275bff 100644
+index ead8614..6bf4856 100644
 --- a/zluda_sparse/src/impl.rs
 +++ b/zluda_sparse/src/impl.rs
 @@ -1,4 +1,5 @@
@@ -1728,7 +2291,7 @@ index ead861435b25700df4c325090d35e0e3a79ec074..6bf4856fda1ce2b3998c9be0244441f9
  }
  
 diff --git a/zluda_sparse/src/lib.rs b/zluda_sparse/src/lib.rs
-index 6ae899d9039eb8aaf83d3ec46243b6ba81c024dc..ddb016646dd6ad8ff2a5b14199832e0a9f4bf611 100644
+index 6ae899d..ddb0166 100644
 --- a/zluda_sparse/src/lib.rs
 +++ b/zluda_sparse/src/lib.rs
 @@ -75,6 +75,9 @@ cuda_macros::cusparse_function_declarations!(
@@ -1758,7 +2321,7 @@ index 6ae899d9039eb8aaf83d3ec46243b6ba81c024dc..ddb016646dd6ad8ff2a5b14199832e0a
          ]
  );
 diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
-index 1a293a94d2208c9477463303ccd984c37c08ff1e..a9f714d1f242c1e1e22c8f0f319f294c12304cf8 100644
+index 1a293a9..a9f714d 100644
 --- a/zluda_windows/src/lib.rs
 +++ b/zluda_windows/src/lib.rs
 @@ -10,6 +10,15 @@ use std::{

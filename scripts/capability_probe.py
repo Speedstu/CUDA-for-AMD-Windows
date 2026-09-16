@@ -32,6 +32,12 @@ TESTS = (
     "linalg_solve",
     "linalg_cholesky",
     "linalg_qr",
+    "linalg_inv",
+    "linalg_lstsq",
+    "linalg_svd",
+    "linalg_pinv",
+    "linalg_eigh",
+    "linalg_eigvalsh",
     "softmax",
     "layernorm",
     "gather_scatter",
@@ -554,6 +560,173 @@ def run_linalg_qr(torch):
     return {"ok": all_ok, "dtypes": results}
 
 
+
+def _linalg_rand(torch, shape, dtype):
+    if dtype.is_complex:
+        base = torch.float64 if dtype == torch.complex128 else torch.float32
+        return torch.complex(
+            torch.randn(*shape, dtype=base),
+            torch.randn(*shape, dtype=base),
+        ).to(dtype)
+    return torch.randn(*shape, dtype=dtype)
+
+
+def run_linalg_inv(torch):
+    torch.manual_seed(118)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    specs = [
+        ("fp32", torch.float32, 3e-4),
+        ("fp64", torch.float64, 3e-9),
+        ("complex64", torch.complex64, 4e-4),
+        ("complex128", torch.complex128, 4e-9),
+    ]
+    results = {}
+    all_ok = True
+    for name, dtype, tol in specs:
+        rows = []
+        for shape in ((10, 10), (3, 10, 10)):
+            x = _linalg_rand(torch, shape, dtype)
+            adj = x.mH if dtype.is_complex else x.transpose(-2, -1)
+            eye = torch.eye(10, dtype=dtype).expand(*shape[:-2], 10, 10)
+            a = x @ adj + eye * 2
+            ref = torch.linalg.inv(a)
+            got = torch.linalg.inv(a.cuda())
+            sync(torch)
+            max_abs = float((got.cpu() - ref).abs().max())
+            ident = torch.eye(10, dtype=dtype, device="cuda").expand(*shape[:-2], 10, 10)
+            residual = float((got @ a.cuda() - ident).abs().max().cpu())
+            ok = max_abs <= tol and residual <= tol * 5
+            rows.append({"shape": list(shape), "max_abs": max_abs, "residual": residual, "ok": ok})
+            all_ok = all_ok and ok
+        results[name] = {"cases": rows, "ok": all(r["ok"] for r in rows)}
+    return {"ok": all_ok, "dtypes": results}
+
+
+def run_linalg_lstsq(torch):
+    torch.manual_seed(119)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    specs = [
+        ("fp32", torch.float32, 4e-4),
+        ("fp64", torch.float64, 4e-9),
+        ("complex64", torch.complex64, 5e-4),
+        ("complex128", torch.complex128, 5e-9),
+    ]
+    results = {}
+    all_ok = True
+    for name, dtype, tol in specs:
+        rows = []
+        for a_shape, b_shape in (((14, 8), (14, 3)), ((3, 14, 8), (3, 14, 3))):
+            a = _linalg_rand(torch, a_shape, dtype)
+            b = _linalg_rand(torch, b_shape, dtype)
+            eye = torch.eye(8, dtype=dtype).expand(*a_shape[:-2], 8, 8)
+            a = a.clone()
+            a[..., :8, :] += eye * 2
+            ref = torch.linalg.lstsq(a, b).solution
+            got = torch.linalg.lstsq(a.cuda(), b.cuda()).solution
+            sync(torch)
+            max_abs = float((got.cpu() - ref).abs().max())
+            gpu_residual = float(torch.linalg.vector_norm(a.cuda() @ got - b.cuda()).cpu())
+            cpu_residual = float(torch.linalg.vector_norm(a @ ref - b))
+            residual_delta = abs(gpu_residual - cpu_residual)
+            ok = max_abs <= tol * 15 and residual_delta <= max(tol * 100, abs(cpu_residual) * 5e-4)
+            rows.append({
+                "a_shape": list(a_shape),
+                "b_shape": list(b_shape),
+                "max_abs": max_abs,
+                "gpu_residual": gpu_residual,
+                "cpu_residual": cpu_residual,
+                "residual_delta": residual_delta,
+                "ok": ok,
+            })
+            all_ok = all_ok and ok
+        results[name] = {"cases": rows, "ok": all(r["ok"] for r in rows)}
+    return {"ok": all_ok, "dtypes": results}
+
+
+def run_linalg_svd(torch):
+    torch.manual_seed(120)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    cases = []
+    for label, shape in (("batched_small", (2, 7, 5)), ("single_large", (64, 40))):
+        x = torch.randn(*shape, dtype=torch.float32)
+        u, s, vh = torch.linalg.svd(x.cuda(), full_matrices=False)
+        sync(torch)
+        rec = (u @ torch.diag_embed(s) @ vh).cpu()
+        max_abs = float((rec - x).abs().max())
+        ok = max_abs <= 5e-4
+        cases.append({"case": label, "shape": list(shape), "max_abs": max_abs, "ok": ok})
+    return {"ok": all(c["ok"] for c in cases), "cases": cases}
+
+
+def run_linalg_pinv(torch):
+    torch.manual_seed(121)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    a = torch.randn(2, 9, 5, dtype=torch.float32)
+    ref = torch.linalg.pinv(a)
+    got = torch.linalg.pinv(a.cuda())
+    sync(torch)
+    max_abs = float((got.cpu() - ref).abs().max())
+    residual = float((a.cuda() @ got @ a.cuda() - a.cuda()).abs().max().cpu())
+    ok = max_abs <= 8e-4 and residual <= 2e-3
+    return {"ok": ok, "shape": list(a.shape), "max_abs": max_abs, "residual": residual}
+
+
+def run_linalg_eigh(torch):
+    torch.manual_seed(122)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    cases = []
+    for name, dtype, shape, tol in (
+        ("fp32_single", torch.float32, (8, 8), 3e-3),
+        ("complex128_batch", torch.complex128, (2, 8, 8), 2e-9),
+    ):
+        z = _linalg_rand(torch, shape, dtype)
+        a = (z + z.mH) / 2
+        w, v = torch.linalg.eigh(a.cuda())
+        sync(torch)
+        lam = w.to(dtype).unsqueeze(-2)
+        residual = float((a.cuda() @ v - v * lam).abs().max().cpu())
+        ok = residual <= tol
+        cases.append({"case": name, "shape": list(shape), "residual": residual, "ok": ok})
+    return {"ok": all(c["ok"] for c in cases), "cases": cases}
+
+
+def run_linalg_eigvalsh(torch):
+    torch.manual_seed(123)
+    try:
+        torch.backends.cuda.preferred_linalg_library("cusolver")
+    except Exception:
+        pass
+    cases = []
+    for name, dtype, shape, tol in (
+        ("fp32_batch", torch.float32, (2, 8, 8), 3e-3),
+        ("complex128_single", torch.complex128, (8, 8), 2e-9),
+    ):
+        z = _linalg_rand(torch, shape, dtype)
+        a = (z + z.mH) / 2
+        ref = torch.linalg.eigvalsh(a)
+        got = torch.linalg.eigvalsh(a.cuda())
+        sync(torch)
+        max_abs = float((got.cpu() - ref).abs().max())
+        ok = max_abs <= tol
+        cases.append({"case": name, "shape": list(shape), "max_abs": max_abs, "ok": ok})
+    return {"ok": all(c["ok"] for c in cases), "cases": cases}
+
+
 def run_softmax(torch):
     import torch.nn.functional as F
     torch.manual_seed(107)
@@ -749,6 +922,12 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "linalg_solve": run_linalg_solve,
     "linalg_cholesky": run_linalg_cholesky,
     "linalg_qr": run_linalg_qr,
+    "linalg_inv": run_linalg_inv,
+    "linalg_lstsq": run_linalg_lstsq,
+    "linalg_svd": run_linalg_svd,
+    "linalg_pinv": run_linalg_pinv,
+    "linalg_eigh": run_linalg_eigh,
+    "linalg_eigvalsh": run_linalg_eigvalsh,
     "softmax": run_softmax,
     "layernorm": run_layernorm,
     "gather_scatter": run_gather_scatter,

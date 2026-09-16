@@ -105,7 +105,7 @@ This is the workload-level gate for the dense/GEMM PPO profile. Synthetic extend
 The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` with TheRock 7.14.1 and PyTorch `2.0.1+cu118`, produced the following isolated capability result:
 
 ```text
-25/27 PASS
+31/33 PASS
 2/27 UNSUPPORTED (safe refusal)
 0 incorrect
 0 timeouts
@@ -116,9 +116,9 @@ The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` wit
 
 The two safe refusals are `sdpa_flash` and `sdpa_mem_efficient`. Diagnosis showed that their low-architecture PTX fallback modules do not contain the real fused compute path: memory-efficient attention is a diagnostic stub, while Flash FMHA retains surrounding control/softmax plumbing but its score accumulators are never populated because the fused GEMM lives in NVIDIA cubins. The patch now returns `NO_BINARY_FOR_GPU` for those specific fallback modules instead of allowing a silent incorrect tensor. `sdpa_math` remains numerically correct.
 
-With the optional reversible cuSOLVER → hipSOLVER proxy staged, both `linalg_cholesky` and `linalg_qr` pass. The tested proxy preserves **940/940 exports** and routes **75 entry points** to hipSOLVER, including LU, legacy/generic-X Cholesky, and legacy/generic-X QR paths. QR validation covers FP32, FP64, complex64 and complex128, single and batched tall/wide/square matrices, `torch.linalg.qr`, `torch.geqrf` + `orgqr`/`ungqr`, and `ormqr`/`unmqr`; a separate multi-stream regression also passes on two reused non-default streams. The ZLUDA BLAS bridge adds FP64/complex GEMM and strided-batched GEMM plus cuBLAS batched GEQRF → hipSOLVER generic-X. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
+With the optional reversible cuSOLVER → hipSOLVER proxy staged, both `linalg_cholesky` and `linalg_qr` pass. The tested proxy preserves **940/940 exports** and routes **131 entry points** to hipSOLVER, including LU, legacy/generic-X Cholesky, legacy/generic-X QR, Jacobi SVD, symmetric/Hermitian eigensolvers, and generic-X `Xsyevd` paths. QR validation covers FP32, FP64, complex64 and complex128, single and batched tall/wide/square matrices, `torch.linalg.qr`, `torch.geqrf` + `orgqr`/`ungqr`, and `ormqr`/`unmqr`; a separate multi-stream regression also passes on two reused non-default streams. The ZLUDA BLAS bridge adds FP64/complex GEMM and strided-batched GEMM plus batched TRSM/GELS/LU/GEQRF bridges to AMD backends. A dedicated isolated linalg regression currently passes `solve`, Cholesky, QR, `inv`, `lstsq`, SVD, `pinv`, `eigh`, and `eigvalsh` (9/9) without hangs, crashes, or numerical failures. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
 
-The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **72,135 SPS** and **70,822 SPS**, for a **71,478.5 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the clean-run deltas were **+3.07%**, **+16.94%**, and **+3.74%** respectively.
+The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **72,895 SPS** and **71,641 SPS**, for a **72,268 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the clean-run deltas were **+2.50%**, **+0.58%**, and **+0.32%** respectively.
 ## Historical performance
 
 Older tuned runs of the same ZLUDA/LibTorch family retained approximately **70k-109k overall steps/s**. Those numbers are historical performance evidence and should not be confused with the short validation run above.

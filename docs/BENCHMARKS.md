@@ -53,11 +53,11 @@ Latest post-guard release-candidate validation using **4 paired repetitions per 
 
 | SGEMM | Direct median wall time | ZLUDA median wall time | Paired median overhead | Paired throughput ratio |
 | --- | ---: | ---: | ---: | ---: |
-| 1024 × 1024 | 0.4414 ms | 0.4539 ms | +3.07% | 97.0% |
-| 2048 × 2048 | 3.2123 ms | 3.7923 ms | +16.94% | 85.5% |
-| 4096 × 4096 | 17.8636 ms | 19.2456 ms | +3.74% | 96.4% |
+| 1024 × 1024 | 0.4400 ms | 0.4485 ms | +2.50% | 97.6% |
+| 2048 × 2048 | 3.4822 ms | 3.2653 ms | +0.58% | 99.4% |
+| 4096 × 4096 | 17.5410 ms | 17.5600 ms | +0.32% | 99.7% |
 
-The final clean-patch run keeps the translation path within the repository's **20% paired-median overhead budget** at every tested size. The 2048² case is the largest paired-median delta at **+16.94%** and retains about **85.5%** of direct rocBLAS throughput; 1024² and 4096² remain within about four percent. Individual samples still move with clocks, thermals and kernel selection, which is why the runner alternates execution order, keeps every pair, and applies its regression threshold to the paired median rather than a single sample.
+The final clean-patch run keeps the translation path within the repository's **20% paired-median overhead budget** at every tested size. The largest paired-median delta is **+2.50%** at 1024²; 2048² and 4096² are within one percent in this run. Individual samples still move with clocks, thermals and kernel selection, which is why the runner alternates execution order, keeps every pair, and applies its regression threshold to the paired median rather than a single sample.
 
 These results measure the compatibility path against an AMD-native backend on the same physical GPU; they are not an AMD-vs-NVIDIA comparison.
 
@@ -65,7 +65,7 @@ These results measure the compatibility path against an AMD-native backend on th
 
 ZLUDA's persistent compute cache matters strongly for PyTorch training. During diagnosis, the first uncached `clamp.backward()` took about **50 s** and an uncached `minimum.backward()` about **96 s**. Once compiled, the same kernel families dropped to roughly millisecond/sub-millisecond latency.
 
-A real VelocityRL test at `512 agents × rollout 16` on the final clean-patch runtime produced **512 SPS** for a non-representative cold first update, followed by **72,135 SPS** and **70,822 SPS** on updates 2 and 3. The report records a **71,478.5 SPS median steady-state**. The cold update is intentionally separated because its value moves dramatically with first-use compilation/cache state.
+A real VelocityRL test at `512 agents × rollout 16` on the final clean-patch runtime produced **467 SPS** for a non-representative cold first update, followed by **72,895 SPS** and **71,641 SPS** on updates 2 and 3. The report records a **72,268 SPS median steady-state**. The cold update is intentionally separated because its value moves dramatically with first-use compilation/cache state.
 
 The helper below builds the local cache without shipping machine-specific compiled artifacts:
 
