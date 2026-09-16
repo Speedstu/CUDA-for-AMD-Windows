@@ -83,33 +83,61 @@ function Invoke-Probe([string]$Name) {
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
     [void]$p.Start()
+    # Drain redirected pipes while the probe runs. Waiting until process exit
+    # can deadlock a noisy CUDA kernel once the Windows pipe buffer fills.
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 100 }
     $timedOut = -not $p.HasExited
     if ($timedOut) { Stop-Tree $p; try { $p.WaitForExit() } catch {} }
-    $stdout = $p.StandardOutput.ReadToEnd()
-    $stderr = $p.StandardError.ReadToEnd()
+    try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { $stdout = '' }
+    try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = '' }
     $parsed = $null
-    $lines = @($stdout -split "`r?`n" | Where-Object { $_.Trim() })
-    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    # Prefer the marked stderr copy so device-side printf cannot interleave
+    # with the probe's machine-readable JSON.
+    $markerLines = @($stderr -split "`r?`n" | Where-Object { $_ -like 'CUDAAMD_RESULT:*' })
+    for ($i = $markerLines.Count - 1; $i -ge 0; $i--) {
         try {
-            $candidate = $lines[$i] | ConvertFrom-Json -ErrorAction Stop
+            $json = $markerLines[$i].Substring('CUDAAMD_RESULT:'.Length)
+            $candidate = $json | ConvertFrom-Json -ErrorAction Stop
             if ($candidate.schema -eq 1 -and $candidate.test -eq $Name) { $parsed = $candidate; break }
         } catch {}
+    }
+    if (-not $parsed) {
+        $lines = @($stdout -split "`r?`n" | Where-Object { $_.Trim() })
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            try {
+                $candidate = $lines[$i] | ConvertFrom-Json -ErrorAction Stop
+                if ($candidate.schema -eq 1 -and $candidate.test -eq $Name) { $parsed = $candidate; break }
+            } catch {}
+        }
     }
     # Some failing CUDA wrappers emit a useful result and then hang or crash
     # during process teardown. Preserve the parsed capability result, but do
     # not count a numerically-correct result as a clean PASS unless the child
     # process also exits normally.
     $exitCode = if ($timedOut) { $null } else { $p.ExitCode }
-    $abnormalExit = [bool](-not $timedOut -and $null -ne $exitCode -and $exitCode -ne 0)
     $parsedStatus = if ($parsed) { [string]$parsed.status } else { $null }
-    $status = if ($abnormalExit -and $parsedStatus -eq 'pass') {
+    $expectedExit = switch ($parsedStatus) {
+        'pass'        { 0 }
+        'incorrect'   { 2 }
+        'error'       { 2 }
+        'unsupported' { 3 }
+        'unavailable' { 4 }
+        default       { $null }
+    }
+    $unexpectedExit = [bool](
+        -not $timedOut -and $parsed -and $null -ne $expectedExit -and $exitCode -ne $expectedExit
+    )
+    $status = if ($timedOut -and $parsed) {
+        'hang_after_result'
+    } elseif ($timedOut) {
+        'timeout'
+    } elseif ($unexpectedExit) {
         'crash_after_result'
     } elseif ($parsed) {
         $parsedStatus
-    } elseif ($timedOut) {
-        'timeout'
     } else {
         'error'
     }
@@ -120,7 +148,7 @@ function Invoke-Probe([string]$Name) {
         elapsed_ms = [math]::Round($sw.Elapsed.TotalMilliseconds, 1)
         timed_out = [bool]$timedOut
         process_hung_after_result = [bool]($timedOut -and $parsed)
-        process_crashed_after_result = [bool]($abnormalExit -and $parsed)
+        process_crashed_after_result = [bool]$unexpectedExit
         process_exit = $exitCode
         result = $parsed
         stdout = $stdout.TrimEnd()
@@ -147,6 +175,7 @@ foreach ($name in $Tests) {
         'unsupported' { Write-Host ' UNSUPPORTED' -ForegroundColor Yellow }
         'incorrect'   { Write-Host ' INCORRECT' -ForegroundColor Red }
         'timeout'            { Write-Host ' TIMEOUT' -ForegroundColor Red }
+        'hang_after_result'  { Write-Host ' HANG_AFTER_RESULT' -ForegroundColor Red }
         'crash_after_result' { Write-Host ' CRASH_AFTER_RESULT' -ForegroundColor Red }
         'unavailable'        { Write-Host ' UNAVAILABLE' -ForegroundColor Yellow }
         default              { Write-Host (" {0}" -f $entry.status.ToUpperInvariant()) -ForegroundColor Red }
@@ -159,7 +188,7 @@ $incorrect = @($results | Where-Object status -eq 'incorrect')
 $timeouts = @($results | Where-Object status -eq 'timeout')
 $processHangs = @($results | Where-Object { $_.timed_out })
 $processCrashes = @($results | Where-Object { $_.process_crashed_after_result })
-$errors = @($results | Where-Object { $_.status -in @('error','crash_after_result') })
+$errors = @($results | Where-Object { $_.status -in @('error','hang_after_result','crash_after_result') })
 $total = $results.Count
 $score = if ($total) { [math]::Round(100.0 * $passed.Count / $total, 1) } else { 0.0 }
 

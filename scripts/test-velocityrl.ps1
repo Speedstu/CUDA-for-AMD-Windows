@@ -99,7 +99,12 @@ $psi.CreateNoWindow = $true
 Set-ProcessEnvironment $psi 'HIP_PATH' $hip
 Set-ProcessEnvironment $psi 'ZLUDA_CC' $(if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' })
 Set-ProcessEnvironment $psi 'ROCBLAS_TENSILE_LIBPATH' (Join-Path $hip 'bin\rocblas\library')
-Set-ProcessEnvironment $psi 'HIPBLASLT_TENSILE_LIBPATH' (Join-Path $hip 'bin\hipblaslt\library')
+$hipblasltLib = Join-Path $hip 'bin\hipblaslt\library'
+if ($config.gpu -and $config.gpu.arch) {
+    $archLib = Join-Path $hipblasltLib ([string]$config.gpu.arch)
+    if (Test-Path $archLib) { $hipblasltLib = $archLib }
+}
+if (Test-Path $hipblasltLib) { Set-ProcessEnvironment $psi 'HIPBLASLT_TENSILE_LIBPATH' $hipblasltLib }
 Set-ProcessEnvironment $psi 'PATH' "$hip\bin;$zluda;$env:PATH"
 Set-ProcessEnvironment $psi 'PYTHONPATH' $VelocityRoot
 if ($config.torch_allow_tf32_cublas_override) {
@@ -115,6 +120,10 @@ Write-Host "Run dir : $runDir"
 $p = New-Object System.Diagnostics.Process
 $p.StartInfo = $psi
 [void]$p.Start()
+# Drain training logs continuously so a verbose backend cannot fill a pipe and
+# turn a real failure into a timeout.
+$stdoutTask = $p.StandardOutput.ReadToEndAsync()
+$stderrTask = $p.StandardError.ReadToEndAsync()
 $sw = [Diagnostics.Stopwatch]::StartNew()
 while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 250 }
 $timedOut = -not $p.HasExited
@@ -122,8 +131,8 @@ if ($timedOut) {
     Stop-ProcessTree $p
     try { $p.WaitForExit() } catch {}
 }
-$stdout = $p.StandardOutput.ReadToEnd()
-$stderr = $p.StandardError.ReadToEnd()
+try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { $stdout = '' }
+try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = '' }
 if ($stdout) { Write-Host $stdout.TrimEnd() }
 if ($stderr) { Write-Warning $stderr.TrimEnd() }
 
@@ -145,8 +154,22 @@ if ($status) {
 }
 $passed = (-not $timedOut) -and ($exitCode -eq 0) -and $metricsOk -and (Test-Path $latestPath)
 
+$spsSamples = @()
+foreach ($line in ($stdout -split "`r?`n")) {
+    if ($line -match '^PPO decisions=.*?sps=([0-9,]+)') {
+        $spsSamples += [int64](($Matches[1]) -replace ',', '')
+    }
+}
+$coldSps = if ($spsSamples.Count) { [int64]$spsSamples[0] } else { $null }
+$steadySamples = if ($spsSamples.Count -gt 1) { @($spsSamples | Select-Object -Skip 1 | Sort-Object) } else { @() }
+$steadyMedianSps = $null
+if ($steadySamples.Count) {
+    if ($steadySamples.Count % 2) { $steadyMedianSps = [double]$steadySamples[[int]($steadySamples.Count / 2)] }
+    else { $steadyMedianSps = ([double]$steadySamples[$steadySamples.Count / 2 - 1] + [double]$steadySamples[$steadySamples.Count / 2]) / 2.0 }
+}
+
 $result = [ordered]@{
-    schema = 1
+    schema = 2
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
     passed = [bool]$passed
     timed_out = [bool]$timedOut
@@ -161,6 +184,9 @@ $result = [ordered]@{
     agents = $Agents
     rollout = $Rollout
     smoke_updates = $SmokeUpdates
+    sps_samples = @($spsSamples)
+    cold_sps = $coldSps
+    steady_state_median_sps = $steadyMedianSps
     status = $status
     checkpoint_written = [bool](Test-Path $latestPath)
     stdout = $stdout.TrimEnd()

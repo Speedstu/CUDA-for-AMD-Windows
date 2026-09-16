@@ -20,7 +20,9 @@ TESTS = ("matmul", "conv2d", "sdpa_math", "sdpa_mem_efficient")
 
 def emit(test: str, status: str, **extra: Any) -> None:
     payload = {"schema": 1, "test": test, "status": status, **extra}
-    print(json.dumps(payload, sort_keys=True), flush=True)
+    encoded = json.dumps(payload, sort_keys=True)
+    print(encoded, flush=True)
+    print(f"CUDAAMD_RESULT:{encoded}", file=sys.stderr, flush=True)
 
 
 def metrics(torch, got, ref, *, atol: float, rtol: float) -> dict[str, Any]:
@@ -102,11 +104,11 @@ def sdpa_reference(torch, q, k, v):
 
 def run_sdpa(torch, backend: str) -> dict[str, Any]:
     import torch.nn.functional as F
-
     torch.manual_seed(3407)
-    q = torch.randn((2, 4, 64, 64), dtype=torch.float32)
-    k = torch.randn((2, 4, 64, 64), dtype=torch.float32)
-    v = torch.randn((2, 4, 64, 64), dtype=torch.float32)
+    shape = (1, 1, 8, 32) if backend == "memory-efficient" else (2, 4, 64, 64)
+    q = torch.randn(shape, dtype=torch.float32)
+    k = torch.randn(shape, dtype=torch.float32)
+    v = torch.randn(shape, dtype=torch.float32)
     ref = sdpa_reference(torch, q, k, v)
 
     qg, kg, vg = q.half().cuda(), k.half().cuda(), v.half().cuda()
@@ -136,6 +138,7 @@ def run_sdpa(torch, backend: str) -> dict[str, Any]:
     return {
         "ok": check["ok"],
         "backend": backend,
+        "shape": list(shape),
         "numerics": check,
         "timing_ms": elapsed_ms,
     }

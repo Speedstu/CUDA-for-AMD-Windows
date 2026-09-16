@@ -44,3 +44,31 @@ Those numbers used a different, heavily tuned training configuration and should 
 ## Later native HIP path
 
 A later rewrite removed LibTorch/ZLUDA from PPO and reached substantially higher throughput. Those measurements belong to a different implementation and must not be presented as ZLUDA performance.
+
+## Experimental v7/TheRock same-GPU translation overhead
+
+Run date: **2026-09-16** on the RX 9060 XT (`gfx1200`). The native side calls HIP + rocBLAS directly. The compatibility side performs the same FP32 square matrix multiply through PyTorch CUDA → ZLUDA → rocBLAS. Both run on the same physical GPU.
+
+Representative release-candidate run using **6 paired repetitions per size**. The authoritative metric is synchronized monotonic **wall-clock time**, not HIP event timing: direct HIP testing on this Windows stack reproduced invalid negative `hipEventElapsedTime` values. Event measurements remain in the JSON for diagnostics only. Execution order alternates `direct → ZLUDA` and `ZLUDA → direct`; the reported delta is the median of the six paired percentage differences.
+
+| SGEMM | Direct median wall time | ZLUDA median wall time | Paired median overhead | Paired throughput ratio |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 × 1024 | 0.4487 ms | 0.4563 ms | +2.04% | 98.0% |
+| 2048 × 2048 | 3.4342 ms | 3.4512 ms | +0.54% | 99.5% |
+| 4096 × 4096 | 19.7126 ms | 19.9898 ms | +7.16% | 93.3% |
+
+The 2048² path is effectively at parity in this run; the larger 4096² workload retains about 93.3% of direct rocBLAS throughput. Individual samples still move with clocks, thermals and kernel selection (the six 4096² paired deltas ranged from roughly -17.85% to +29.46%), which is why the runner alternates execution order, keeps every pair, and applies its regression threshold to the paired median rather than a single sample.
+
+These results measure the compatibility path against an AMD-native backend on the same physical GPU; they are not an AMD-vs-NVIDIA comparison.
+
+### Cold start vs steady-state training
+
+ZLUDA's persistent compute cache matters strongly for PyTorch training. During diagnosis, the first uncached `clamp.backward()` took about **50 s** and an uncached `minimum.backward()` about **96 s**. Once compiled, the same kernel families dropped to roughly millisecond/sub-millisecond latency.
+
+A real VelocityRL test at `512 agents × rollout 16` on the final release candidate produced **96 SPS** for a non-representative cold first update, followed by **72,345 SPS** and **69,294 SPS** on updates 2 and 3. The report records a **70,819.5 SPS median steady-state**. The cold update is intentionally separated because its value moves dramatically with first-use compilation/cache state.
+
+The helper below builds the local cache without shipping machine-specific compiled artifacts:
+
+```powershell
+.\scripts\warmup-pytorch.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
+```

@@ -25,10 +25,10 @@ jobs:
           }
           if ($failed) { exit 1 }
 
-      - name: Validate Python functional probe
+      - name: Validate Python probes
         shell: pwsh
         run: |
-          python -m py_compile scripts/functional_probe.py
+          python -m py_compile scripts/functional_probe.py scripts/capability_probe.py scripts/gemm_benchmark.py scripts/training_warmup.py
           $tests = @(python scripts/functional_probe.py --list-tests)
           $expected = @('matmul','conv2d','sdpa_math','sdpa_mem_efficient')
           foreach ($name in $expected) {
@@ -55,6 +55,18 @@ jobs:
           $report = $json | ConvertFrom-Json
           if ($report.schema -ne 2) { throw 'Unexpected scanner schema' }
           Write-Host "Scanner schema $($report.schema) OK"
+
+      - name: Verify experimental ZLUDA patch applies
+        shell: pwsh
+        run: |
+          git init zluda-upstream
+          Set-Location zluda-upstream
+          git remote add origin https://github.com/vosen/ZLUDA.git
+          git fetch --depth 1 origin 9c8b43f242985150f86a7f485218b7b82c3e96ca
+          git checkout --detach FETCH_HEAD
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\windows-amd-compat.patch
+          Write-Host 'Experimental patch applies cleanly to pinned upstream commit.'
+          Set-Location ..
 
       - name: Verify pinned ZLUDA release asset
         shell: pwsh

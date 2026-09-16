@@ -46,7 +46,11 @@ TESTS = (
 
 
 def emit(test: str, status: str, **extra: Any) -> None:
-    print(json.dumps({"schema": 1, "test": test, "status": status, **extra}, sort_keys=True), flush=True)
+    payload = json.dumps({"schema": 1, "test": test, "status": status, **extra}, sort_keys=True)
+    # Keep stdout for direct use, plus a marked copy on stderr so device-side
+    # printf noise cannot corrupt the machine-readable result.
+    print(payload, flush=True)
+    print(f"CUDAAMD_RESULT:{payload}", file=sys.stderr, flush=True)
 
 
 def sync(torch) -> None:
@@ -519,9 +523,14 @@ def _sdpa_ref(torch, q, k, v):
 def run_sdpa(torch, backend: str):
     import torch.nn.functional as F
     torch.manual_seed(113)
-    q = torch.randn(2, 4, 64, 64)
-    k = torch.randn(2, 4, 64, 64)
-    v = torch.randn(2, 4, 64, 64)
+    # Keep the memory-efficient probe deliberately small.  Broken SM/fatbin
+    # dispatch can emit a very large amount of device-side diagnostic output;
+    # a compact shape still exercises the backend while making failures fast
+    # and classifiable instead of turning them into misleading timeouts.
+    shape = (1, 1, 8, 32) if backend == "memory-efficient" else (2, 4, 64, 64)
+    q = torch.randn(*shape)
+    k = torch.randn(*shape)
+    v = torch.randn(*shape)
     ref = _sdpa_ref(torch, q, k, v)
     qg, kg, vg = q.half().cuda(), k.half().cuda(), v.half().cuda()
     if backend == "math":
@@ -532,7 +541,7 @@ def run_sdpa(torch, backend: str):
         got = F.scaled_dot_product_attention(qg, kg, vg, dropout_p=0.0, is_causal=False)
     sync(torch)
     check = tensor_metrics(torch, got, ref, 8e-2, 8e-2)
-    return {"ok": check["ok"], "backend": backend, "numerics": check}
+    return {"ok": check["ok"], "backend": backend, "shape": list(shape), "numerics": check}
 
 
 def run_cuda_graph(torch):

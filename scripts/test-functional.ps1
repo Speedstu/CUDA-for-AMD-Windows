@@ -132,6 +132,10 @@ function Invoke-FunctionalProbe {
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
     [void]$p.Start()
+    # Drain both redirected pipes while the child runs. Device-side diagnostics
+    # can otherwise fill a Windows pipe and make a failed kernel look hung.
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
         Start-Sleep -Milliseconds 100
@@ -143,10 +147,21 @@ function Invoke-FunctionalProbe {
         try { $p.WaitForExit() } catch {}
     }
 
-    $stdout = $p.StandardOutput.ReadToEnd()
-    $stderr = $p.StandardError.ReadToEnd()
+    try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { $stdout = '' }
+    try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = '' }
     $parsed = $null
-    if (-not $timedOut) {
+    $markerLines = @($stderr -split "`r?`n" | Where-Object { $_ -like 'CUDAAMD_RESULT:*' })
+    for ($i = $markerLines.Count - 1; $i -ge 0; $i--) {
+        try {
+            $json = $markerLines[$i].Substring('CUDAAMD_RESULT:'.Length)
+            $candidate = $json | ConvertFrom-Json -ErrorAction Stop
+            if ($candidate.schema -eq 1 -and $candidate.test -eq $TestName) {
+                $parsed = $candidate
+                break
+            }
+        } catch {}
+    }
+    if (-not $parsed) {
         $lines = @($stdout -split "`r?`n" | Where-Object { $_.Trim() })
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             try {
@@ -159,13 +174,39 @@ function Invoke-FunctionalProbe {
         }
     }
 
-    $status = if ($timedOut) { 'timeout' } elseif ($parsed) { [string]$parsed.status } else { 'error' }
+    $exitCode = if ($timedOut) { $null } else { $p.ExitCode }
+    $parsedStatus = if ($parsed) { [string]$parsed.status } else { $null }
+    $expectedExit = switch ($parsedStatus) {
+        'pass'        { 0 }
+        'incorrect'   { 2 }
+        'error'       { 2 }
+        'unsupported' { 3 }
+        'unavailable' { 4 }
+        default       { $null }
+    }
+    $unexpectedExit = [bool](
+        -not $timedOut -and $parsed -and $null -ne $expectedExit -and $exitCode -ne $expectedExit
+    )
+    $status = if ($timedOut -and $parsed) {
+        'hang_after_result'
+    } elseif ($timedOut) {
+        'timeout'
+    } elseif ($unexpectedExit) {
+        'crash_after_result'
+    } elseif ($parsed) {
+        $parsedStatus
+    } else {
+        'error'
+    }
     return [pscustomobject][ordered]@{
         test = $TestName
         status = $status
+        capability_status = $parsedStatus
         timed_out = [bool]$timedOut
         timeout_seconds = $TimeoutSeconds
-        process_exit = if ($timedOut) { $null } else { $p.ExitCode }
+        process_hung_after_result = [bool]($timedOut -and $parsed)
+        process_crashed_after_result = [bool]$unexpectedExit
+        process_exit = $exitCode
         result = $parsed
         stdout = $stdout.TrimEnd()
         stderr = $stderr.TrimEnd()
@@ -187,8 +228,10 @@ foreach ($name in $testNames) {
     switch ($entry.status) {
         'pass'        { Write-Host ' PASS' }
         'unsupported' { Write-Host ' UNSUPPORTED (safe refusal)' -ForegroundColor Yellow }
-        'timeout'     { Write-Host ' TIMEOUT' -ForegroundColor Red }
-        'incorrect'   { Write-Host ' INCORRECT RESULT' -ForegroundColor Red }
+        'timeout'            { Write-Host ' TIMEOUT' -ForegroundColor Red }
+        'hang_after_result'  { Write-Host ' HANG_AFTER_RESULT' -ForegroundColor Red }
+        'crash_after_result' { Write-Host ' CRASH_AFTER_RESULT' -ForegroundColor Red }
+        'incorrect'          { Write-Host ' INCORRECT RESULT' -ForegroundColor Red }
         default       { Write-Host (" {0}" -f $entry.status.ToUpperInvariant()) -ForegroundColor Red }
     }
     if ($entry.result -and $entry.result.numerics) {
@@ -196,7 +239,7 @@ foreach ($name in $testNames) {
     }
 }
 
-$hardFailureStatuses = @('incorrect', 'error', 'timeout', 'unavailable')
+$hardFailureStatuses = @('incorrect', 'error', 'timeout', 'hang_after_result', 'crash_after_result', 'unavailable')
 $hardFailures = @($tests | Where-Object { $hardFailureStatuses -contains $_.status })
 $unsupported = @($tests | Where-Object { $_.status -eq 'unsupported' })
 $passed = @($tests | Where-Object { $_.status -eq 'pass' })

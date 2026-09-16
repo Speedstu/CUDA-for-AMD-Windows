@@ -1,18 +1,19 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 75fa768..26b0de8 100644
+index 75fa768..bf9764a 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -5214,6 +5214,9 @@ version = "0.0.0"
+@@ -5214,6 +5214,10 @@ version = "0.0.0"
  dependencies = [
   "cuda_macros",
   "cuda_types",
++ "embed-resource",
 + "hip_runtime-sys",
 + "libloading",
 + "zluda_windows",
  ]
  
  [[package]]
-@@ -5244,6 +5247,7 @@ version = "0.0.0"
+@@ -5244,6 +5248,7 @@ version = "0.0.0"
  dependencies = [
   "cuda_macros",
   "cuda_types",
@@ -20,7 +21,7 @@ index 75fa768..26b0de8 100644
   "rocm_smi-sys",
   "zluda_common",
  ]
-@@ -5300,6 +5304,7 @@ dependencies = [
+@@ -5300,6 +5305,7 @@ dependencies = [
   "cuda_macros",
   "cuda_types",
   "embed-resource",
@@ -28,6 +29,76 @@ index 75fa768..26b0de8 100644
   "libloading",
   "rocsparse-sys",
   "unwrap_or",
+diff --git a/zluda/src/impl/event.rs b/zluda/src/impl/event.rs
+index 0392e73..9700376 100644
+--- a/zluda/src/impl/event.rs
++++ b/zluda/src/impl/event.rs
+@@ -10,8 +10,15 @@ pub(crate) unsafe fn elapsed_time(
+     start: hipEvent_t,
+     end: hipEvent_t,
+ ) -> hipError_t {
+-    // Flag values are compatible between CUDA and HIP for 0,1,2,4
+-    hipEventElapsedTime(milliseconds, start, end)
++    // HIP on Windows can occasionally report a negative interval even for two
++    // completed events recorded in order on the same stream. CUDA event elapsed
++    // times are non-negative, so preserve successful positive measurements and
++    // clamp only impossible negative backend values to zero.
++    let result = hipEventElapsedTime(milliseconds, start, end);
++    if result == hipError_t::Success && !milliseconds.is_null() && *milliseconds < 0.0 {
++        *milliseconds = 0.0;
++    }
++    result
+ }
+ 
+ pub(crate) unsafe fn elapsed_time_v2(
+diff --git a/zluda/src/impl/stream.rs b/zluda/src/impl/stream.rs
+index 708b043..b559e89 100644
+--- a/zluda/src/impl/stream.rs
++++ b/zluda/src/impl/stream.rs
+@@ -20,6 +20,10 @@ pub(crate) fn destroy_v2(stream: hipStream_t) -> hipError_t {
+     unsafe { hipStreamDestroy(stream) }
+ }
+ 
++pub(crate) fn begin_capture(stream: hipStream_t) -> hipError_t {
++    unsafe { hipStreamBeginCapture(stream, hipStreamCaptureMode::hipStreamCaptureModeGlobal) }
++}
++
+ pub(crate) fn begin_capture_v2(stream: hipStream_t, mode: hipStreamCaptureMode) -> hipError_t {
+     unsafe { hipStreamBeginCapture(stream, mode) }
+ }
+@@ -35,6 +39,14 @@ pub(crate) fn is_capturing(
+     unsafe { hipStreamIsCapturing(stream, capture_status) }
+ }
+ 
++pub(crate) fn get_capture_info(
++    stream: hipStream_t,
++    capture_status: *mut hipStreamCaptureStatus,
++    id: *mut ::core::ffi::c_ulonglong,
++) -> hipError_t {
++    unsafe { hipStreamGetCaptureInfo(stream, capture_status, id) }
++}
++
+ pub(crate) fn get_capture_info_v2(
+     stream: hipStream_t,
+     capture_status: *mut hipStreamCaptureStatus,
+diff --git a/zluda/src/lib.rs b/zluda/src/lib.rs
+index ed2df7a..4422e4e 100644
+--- a/zluda/src/lib.rs
++++ b/zluda/src/lib.rs
+@@ -189,11 +189,13 @@ cuda_macros::cuda_function_declarations!(
+             cuPointerGetAttributes,
+             cuProfilerStart,
+             cuProfilerStop,
++            cuStreamBeginCapture,
+             cuStreamBeginCapture_v2,
+             cuStreamCreate,
+             cuStreamCreateWithPriority,
+             cuStreamDestroy_v2,
+             cuStreamEndCapture,
++            cuStreamGetCaptureInfo,
+             cuStreamGetCaptureInfo_v2,
+             cuStreamGetCaptureInfo_v3,
+             cuStreamIsCapturing,
 diff --git a/zluda_common/src/lib.rs b/zluda_common/src/lib.rs
 index af41f7a..8036577 100644
 --- a/zluda_common/src/lib.rs
@@ -41,7 +112,7 @@ index af41f7a..8036577 100644
      cusparseDnMatDescr_t => rocsparse_dnmat_descr,
      cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
 diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
-index 6b672fa..19ea98b 100644
+index 6b672fa..8b965c2 100644
 --- a/zluda_fft/Cargo.toml
 +++ b/zluda_fft/Cargo.toml
 @@ -10,6 +10,7 @@ name = "cufft"
@@ -52,7 +123,7 @@ index 6b672fa..19ea98b 100644
  
  [package.metadata.zluda]
  linux_symlinks = [
-@@ -18,3 +19,7 @@ linux_symlinks = [
+@@ -18,3 +19,9 @@ linux_symlinks = [
      "libcufft.so.12",
  ]
  windows_paths = ["cufft64_10.dll", "cufft64_11.dll", "cufft64_12.dll"]
@@ -60,6 +131,8 @@ index 6b672fa..19ea98b 100644
 +[target.'cfg(windows)'.dependencies]
 +zluda_windows = { path = "../zluda_windows" }
 +libloading = "0.8"
++[target.'cfg(windows)'.build-dependencies]
++embed-resource = "3.0"
 diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
 index 94cc02b..a9c0bc9 100644
 --- a/zluda_fft/src/impl.rs
@@ -1026,3 +1099,19 @@ index 1a293a9..a9f714d 100644
  use windows::{
      core::{w, HRESULT, PCWSTR},
      Win32::{
+diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
+new file mode 100644
+index 0000000..2b58647
+--- /dev/null
++++ b/zluda_fft/build.rs
+@@ -0,0 +1,10 @@
++#[cfg(windows)]
++fn main() {
++    extern crate embed_resource;
++    embed_resource::compile("../zluda_windows/manifest.rc", embed_resource::NONE)
++        .manifest_optional()
++        .unwrap();
++}
++
++#[cfg(not(windows))]
++fn main() {}

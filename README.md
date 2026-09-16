@@ -147,9 +147,11 @@ On the RX 9060 XT / `gfx1200` development system, the current patch set has nume
 
 - common cuFFT and cuFFT Xt paths through hipFFT, including real/complex, FP32/FP64 and 2D round-trips;
 - cuSPARSE paths needed by PyTorch sparse matrix multiplication, including stream binding, COO→CSR conversion and CSR descriptor creation through rocSPARSE;
-- basic Windows NVML initialization, device enumeration/name and memory reporting through the ZLUDA CUDA driver rather than a separate direct-HIP context.
+- basic Windows NVML initialization, device enumeration/name and memory reporting through the ZLUDA CUDA driver rather than a separate direct-HIP context;
+- legacy CUDA Graph stream-capture ABI compatibility used by PyTorch (`cuStreamBeginCapture` and `cuStreamGetCaptureInfo`), mapped onto the existing HIP graph backend;
+- CUDA event timing compatibility for a Windows HIP backend issue where completed in-order events can occasionally report a negative elapsed time; only impossible negative values are clamped to `0 ms`, while valid positive timings are left untouched.
 
-The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. A combined strict regression now passes NVML + `torch.sparse.mm` + FFT together. These are experimental results for the tested stack, not a claim of complete CUDA coverage. CUDA Graphs are not changed by this patch set and are tracked separately.
+The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. The patch also restores the legacy CUDA 10.x stream-capture entry points requested through `cuGetProcAddress`; a real `torch.cuda.CUDAGraph` capture/replay probe now passes on the tested stack. Direct HIP testing on the reference GPU also reproduced occasional negative `hipEventElapsedTime` results for completed in-order events; the CUDA-facing wrapper now clamps only those impossible negative values to zero. A combined strict regression passes NVML + `torch.sparse.mm` + FFT, and the full isolated capability matrix currently records **23/24 clean passes (95.8%)**, with zero timeouts, hangs or post-result process crashes. The one known numerical failure is memory-efficient SDPA, which is reported as incorrect rather than hidden behind a math-backend fallback. These are experimental results for the tested stack, not a claim of complete CUDA coverage.
 
 ### Experimental cuSOLVER → hipSOLVER proxy
 
@@ -166,6 +168,14 @@ Maintainers with a local VelocityRL checkout can validate the same runtime with 
 ```
 
 This runs VelocityRL through the ZLUDA/HIP runtime produced by this repository, performs rollout + forward + PPO backward/optimizer work, writes its temporary run under `.runtime\velocityrl-smoke\`, and records `.runtime\velocityrl-smoke.json`. VelocityRL is an optional external integration workload and is not downloaded by the installer.
+
+ZLUDA compiles some PyTorch device kernels on first use. For training-heavy workloads, the optional warmup helper performs both static `torch_cuda.dll` precompilation and a small dynamic backward/optimizer warmup so first-use compilation does not get mistaken for a hang:
+
+```powershell
+.\scripts\warmup-pytorch.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
+```
+
+The warmup fills the user's normal local ZLUDA cache; no compiled cache or vendor binary is stored in this repository. On the tested stack, cold PPO clipping kernels took tens of seconds to compile once, while repeated in-process executions dropped to millisecond/sub-millisecond latency.
 
 ## Run a CUDA-targeted application
 
@@ -221,7 +231,15 @@ The stable Windows HIP SDK does not ship the full ROCm AI-library stack such as 
 
 ## Performance
 
-A controlled 2026-09-13 A/B ran **10 iterations per runtime** on the same RX 9060 XT PPO workload. After discarding the first iteration of each trial as warmup, the public upstream path reached **13,278 median overall SPS** versus **12,876** for the recovered custom overlay. In this workload the custom overlay was about **3.03% slower**, so upstream remains the default.
+A controlled 2026-09-13 A/B ran **10 iterations per runtime** on the same RX 9060 XT PPO workload. After discarding the first iteration of each trial as warmup, the public upstream path reached **13,278 median overall SPS** versus **12,876** for the recovered custom overlay. In this workload the custom overlay was about **3.03% slower**, so upstream remains the stable default.
+
+The experimental v7/TheRock path also has a same-GPU native baseline. `scripts/benchmark-gemm.ps1` compares FP32 SGEMM through direct HIP/rocBLAS with the same operation through PyTorch CUDA → ZLUDA → the AMD BLAS path. Because Windows HIP event timing was independently observed returning invalid negative intervals, the benchmark's authoritative metric is synchronized monotonic wall-clock time; HIP/CUDA event timings are retained only as diagnostics. Execution order alternates direct-first and ZLUDA-first, and the runner reports the median of paired deltas. On the RX 9060 XT six-pair release-candidate run, paired median overhead was **+2.04% at 1024²**, **+0.54% at 2048²**, and **+7.16% at 4096²**. The 4096² result corresponds to about **93.3% of the direct rocBLAS throughput** in that run. Individual samples still vary with clocks/thermals, so the JSON retains every pair. This is a same-GPU AMD-native baseline, not a comparison with an NVIDIA GPU.
+
+A real VelocityRL `512 agents × rollout 16` three-update smoke on the final experimental release candidate recorded **96 SPS** for the non-representative cold first update, then **72,345 SPS** and **69,294 SPS** for the warmed updates, giving **70,819.5 SPS median steady-state**. The cold figure varies sharply with first-use compilation/cache state, so the report stores it separately instead of treating it as a throughput benchmark.
+
+```powershell
+.\scripts\benchmark-gemm.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
+```
 
 Historical tuned runs used a different training configuration and reached roughly **70k–109k overall steps/s**. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for methodology and raw data.
 
@@ -262,6 +280,7 @@ local-artifacts/      local archival files; ignored by Git
 - Passing `cuda_check` does not establish numerical correctness.
 - Windows exposes only a subset of the full ROCm ecosystem.
 - cuDNN/MIOpen is not available in the validated stable HIP SDK path.
+- On the tested experimental v7/TheRock `gfx1200` stack, memory-efficient SDPA is numerically incorrect across the tested FP16/FP32 shape sweep; use the validated math backend instead when correctness is required.
 - NCCL, TensorRT, unsupported PTX behavior and some custom CUDA extensions may fail.
 - `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the AMD GPU architecture.
 
