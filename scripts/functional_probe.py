@@ -15,7 +15,7 @@ import time
 import traceback
 from typing import Any
 
-TESTS = ("matmul", "conv2d", "sdpa_math", "sdpa_mem_efficient")
+TESTS = ("matmul", "conv2d", "sdpa_math", "sdpa_flash", "sdpa_mem_efficient")
 
 
 def emit(test: str, status: str, **extra: Any) -> None:
@@ -105,7 +105,7 @@ def sdpa_reference(torch, q, k, v):
 def run_sdpa(torch, backend: str) -> dict[str, Any]:
     import torch.nn.functional as F
     torch.manual_seed(3407)
-    shape = (1, 1, 8, 32) if backend == "memory-efficient" else (2, 4, 64, 64)
+    shape = (1, 1, 8, 32) if backend in ("flash", "memory-efficient") else (2, 4, 64, 64)
     q = torch.randn(shape, dtype=torch.float32)
     k = torch.randn(shape, dtype=torch.float32)
     v = torch.randn(shape, dtype=torch.float32)
@@ -120,6 +120,10 @@ def run_sdpa(torch, backend: str) -> dict[str, Any]:
     if backend == "math":
         context = torch.backends.cuda.sdp_kernel(
             enable_flash=False, enable_math=True, enable_mem_efficient=False
+        )
+    elif backend == "flash":
+        context = torch.backends.cuda.sdp_kernel(
+            enable_flash=True, enable_math=False, enable_mem_efficient=False
         )
     elif backend == "memory-efficient":
         context = torch.backends.cuda.sdp_kernel(
@@ -186,6 +190,8 @@ def main() -> int:
             result = run_conv2d(torch)
         elif test == "sdpa_math":
             result = run_sdpa(torch, "math")
+        elif test == "sdpa_flash":
+            result = run_sdpa(torch, "flash")
         elif test == "sdpa_mem_efficient":
             result = run_sdpa(torch, "memory-efficient")
         else:
@@ -208,6 +214,7 @@ def main() -> int:
             return 3
         if test.startswith("sdpa_") and (
             "no available kernel" in lower
+            or "no kernel image is available" in lower
             or "not supported" in lower
             or "no viable backend" in lower
         ):

@@ -175,7 +175,13 @@ function Invoke-FunctionalProbe {
     }
 
     $exitCode = if ($timedOut) { $null } else { $p.ExitCode }
-    $parsedStatus = if ($parsed) { [string]$parsed.status } else { $null }
+    # Some legacy CUDA libraries abort the child process directly instead of
+    # surfacing a Python exception when the selected cubin has no translatable
+    # PTX implementation. Infer only this explicit CUDA unsupported condition;
+    # arbitrary non-zero exits remain errors.
+    $combinedOutput = ($stdout + "`n" + $stderr).ToLowerInvariant()
+    $inferredUnsupported = [bool](-not $timedOut -and -not $parsed -and $combinedOutput.Contains('no kernel image is available'))
+    $parsedStatus = if ($parsed) { [string]$parsed.status } elseif ($inferredUnsupported) { 'unsupported' } else { $null }
     $expectedExit = switch ($parsedStatus) {
         'pass'        { 0 }
         'incorrect'   { 2 }
@@ -193,7 +199,7 @@ function Invoke-FunctionalProbe {
         'timeout'
     } elseif ($unexpectedExit) {
         'crash_after_result'
-    } elseif ($parsed) {
+    } elseif ($parsed -or $inferredUnsupported) {
         $parsedStatus
     } else {
         'error'
@@ -219,7 +225,7 @@ Write-Host "PyTorch: $(($torchCheck | Out-String).Trim())"
 Write-Host "Timeout: ${TimeoutSeconds}s per operation"
 Write-Host ''
 
-$testNames = @('matmul', 'conv2d', 'sdpa_math', 'sdpa_mem_efficient')
+$testNames = @('matmul', 'conv2d', 'sdpa_math', 'sdpa_flash', 'sdpa_mem_efficient')
 $tests = @()
 foreach ($name in $testNames) {
     Write-Host ("Testing {0}..." -f $name) -NoNewline

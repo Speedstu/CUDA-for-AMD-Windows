@@ -51,6 +51,35 @@ index 0392e73..9700376 100644
  }
  
  pub(crate) unsafe fn elapsed_time_v2(
+diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
+index c9d4bbd..c4e8695 100644
+--- a/zluda/src/impl/module.rs
++++ b/zluda/src/impl/module.rs
+@@ -185,6 +185,24 @@ fn get_best_ptx_and_compile(
+             _ => {}
+         })
+     };
++    // Some CUDA libraries ship compute_37 PTX only as an architecture fallback
++    // while the real implementation lives in NVIDIA cubins. PyTorch 2.0.x
++    // fused attention has two concrete cases:
++    // - memory-efficient attention entries only call vprintf and return;
++    // - flash-attention keeps its surrounding FMHA plumbing, but the tensor-core
++    //   GEMM path is compiled out, leaving its score accumulators at zero.
++    // Executing either fallback silently returns numerically invalid tensors.
++    // Fail closed so callers can select a supported backend instead.
++    if ptx_modules.iter().any(|src| {
++        let sm_version = ptx_parser::parse_module_unchecked(src).sm_version;
++        let memory_efficient_stub = src.contains("_Z24attention_kernel_batchedI15AttentionKernel")
++            && src.contains("vprintf");
++        let flash_cubin_only = src.contains("_Z20fmha_fwd_loop_kernelI18FMHA_kernel_traits")
++            && !src.contains("mma.sync");
++        sm_version < 50 && (memory_efficient_stub || flash_cubin_only)
++    }) {
++        return Err(CUerror::NO_BINARY_FOR_GPU);
++    }
+     let maybe_module = ptx_modules
+         .iter()
+         .rev() // TODO: actually sort by SM
 diff --git a/zluda/src/impl/stream.rs b/zluda/src/impl/stream.rs
 index 708b043..b559e89 100644
 --- a/zluda/src/impl/stream.rs
@@ -133,6 +162,22 @@ index 6b672fa..8b965c2 100644
 +libloading = "0.8"
 +[target.'cfg(windows)'.build-dependencies]
 +embed-resource = "3.0"
+diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
+new file mode 100644
+index 0000000..2b58647
+--- /dev/null
++++ b/zluda_fft/build.rs
+@@ -0,0 +1,10 @@
++#[cfg(windows)]
++fn main() {
++    extern crate embed_resource;
++    embed_resource::compile("../zluda_windows/manifest.rc", embed_resource::NONE)
++        .manifest_optional()
++        .unwrap();
++}
++
++#[cfg(not(windows))]
++fn main() {}
 diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
 index 94cc02b..a9c0bc9 100644
 --- a/zluda_fft/src/impl.rs
@@ -1099,19 +1144,3 @@ index 1a293a9..a9f714d 100644
  use windows::{
      core::{w, HRESULT, PCWSTR},
      Win32::{
-diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
-new file mode 100644
-index 0000000..2b58647
---- /dev/null
-+++ b/zluda_fft/build.rs
-@@ -0,0 +1,10 @@
-+#[cfg(windows)]
-+fn main() {
-+    extern crate embed_resource;
-+    embed_resource::compile("../zluda_windows/manifest.rc", embed_resource::NONE)
-+        .manifest_optional()
-+        .unwrap();
-+}
-+
-+#[cfg(not(windows))]
-+fn main() {}

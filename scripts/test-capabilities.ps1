@@ -118,7 +118,13 @@ function Invoke-Probe([string]$Name) {
     # not count a numerically-correct result as a clean PASS unless the child
     # process also exits normally.
     $exitCode = if ($timedOut) { $null } else { $p.ExitCode }
-    $parsedStatus = if ($parsed) { [string]$parsed.status } else { $null }
+    # Some legacy CUDA libraries abort the child process directly instead of
+    # surfacing a Python exception when the selected cubin has no translatable
+    # PTX implementation. Infer only this explicit CUDA unsupported condition;
+    # arbitrary non-zero exits remain errors.
+    $combinedOutput = ($stdout + "`n" + $stderr).ToLowerInvariant()
+    $inferredUnsupported = [bool](-not $timedOut -and -not $parsed -and $combinedOutput.Contains('no kernel image is available'))
+    $parsedStatus = if ($parsed) { [string]$parsed.status } elseif ($inferredUnsupported) { 'unsupported' } else { $null }
     $expectedExit = switch ($parsedStatus) {
         'pass'        { 0 }
         'incorrect'   { 2 }
@@ -136,7 +142,7 @@ function Invoke-Probe([string]$Name) {
         'timeout'
     } elseif ($unexpectedExit) {
         'crash_after_result'
-    } elseif ($parsed) {
+    } elseif ($parsed -or $inferredUnsupported) {
         $parsedStatus
     } else {
         'error'

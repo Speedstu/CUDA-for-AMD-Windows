@@ -42,7 +42,7 @@ This does **not** mean every CUDA program or AI model works. CUDA API/library co
 
 For `gfx1150`/RDNA 3.5, the project records **HIP SDK 7.2 or newer** as the minimum compatible floor. Do not install HIP 6.4 merely to match the historical RX 9060 XT reference profile.
 
-The memory-efficient SDPA corruption reported on `gfx1150` is **not treated as architecture-specific**: the same probe currently reproduces an incorrect result on the validated `gfx1200` reference path. The repository therefore reports compatibility per capability/workload instead of turning one failing optional backend into a blanket GPU verdict.
+The memory-efficient SDPA corruption reported on `gfx1150` is **not treated as architecture-specific**: the same failure was reproduced during `gfx1200` bring-up. The experimental v7 patch now detects the affected cubin-only fallback and fails closed with `NO_BINARY_FOR_GPU` instead of allowing a numerically invalid tensor to escape. Compatibility is therefore reported per capability/workload rather than as a blanket GPU verdict.
 
 ## How it works
 
@@ -124,6 +124,7 @@ Each operation runs in its **own process with a timeout**, so a hanging backend 
 - FP32 and FP16 matrix multiplication with CPU reference comparison;
 - `conv2d` with CPU reference comparison;
 - SDPA math backend with CPU reference comparison;
+- SDPA Flash backend with CPU reference comparison;
 - SDPA memory-efficient backend with CPU reference comparison.
 
 A backend that cleanly refuses unsupported work is reported as `unsupported` rather than numerically wrong. A returned tensor that exceeds tolerance, contains non-finite data, errors unexpectedly, or hangs is a functional failure.
@@ -151,7 +152,7 @@ On the RX 9060 XT / `gfx1200` development system, the current patch set has nume
 - legacy CUDA Graph stream-capture ABI compatibility used by PyTorch (`cuStreamBeginCapture` and `cuStreamGetCaptureInfo`), mapped onto the existing HIP graph backend;
 - CUDA event timing compatibility for a Windows HIP backend issue where completed in-order events can occasionally report a negative elapsed time; only impossible negative values are clamped to `0 ms`, while valid positive timings are left untouched.
 
-The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. The patch also restores the legacy CUDA 10.x stream-capture entry points requested through `cuGetProcAddress`; a real `torch.cuda.CUDAGraph` capture/replay probe now passes on the tested stack. Direct HIP testing on the reference GPU also reproduced occasional negative `hipEventElapsedTime` results for completed in-order events; the CUDA-facing wrapper now clamps only those impossible negative values to zero. A combined strict regression passes NVML + `torch.sparse.mm` + FFT, and the full isolated capability matrix currently records **23/24 clean passes (95.8%)**, with zero timeouts, hangs or post-result process crashes. The one known numerical failure is memory-efficient SDPA, which is reported as incorrect rather than hidden behind a math-backend fallback. These are experimental results for the tested stack, not a claim of complete CUDA coverage.
+The NVML backend intentionally queries `nvcuda.dll`/ZLUDA instead of initializing HIP independently; this avoids a Windows context interaction that previously caused `cusparseCreate`/rocSPARSE handle creation to fail. The patch also restores the legacy CUDA 10.x stream-capture entry points requested through `cuGetProcAddress`; a real `torch.cuda.CUDAGraph` capture/replay probe now passes on the tested stack. Direct HIP testing on the reference GPU also reproduced occasional negative `hipEventElapsedTime` results for completed in-order events; the CUDA-facing wrapper now clamps only those impossible negative values to zero. A combined strict regression passes NVML + `torch.sparse.mm` + FFT, and the full isolated capability matrix currently records **23/25 clean passes (92.0%) plus 2 safe refusals**, with **0 incorrect results, 0 timeouts, 0 hangs, 0 post-result process crashes and 0 errors**. The two refusals are PyTorch 2.0.1 Flash SDPA and memory-efficient SDPA: their low-architecture PTX fallbacks do not contain the real fused compute path, which lives in NVIDIA cubins, so the patch returns `NO_BINARY_FOR_GPU` rather than silently producing invalid output. The validated math SDPA backend remains correct. These are experimental results for the tested stack, not a claim of complete CUDA coverage.
 
 ### Experimental cuSOLVER → hipSOLVER proxy
 
@@ -168,6 +169,17 @@ Maintainers with a local VelocityRL checkout can validate the same runtime with 
 ```
 
 This runs VelocityRL through the ZLUDA/HIP runtime produced by this repository, performs rollout + forward + PPO backward/optimizer work, writes its temporary run under `.runtime\velocityrl-smoke\`, and records `.runtime\velocityrl-smoke.json`. VelocityRL is an optional external integration workload and is not downloaded by the installer.
+For PyTorch applications that use `torch.nn.functional.scaled_dot_product_attention()` without explicitly selecting a backend, the experimental v7 stack can opt into the validated math fallback at process startup:
+
+```powershell
+.\scripts\run-zluda.ps1 `
+  -RuntimeRoot .\.runtime-v2 `
+  -Program C:\path\to\python.exe `
+  -ProgramArgs @('app.py') `
+  -PyTorchSafeSDPA
+```
+
+`-PyTorchSafeSDPA` does **not** fake a lower compute capability. It only disables PyTorch Flash and memory-efficient SDPA inside that Python process, leaving the math backend enabled. This avoids the NVIDIA-cubin-only fused paths while preserving the normal `ZLUDA_CC` value for the rest of the application.
 
 ZLUDA compiles some PyTorch device kernels on first use. For training-heavy workloads, the optional warmup helper performs both static `torch_cuda.dll` precompilation and a small dynamic backward/optimizer warmup so first-use compilation does not get mistaken for a hang:
 
@@ -233,9 +245,9 @@ The stable Windows HIP SDK does not ship the full ROCm AI-library stack such as 
 
 A controlled 2026-09-13 A/B ran **10 iterations per runtime** on the same RX 9060 XT PPO workload. After discarding the first iteration of each trial as warmup, the public upstream path reached **13,278 median overall SPS** versus **12,876** for the recovered custom overlay. In this workload the custom overlay was about **3.03% slower**, so upstream remains the stable default.
 
-The experimental v7/TheRock path also has a same-GPU native baseline. `scripts/benchmark-gemm.ps1` compares FP32 SGEMM through direct HIP/rocBLAS with the same operation through PyTorch CUDA → ZLUDA → the AMD BLAS path. Because Windows HIP event timing was independently observed returning invalid negative intervals, the benchmark's authoritative metric is synchronized monotonic wall-clock time; HIP/CUDA event timings are retained only as diagnostics. Execution order alternates direct-first and ZLUDA-first, and the runner reports the median of paired deltas. On the RX 9060 XT six-pair release-candidate run, paired median overhead was **+2.04% at 1024²**, **+0.54% at 2048²**, and **+7.16% at 4096²**. The 4096² result corresponds to about **93.3% of the direct rocBLAS throughput** in that run. Individual samples still vary with clocks/thermals, so the JSON retains every pair. This is a same-GPU AMD-native baseline, not a comparison with an NVIDIA GPU.
+The experimental v7/TheRock path also has a same-GPU native baseline. `scripts/benchmark-gemm.ps1` compares FP32 SGEMM through direct HIP/rocBLAS with the same operation through PyTorch CUDA → ZLUDA → the AMD BLAS path. Because Windows HIP event timing was independently observed returning invalid negative intervals, the benchmark's authoritative metric is synchronized monotonic wall-clock time; HIP/CUDA event timings are retained only as diagnostics. Execution order alternates direct-first and ZLUDA-first, and the runner reports the median of paired deltas. On the final clean-patch four-pair validation run, paired median overhead was **+1.77% at 1024²**, **-5.37% at 2048²**, and **+9.86% at 4096²**. The negative 2048² sample is treated as run-to-run clock/order variance rather than a claim that translation is intrinsically faster than direct rocBLAS. All three sizes remained inside the repository's 20% regression budget, and the 4096² case retained about **91.0%** of direct rocBLAS throughput. Individual samples still vary with clocks/thermals, so the JSON retains every pair. This is a same-GPU AMD-native baseline, not a comparison with an NVIDIA GPU.
 
-A real VelocityRL `512 agents × rollout 16` three-update smoke on the final experimental release candidate recorded **96 SPS** for the non-representative cold first update, then **72,345 SPS** and **69,294 SPS** for the warmed updates, giving **70,819.5 SPS median steady-state**. The cold figure varies sharply with first-use compilation/cache state, so the report stores it separately instead of treating it as a throughput benchmark.
+A real VelocityRL `512 agents × rollout 16` three-update smoke on the final clean-patch runtime recorded **519 SPS** for the non-representative cold first update, then **70,124 SPS** and **70,113 SPS** for the warmed updates, giving **70,118.5 SPS median steady-state**. The cold figure varies sharply with first-use compilation/cache state, so the report stores it separately instead of treating it as a throughput benchmark.
 
 ```powershell
 .\scripts\benchmark-gemm.ps1 -PythonExe C:\path\to\venv\Scripts\python.exe
@@ -280,7 +292,7 @@ local-artifacts/      local archival files; ignored by Git
 - Passing `cuda_check` does not establish numerical correctness.
 - Windows exposes only a subset of the full ROCm ecosystem.
 - cuDNN/MIOpen is not available in the validated stable HIP SDK path.
-- On the tested experimental v7/TheRock `gfx1200` stack, memory-efficient SDPA is numerically incorrect across the tested FP16/FP32 shape sweep; use the validated math backend instead when correctness is required.
+- On the tested experimental v7/TheRock `gfx1200` stack with PyTorch 2.0.1+cu118, Flash and memory-efficient fused SDPA are **safe refusals** because their fallback PTX does not contain the real NVIDIA-cubin compute path; use the validated math backend when correctness is required.
 - NCCL, TensorRT, unsupported PTX behavior and some custom CUDA extensions may fail.
 - `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the AMD GPU architecture.
 

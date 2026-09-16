@@ -40,6 +40,7 @@ TESTS = (
     "amp",
     "conv2d",
     "sdpa_math",
+    "sdpa_flash",
     "sdpa_mem_efficient",
     "cuda_graph",
 )
@@ -527,7 +528,7 @@ def run_sdpa(torch, backend: str):
     # dispatch can emit a very large amount of device-side diagnostic output;
     # a compact shape still exercises the backend while making failures fast
     # and classifiable instead of turning them into misleading timeouts.
-    shape = (1, 1, 8, 32) if backend == "memory-efficient" else (2, 4, 64, 64)
+    shape = (1, 1, 8, 32) if backend in ("flash", "memory-efficient") else (2, 4, 64, 64)
     q = torch.randn(*shape)
     k = torch.randn(*shape)
     v = torch.randn(*shape)
@@ -535,8 +536,12 @@ def run_sdpa(torch, backend: str):
     qg, kg, vg = q.half().cuda(), k.half().cuda(), v.half().cuda()
     if backend == "math":
         ctx = torch.backends.cuda.sdp_kernel(enable_flash=False, enable_math=True, enable_mem_efficient=False)
-    else:
+    elif backend == "flash":
+        ctx = torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False)
+    elif backend == "memory-efficient":
         ctx = torch.backends.cuda.sdp_kernel(enable_flash=False, enable_math=False, enable_mem_efficient=True)
+    else:
+        raise ValueError(backend)
     with ctx:
         got = F.scaled_dot_product_attention(qg, kg, vg, dropout_p=0.0, is_causal=False)
     sync(torch)
@@ -583,6 +588,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "amp": run_amp,
     "conv2d": run_conv2d,
     "sdpa_math": lambda torch: run_sdpa(torch, "math"),
+    "sdpa_flash": lambda torch: run_sdpa(torch, "flash"),
     "sdpa_mem_efficient": lambda torch: run_sdpa(torch, "memory-efficient"),
     "cuda_graph": run_cuda_graph,
 }
@@ -626,6 +632,7 @@ def main() -> int:
             "unsupported",
             "could not be found",
             "no available kernel",
+            "no kernel image is available",
             "no viable backend",
             "not compiled with",
             "not exported",
