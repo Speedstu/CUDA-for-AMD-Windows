@@ -1,0 +1,67 @@
+name: zluda-candidate-build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'patches/zluda-v7-preview10/windows-amd-compat.patch'
+      - 'patches/zluda-v7-preview10/launch-attributes-candidate.patch'
+      - 'patches/zluda-v7-preview10/ptx-version-candidate.patch'
+      - '.github/workflows/zluda-candidate-build.yml'
+
+jobs:
+  build-driver:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustc +1.96.0 --version
+          cargo +1.96.0 --version
+
+      - name: Checkout pinned ZLUDA source
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/vosen/ZLUDA.git zluda-upstream
+          Set-Location zluda-upstream
+          git checkout --detach 9c8b43f242985150f86a7f485218b7b82c3e96ca
+          git submodule update --init --recursive
+          git status --short --branch
+
+      - name: Apply validated patch and launch-attribute candidate
+        shell: pwsh
+        run: |
+          Set-Location zluda-upstream
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\windows-amd-compat.patch
+          git apply ..\patches\zluda-v7-preview10\windows-amd-compat.patch
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+          git apply ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
+          git apply ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
+          git diff --check
+          git diff --stat
+
+      - name: Build nvcuda driver
+        shell: pwsh
+        run: |
+          Set-Location zluda-upstream
+          cargo +1.96.0 build -p zluda --release
+          $dll = Join-Path $PWD 'target\release\nvcuda.dll'
+          if (-not (Test-Path $dll)) { throw "Build completed without nvcuda.dll: $dll" }
+          Get-Item $dll | Select-Object FullName, Length, LastWriteTime
+          Get-FileHash $dll -Algorithm SHA256
+
+      - name: Upload compile-only driver artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvcuda-launch-attributes-candidate
+          path: zluda-upstream/target/release/nvcuda.dll
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,2768 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 75fa768..bf9764a 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5214,6 +5214,10 @@ version = "0.0.0"
+ dependencies = [
+  "cuda_macros",
+  "cuda_types",
++ "embed-resource",
++ "hip_runtime-sys",
++ "libloading",
++ "zluda_windows",
+ ]
+ 
+ [[package]]
+@@ -5244,6 +5248,7 @@ version = "0.0.0"
+ dependencies = [
+  "cuda_macros",
+  "cuda_types",
++ "libloading",
+  "rocm_smi-sys",
+  "zluda_common",
+ ]
+@@ -5300,6 +5305,7 @@ dependencies = [
+  "cuda_macros",
+  "cuda_types",
+  "embed-resource",
++ "hip_runtime-sys",
+  "libloading",
+  "rocsparse-sys",
+  "unwrap_or",
+diff --git a/zluda/src/impl/event.rs b/zluda/src/impl/event.rs
+index 0392e73..9700376 100644
+--- a/zluda/src/impl/event.rs
++++ b/zluda/src/impl/event.rs
+@@ -10,8 +10,15 @@ pub(crate) unsafe fn elapsed_time(
+     start: hipEvent_t,
+     end: hipEvent_t,
+ ) -> hipError_t {
+-    // Flag values are compatible between CUDA and HIP for 0,1,2,4
+-    hipEventElapsedTime(milliseconds, start, end)
++    // HIP on Windows can occasionally report a negative interval even for two
++    // completed events recorded in order on the same stream. CUDA event elapsed
++    // times are non-negative, so preserve successful positive measurements and
++    // clamp only impossible negative backend values to zero.
++    let result = hipEventElapsedTime(milliseconds, start, end);
++    if result == hipError_t::Success && !milliseconds.is_null() && *milliseconds < 0.0 {
++        *milliseconds = 0.0;
++    }
++    result
+ }
+ 
+ pub(crate) unsafe fn elapsed_time_v2(
+diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
+index c9d4bbd..c4e8695 100644
+--- a/zluda/src/impl/module.rs
++++ b/zluda/src/impl/module.rs
+@@ -185,6 +185,24 @@ fn get_best_ptx_and_compile(
+             _ => {}
+         })
+     };
++    // Some CUDA libraries ship compute_37 PTX only as an architecture fallback
++    // while the real implementation lives in NVIDIA cubins. PyTorch 2.0.x
++    // fused attention has two concrete cases:
++    // - memory-efficient attention entries only call vprintf and return;
++    // - flash-attention keeps its surrounding FMHA plumbing, but the tensor-core
++    //   GEMM path is compiled out, leaving its score accumulators at zero.
++    // Executing either fallback silently returns numerically invalid tensors.
++    // Fail closed so callers can select a supported backend instead.
++    if ptx_modules.iter().any(|src| {
++        let sm_version = ptx_parser::parse_module_unchecked(src).sm_version;
++        let memory_efficient_stub = src.contains("_Z24attention_kernel_batchedI15AttentionKernel")
++            && src.contains("vprintf");
++        let flash_cubin_only = src.contains("_Z20fmha_fwd_loop_kernelI18FMHA_kernel_traits")
++            && !src.contains("mma.sync");
++        sm_version < 50 && (memory_efficient_stub || flash_cubin_only)
++    }) {
++        return Err(CUerror::NO_BINARY_FOR_GPU);
++    }
+     let maybe_module = ptx_modules
+         .iter()
+         .rev() // TODO: actually sort by SM
+diff --git a/zluda/src/impl/stream.rs b/zluda/src/impl/stream.rs
+index 708b043..b559e89 100644
+--- a/zluda/src/impl/stream.rs
++++ b/zluda/src/impl/stream.rs
+@@ -20,6 +20,10 @@ pub(crate) fn destroy_v2(stream: hipStream_t) -> hipError_t {
+     unsafe { hipStreamDestroy(stream) }
+ }
+ 
++pub(crate) fn begin_capture(stream: hipStream_t) -> hipError_t {
++    unsafe { hipStreamBeginCapture(stream, hipStreamCaptureMode::hipStreamCaptureModeGlobal) }
++}
++
+ pub(crate) fn begin_capture_v2(stream: hipStream_t, mode: hipStreamCaptureMode) -> hipError_t {
+     unsafe { hipStreamBeginCapture(stream, mode) }
+ }
+@@ -35,6 +39,14 @@ pub(crate) fn is_capturing(
+     unsafe { hipStreamIsCapturing(stream, capture_status) }
+ }
+ 
++pub(crate) fn get_capture_info(
++    stream: hipStream_t,
++    capture_status: *mut hipStreamCaptureStatus,
++    id: *mut ::core::ffi::c_ulonglong,
++) -> hipError_t {
++    unsafe { hipStreamGetCaptureInfo(stream, capture_status, id) }
++}
++
+ pub(crate) fn get_capture_info_v2(
+     stream: hipStream_t,
+     capture_status: *mut hipStreamCaptureStatus,
+diff --git a/zluda/src/lib.rs b/zluda/src/lib.rs
+index ed2df7a..4422e4e 100644
+--- a/zluda/src/lib.rs
++++ b/zluda/src/lib.rs
+@@ -189,11 +189,13 @@ cuda_macros::cuda_function_declarations!(
+             cuPointerGetAttributes,
+             cuProfilerStart,
+             cuProfilerStop,
++            cuStreamBeginCapture,
+             cuStreamBeginCapture_v2,
+             cuStreamCreate,
+             cuStreamCreateWithPriority,
+             cuStreamDestroy_v2,
+             cuStreamEndCapture,
++            cuStreamGetCaptureInfo,
+             cuStreamGetCaptureInfo_v2,
+             cuStreamGetCaptureInfo_v3,
+             cuStreamIsCapturing,
+diff --git a/zluda_blas/src/impl.rs b/zluda_blas/src/impl.rs
+index 671e24b..ac5817c 100644
+--- a/zluda_blas/src/impl.rs
++++ b/zluda_blas/src/impl.rs
+@@ -14,6 +14,177 @@ fn rocblas() -> Result<&'static super::RocblasVtable, rocblas_error> {
+     unwrapped.as_ref().map_err(|x| *x)
+ }
+ 
++
++#[cfg(windows)]
++struct HipsolverVtable {
++    _hip_lib: libloading::os::windows::Library,
++    _lib: libloading::os::windows::Library,
++    hip_memcpy: unsafe extern "C" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_void, usize, i32) -> i32,
++    hip_malloc: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void, usize) -> i32,
++    hip_free: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    hip_stream_synchronize: unsafe extern "C" fn(hipStream_t) -> i32,
++    create: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32,
++    destroy: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    set_stream: unsafe extern "C" fn(*mut ::core::ffi::c_void, hipStream_t) -> i32,
++    create_params: unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32,
++    destroy_params: unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32,
++    xgeqrf_buffer_size: unsafe extern "C" fn(
++        *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++        i64, i64, i32, *const ::core::ffi::c_void, i64,
++        i32, *const ::core::ffi::c_void, i32, *mut usize, *mut usize,
++    ) -> i32,
++    xgeqrf: unsafe extern "C" fn(
++        *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++        i64, i64, i32, *mut ::core::ffi::c_void, i64,
++        i32, *mut ::core::ffi::c_void, i32,
++        *mut ::core::ffi::c_void, usize,
++        *mut ::core::ffi::c_void, usize,
++        *mut i32,
++    ) -> i32,
++    sgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    dgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    cgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    zgetrf_buffer_size: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    sgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    dgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    cgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    zgetrf: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32,
++    sgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    dgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    cgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++    zgetrs: unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32,
++}
++
++#[cfg(windows)]
++impl HipsolverVtable {
++    unsafe fn new() -> Result<Self, cublasError_t> {
++        // Load the HIP runtime from HIP_PATH first. Keeping this dynamic is crucial on
++        // Windows: a static amdhip64_7 import would resolve to System32 before ZLUDA
++        // can anchor the performance-library stack to the selected HIP/TheRock tree.
++        let hip_module = zluda_windows::try_load_from_self_or_hip_with_message(&["amdhip64_7.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_lib = libloading::os::windows::Library::from_raw(hip_module.0 as _);
++        let hip_memcpy = *hip_lib
++            .get::<unsafe extern "C" fn(*mut ::core::ffi::c_void, *const ::core::ffi::c_void, usize, i32) -> i32>(b"hipMemcpy\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_malloc = *hip_lib
++            .get::<unsafe extern "C" fn(*mut *mut ::core::ffi::c_void, usize) -> i32>(b"hipMalloc\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_free = *hip_lib
++            .get::<unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32>(b"hipFree\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++        let hip_stream_synchronize = *hip_lib
++            .get::<unsafe extern "C" fn(hipStream_t) -> i32>(b"hipStreamSynchronize\0")
++            .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?;
++
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["hipsolver.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let lib = libloading::os::windows::Library::from_raw(hmodule.0 as _);
++        macro_rules! sym {
++            ($name:literal, $ty:ty) => {
++                *lib.get::<$ty>(concat!($name, "\0").as_bytes())
++                    .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?
++            };
++        }
++        let create = sym!("hipsolverDnCreate", unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32);
++        let destroy = sym!("hipsolverDnDestroy", unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32);
++        let set_stream = sym!("hipsolverDnSetStream", unsafe extern "C" fn(*mut ::core::ffi::c_void, hipStream_t) -> i32);
++        let create_params = sym!("hipsolverDnCreateParams", unsafe extern "C" fn(*mut *mut ::core::ffi::c_void) -> i32);
++        let destroy_params = sym!("hipsolverDnDestroyParams", unsafe extern "C" fn(*mut ::core::ffi::c_void) -> i32);
++        let xgeqrf_buffer_size = sym!("hipsolverDnXgeqrf_bufferSize", unsafe extern "C" fn(
++            *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++            i64, i64, i32, *const ::core::ffi::c_void, i64,
++            i32, *const ::core::ffi::c_void, i32, *mut usize, *mut usize,
++        ) -> i32);
++        let xgeqrf = sym!("hipsolverDnXgeqrf", unsafe extern "C" fn(
++            *mut ::core::ffi::c_void, *mut ::core::ffi::c_void,
++            i64, i64, i32, *mut ::core::ffi::c_void, i64,
++            i32, *mut ::core::ffi::c_void, i32,
++            *mut ::core::ffi::c_void, usize,
++            *mut ::core::ffi::c_void, usize,
++            *mut i32,
++        ) -> i32);
++        type GetrfBufferFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32;
++        type GetrfFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, *mut ::core::ffi::c_void, i32, *mut ::core::ffi::c_void, *mut i32, *mut i32) -> i32;
++        let sgetrf_buffer_size = sym!("hipsolverDnSgetrf_bufferSize", GetrfBufferFn);
++        let dgetrf_buffer_size = sym!("hipsolverDnDgetrf_bufferSize", GetrfBufferFn);
++        let cgetrf_buffer_size = sym!("hipsolverDnCgetrf_bufferSize", GetrfBufferFn);
++        let zgetrf_buffer_size = sym!("hipsolverDnZgetrf_bufferSize", GetrfBufferFn);
++        let sgetrf = sym!("hipsolverDnSgetrf", GetrfFn);
++        let dgetrf = sym!("hipsolverDnDgetrf", GetrfFn);
++        let cgetrf = sym!("hipsolverDnCgetrf", GetrfFn);
++        let zgetrf = sym!("hipsolverDnZgetrf", GetrfFn);
++        type GetrsFn = unsafe extern "C" fn(*mut ::core::ffi::c_void, i32, i32, i32, *const ::core::ffi::c_void, i32, *const i32, *mut ::core::ffi::c_void, i32, *mut i32) -> i32;
++        let sgetrs = sym!("hipsolverDnSgetrs", GetrsFn);
++        let dgetrs = sym!("hipsolverDnDgetrs", GetrsFn);
++        let cgetrs = sym!("hipsolverDnCgetrs", GetrsFn);
++        let zgetrs = sym!("hipsolverDnZgetrs", GetrsFn);
++        Ok(Self { _hip_lib: hip_lib, _lib: lib, hip_memcpy, hip_malloc, hip_free, hip_stream_synchronize, create, destroy, set_stream, create_params, destroy_params, xgeqrf_buffer_size, xgeqrf, sgetrf_buffer_size, dgetrf_buffer_size, cgetrf_buffer_size, zgetrf_buffer_size, sgetrf, dgetrf, cgetrf, zgetrf, sgetrs, dgetrs, cgetrs, zgetrs })
++    }
++}
++
++#[cfg(windows)]
++fn hipsolver() -> Result<&'static HipsolverVtable, cublasError_t> {
++    static LOCK: OnceLock<Result<HipsolverVtable, cublasError_t>> = OnceLock::new();
++    LOCK.get_or_init(|| unsafe { HipsolverVtable::new() })
++        .as_ref()
++        .map_err(|e| *e)
++}
++
++#[cfg(windows)]
++struct RocsolverVtable {
++    _lib: libloading::os::windows::Library,
++    sgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f32, i32, *const *mut f32, i32, *mut i32, i32) -> rocblas_status,
++    dgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f64, i32, *const *mut f64, i32, *mut i32, i32) -> rocblas_status,
++    cgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_float_complex, i32, *const *mut rocblas_float_complex, i32, *mut i32, i32) -> rocblas_status,
++    zgels_batched: unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_double_complex, i32, *const *mut rocblas_double_complex, i32, *mut i32, i32) -> rocblas_status,
++}
++
++#[cfg(windows)]
++impl RocsolverVtable {
++    unsafe fn new() -> Result<Self, cublasError_t> {
++        // Anchor the selected HIP/TheRock runtime before loading rocSOLVER.
++        let _ = hipsolver()?;
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["rocsolver.dll"])
++            .ok_or(cublasError_t::r#NOT_INITIALIZED)?;
++        let lib = libloading::os::windows::Library::from_raw(hmodule.0 as _);
++        macro_rules! sym {
++            ($name:literal, $ty:ty) => {
++                *lib.get::<$ty>(concat!($name, "\0").as_bytes())
++                    .map_err(|_| cublasError_t::r#NOT_INITIALIZED)?
++            };
++        }
++        let sgels_batched = sym!("rocsolver_sgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f32, i32, *const *mut f32, i32, *mut i32, i32) -> rocblas_status);
++        let dgels_batched = sym!("rocsolver_dgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut f64, i32, *const *mut f64, i32, *mut i32, i32) -> rocblas_status);
++        let cgels_batched = sym!("rocsolver_cgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_float_complex, i32, *const *mut rocblas_float_complex, i32, *mut i32, i32) -> rocblas_status);
++        let zgels_batched = sym!("rocsolver_zgels_batched", unsafe extern "C" fn(rocblas_handle, rocblas_operation, i32, i32, i32, *const *mut rocblas_double_complex, i32, *const *mut rocblas_double_complex, i32, *mut i32, i32) -> rocblas_status);
++        Ok(Self { _lib: lib, sgels_batched, dgels_batched, cgels_batched, zgels_batched })
++    }
++}
++
++#[cfg(windows)]
++fn rocsolver() -> Result<&'static RocsolverVtable, cublasError_t> {
++    static LOCK: OnceLock<Result<RocsolverVtable, cublasError_t>> = OnceLock::new();
++    LOCK.get_or_init(|| unsafe { RocsolverVtable::new() })
++        .as_ref()
++        .map_err(|e| *e)
++}
++
++#[cfg(windows)]
++fn cublas_error_from_hipsolver(status: i32) -> Result<(), cublasError_t> {
++    match status {
++        0 => Ok(()),
++        1 | 9 => Err(cublasError_t::r#NOT_INITIALIZED),
++        2 => Err(cublasError_t::r#ALLOC_FAILED),
++        3 | 10 => Err(cublasError_t::r#INVALID_VALUE),
++        4 => Err(cublasError_t::r#MAPPING_ERROR),
++        5 => Err(cublasError_t::r#EXECUTION_FAILED),
++        7 | 13 => Err(cublasError_t::r#NOT_SUPPORTED),
++        8 => Err(cublasError_t::r#ARCH_MISMATCH),
++        _ => Err(cublasError_t::r#INTERNAL_ERROR),
++    }
++}
++
+ // This is repr(c) because it needs to be compatible with BlasHandle in zluda_blaslt.
+ #[repr(C)]
+ pub struct Handle {
+@@ -122,6 +293,537 @@ pub(crate) fn get_cudart_version() -> usize {
+     todo!()
+ }
+ 
++
++#[cfg(windows)]
++unsafe fn copy_device_pointer_array<T>(
++    hs: &HipsolverVtable,
++    array: *const *mut T,
++    batch_count: i32,
++) -> Result<Vec<*mut T>, cublasError_t> {
++    let mut ptrs = vec![ptr::null_mut::<T>(); batch_count.max(0) as usize];
++    if ptrs.is_empty() {
++        return Ok(ptrs);
++    }
++    let status = (hs.hip_memcpy)(
++        ptrs.as_mut_ptr().cast(),
++        array.cast(),
++        ptrs.len() * mem::size_of::<*mut T>(),
++        2, // hipMemcpyDeviceToHost
++    );
++    if status != 0 || ptrs.iter().any(|p| p.is_null()) {
++        Err(cublasError_t::r#EXECUTION_FAILED)
++    } else {
++        Ok(ptrs)
++    }
++}
++
++#[cfg(windows)]
++macro_rules! impl_geqrf_batched {
++    ($name:ident, $ty:ty, $cuda_type:expr) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            m: i32,
++            n: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            tau_array: *const *mut $ty,
++            info: *mut i32,
++            batch_count: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if m < 0 { *info = -2; return Err(cublasError_t::r#INVALID_VALUE); }
++            if n < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(m) { *info = -5; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_count < 0 { *info = -8; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_count == 0 || m == 0 || n == 0 { return Ok(()); }
++            if a_array.is_null() || tau_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++
++            let hs = hipsolver()?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            // PyTorch materializes the pointer arrays on the active CUDA stream.
++            // Synchronize that stream before copying Aarray/TauArray back to host;
++            // otherwise a synchronous D2H copy can race or deadlock with work queued
++            // on a non-default stream that will be reused for the solver launch.
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array(hs, a_array, batch_count)?;
++            let tau_ptrs = copy_device_pointer_array(hs, tau_array, batch_count)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            let mut params = ptr::null_mut::<::core::ffi::c_void>();
++            if let Err(e) = cublas_error_from_hipsolver((hs.create_params)(&mut params)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut workspace_device_bytes = 0usize;
++            let mut workspace_host_bytes = 0usize;
++            let query_status = (hs.xgeqrf_buffer_size)(
++                solver_handle, params, m as i64, n as i64,
++                $cuda_type, a_ptrs[0].cast(), lda as i64,
++                $cuda_type, tau_ptrs[0].cast(), $cuda_type,
++                &mut workspace_device_bytes, &mut workspace_host_bytes,
++            );
++            if let Err(e) = cublas_error_from_hipsolver(query_status) {
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut workspace_device = ptr::null_mut::<::core::ffi::c_void>();
++            if workspace_device_bytes > 0 {
++                if (hs.hip_malloc)(&mut workspace_device, workspace_device_bytes) != 0 {
++                    let _ = (hs.destroy_params)(params);
++                    let _ = (hs.destroy)(solver_handle);
++                    return Err(cublasError_t::r#ALLOC_FAILED);
++                }
++            }
++            let mut dev_info = ptr::null_mut::<::core::ffi::c_void>();
++            if (hs.hip_malloc)(&mut dev_info, mem::size_of::<i32>()) != 0 {
++                if !workspace_device.is_null() { let _ = (hs.hip_free)(workspace_device); }
++                let _ = (hs.destroy_params)(params);
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++            let mut workspace_host = vec![0u8; workspace_host_bytes.max(1)];
++            let workspace_host_ptr = if workspace_host_bytes == 0 { ptr::null_mut() } else { workspace_host.as_mut_ptr().cast() };
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_count as usize {
++                let status = (hs.xgeqrf)(
++                    solver_handle, params, m as i64, n as i64,
++                    $cuda_type, a_ptrs[i].cast(), lda as i64,
++                    $cuda_type, tau_ptrs[i].cast(), $cuda_type,
++                    workspace_device, workspace_device_bytes,
++                    workspace_host_ptr, workspace_host_bytes,
++                    dev_info.cast::<i32>(),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++
++            // Synchronize the actual cuBLAS stream before releasing per-call solver
++            // workspaces. On non-default streams, relying on hipFree's implicit sync
++            // can deadlock or free storage before the queued QR work has completed.
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let info_free = (hs.hip_free)(dev_info);
++            if info_free != 0 && result.is_ok() {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            if !workspace_device.is_null() {
++                let work_free = (hs.hip_free)(workspace_device);
++                if work_free != 0 && result.is_ok() {
++                    result = Err(cublasError_t::r#EXECUTION_FAILED);
++                }
++            }
++            let destroy_params_status = (hs.destroy_params)(params);
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_params_status)?;
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_geqrf_batched!(sgeqrf_batched, f32, 0);
++#[cfg(windows)]
++impl_geqrf_batched!(dgeqrf_batched, f64, 1);
++#[cfg(windows)]
++impl_geqrf_batched!(cgeqrf_batched, cuda_types::cublas::cuComplex, 4);
++#[cfg(windows)]
++impl_geqrf_batched!(zgeqrf_batched, cuda_types::cublas::cuDoubleComplex, 5);
++
++
++#[cfg(windows)]
++fn hipsolver_operation(trans: cublasOperation_t) -> Result<i32, cublasError_t> {
++    match trans.0 {
++        0 => Ok(111), // HIPBLAS_OP_N
++        1 => Ok(112), // HIPBLAS_OP_T
++        2 => Ok(113), // HIPBLAS_OP_C
++        _ => Err(cublasError_t::r#NOT_SUPPORTED),
++    }
++}
++
++#[cfg(windows)]
++macro_rules! impl_getrf_batched {
++    ($name:ident, $ty:ty, $buffer_field:ident, $run_field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            n: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            pivots: *mut i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if n < 0 || batch_size < 0 || lda < 1.max(n) {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            if batch_size == 0 || n == 0 {
++                return Ok(());
++            }
++            if a_array.is_null() || info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            let hs = hipsolver()?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array::<$ty>(hs, a_array, batch_size)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            let mut lwork = 0i32;
++            let query_status = (hs.$buffer_field)(
++                solver_handle, n, n, a_ptrs[0].cast(), lda, &mut lwork,
++            );
++            if let Err(e) = cublas_error_from_hipsolver(query_status) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++            if lwork < 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#INTERNAL_ERROR);
++            }
++            let workspace_bytes = (lwork as usize).saturating_mul(mem::size_of::<$ty>());
++            let mut workspace = ptr::null_mut::<::core::ffi::c_void>();
++            if workspace_bytes > 0 && (hs.hip_malloc)(&mut workspace, workspace_bytes) != 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_size as usize {
++                let pivot_ptr = if pivots.is_null() { ptr::null_mut() } else { pivots.add(i * n as usize) };
++                let status = (hs.$run_field)(
++                    solver_handle,
++                    n,
++                    n,
++                    a_ptrs[i].cast(),
++                    lda,
++                    workspace,
++                    pivot_ptr,
++                    info.add(i),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            if !workspace.is_null() && (hs.hip_free)(workspace) != 0 && result.is_ok() {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_getrf_batched!(sgetrf_batched, f32, sgetrf_buffer_size, sgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(dgetrf_batched, f64, dgetrf_buffer_size, dgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(cgetrf_batched, cuda_types::cublas::cuComplex, cgetrf_buffer_size, cgetrf);
++#[cfg(windows)]
++impl_getrf_batched!(zgetrf_batched, cuda_types::cublas::cuDoubleComplex, zgetrf_buffer_size, zgetrf);
++
++#[cfg(windows)]
++macro_rules! impl_getrs_batched {
++    ($name:ident, $ty:ty, $field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            trans: cublasOperation_t,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *const $ty,
++            lda: i32,
++            dev_ipiv: *const i32,
++            b_array: *const *mut $ty,
++            ldb: i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if n < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if nrhs < 0 { *info = -4; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(n) { *info = -6; return Err(cublasError_t::r#INVALID_VALUE); }
++            if ldb < 1.max(n) { *info = -9; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size < 0 { *info = -11; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size == 0 || n == 0 || nrhs == 0 {
++                return Ok(());
++            }
++            if a_array.is_null() || b_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            // cuBLAS permits a null pivot array for non-pivoted LU. hipSOLVER's
++            // GETRS ABI requires pivots, so report that backend gap explicitly.
++            if dev_ipiv.is_null() {
++                return Err(cublasError_t::r#NOT_SUPPORTED);
++            }
++
++            let hs = hipsolver()?;
++            let hip_op = hipsolver_operation(trans)?;
++            let mut stream = hip_runtime_sys::hipStream_t(ptr::null_mut());
++            if let Err(e) = rocblas()?.rocblas_get_stream(handle.rocm_handle, &mut stream) {
++                return Err(e.into());
++            }
++            // PyTorch materializes the pointer arrays on the active CUDA stream.
++            // Synchronize before copying only those pointer arrays to host.
++            if (hs.hip_stream_synchronize)(stream) != 0 {
++                return Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let a_ptrs = copy_device_pointer_array::<$ty>(hs, a_array as *const *mut $ty, batch_size)?;
++            let b_ptrs = copy_device_pointer_array::<$ty>(hs, b_array, batch_size)?;
++
++            let mut solver_handle = ptr::null_mut::<::core::ffi::c_void>();
++            cublas_error_from_hipsolver((hs.create)(&mut solver_handle))?;
++            if let Err(e) = cublas_error_from_hipsolver((hs.set_stream)(solver_handle, stream)) {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(e);
++            }
++
++            // cuBLAS GETRS exposes a single HOST info integer. hipSOLVER instead
++            // requires a DEVICE devInfo pointer, so keep a private temporary here.
++            let mut dev_info = ptr::null_mut::<::core::ffi::c_void>();
++            if (hs.hip_malloc)(&mut dev_info, mem::size_of::<i32>()) != 0 {
++                let _ = (hs.destroy)(solver_handle);
++                return Err(cublasError_t::r#ALLOC_FAILED);
++            }
++
++            let mut result: cublasStatus_t = Ok(());
++            for i in 0..batch_size as usize {
++                let pivots = dev_ipiv.add(i * n as usize);
++                let status = (hs.$field)(
++                    solver_handle,
++                    hip_op,
++                    n,
++                    nrhs,
++                    a_ptrs[i].cast(),
++                    lda,
++                    pivots,
++                    b_ptrs[i].cast(),
++                    ldb,
++                    dev_info.cast::<i32>(),
++                );
++                if let Err(e) = cublas_error_from_hipsolver(status) {
++                    result = Err(e);
++                    break;
++                }
++            }
++            if result.is_ok() && (hs.hip_stream_synchronize)(stream) != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let info_free = (hs.hip_free)(dev_info);
++            if result.is_ok() && info_free != 0 {
++                result = Err(cublasError_t::r#EXECUTION_FAILED);
++            }
++            let destroy_status = (hs.destroy)(solver_handle);
++            if result.is_ok() {
++                cublas_error_from_hipsolver(destroy_status)?;
++            }
++            result
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_getrs_batched!(sgetrs_batched, f32, sgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(dgetrs_batched, f64, dgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(cgetrs_batched, cuda_types::cublas::cuComplex, cgetrs);
++#[cfg(windows)]
++impl_getrs_batched!(zgetrs_batched, cuda_types::cublas::cuDoubleComplex, zgetrs);
++
++#[cfg(windows)]
++macro_rules! impl_gels_batched {
++    ($name:ident, $ty:ty, $roc_ty:ty, $field:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            trans: cublasOperation_t,
++            m: i32,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            c_array: *const *mut $ty,
++            ldc: i32,
++            info: *mut i32,
++            dev_info_array: *mut i32,
++            batch_size: i32,
++        ) -> cublasStatus_t {
++            if info.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            *info = 0;
++            if m < 0 { *info = -3; return Err(cublasError_t::r#INVALID_VALUE); }
++            if n < 0 { *info = -4; return Err(cublasError_t::r#INVALID_VALUE); }
++            if nrhs < 0 { *info = -5; return Err(cublasError_t::r#INVALID_VALUE); }
++            if lda < 1.max(m) { *info = -7; return Err(cublasError_t::r#INVALID_VALUE); }
++            if ldc < 1.max(m.max(n)) { *info = -9; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size < 0 { *info = -12; return Err(cublasError_t::r#INVALID_VALUE); }
++            if batch_size == 0 || m == 0 || n == 0 || nrhs == 0 { return Ok(()); }
++            if a_array.is_null() || c_array.is_null() || dev_info_array.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            let op = trsm_operation(trans)?;
++            // rocSOLVER's GELS uses conjugate-transpose for complex transposed solves,
++            // while cuBLAS passes CUBLAS_OP_T for real and CUBLAS_OP_C for complex.
++            let status = (rocsolver()?.$field)(
++                handle.rocm_handle,
++                op,
++                m,
++                n,
++                nrhs,
++                a_array.cast::<*mut $roc_ty>(),
++                lda,
++                c_array.cast::<*mut $roc_ty>(),
++                ldc,
++                dev_info_array,
++                batch_size,
++            );
++            status?;
++            Ok(())
++        }
++    };
++}
++
++#[cfg(windows)]
++impl_gels_batched!(sgels_batched, f32, f32, sgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(dgels_batched, f64, f64, dgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(cgels_batched, cuda_types::cublas::cuComplex, rocblas_float_complex, cgels_batched);
++#[cfg(windows)]
++impl_gels_batched!(zgels_batched, cuda_types::cublas::cuDoubleComplex, rocblas_double_complex, zgels_batched);
++
++fn trsm_side(side: cublasSideMode_t) -> Result<rocblas_side, cublasError_t> {
++    match side.0 {
++        0 => Ok(rocblas_side::rocblas_side_left),
++        1 => Ok(rocblas_side::rocblas_side_right),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++fn trsm_fill(uplo: cublasFillMode_t) -> Result<rocblas_fill, cublasError_t> {
++    match uplo.0 {
++        0 => Ok(rocblas_fill::rocblas_fill_lower),
++        1 => Ok(rocblas_fill::rocblas_fill_upper),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++fn trsm_operation(trans: cublasOperation_t) -> Result<rocblas_operation, cublasError_t> {
++    match trans.0 {
++        0 => Ok(rocblas_operation::rocblas_operation_none),
++        1 => Ok(rocblas_operation::rocblas_operation_transpose),
++        2 => Ok(rocblas_operation::rocblas_operation_conjugate_transpose),
++        _ => Err(cublasError_t::r#NOT_SUPPORTED),
++    }
++}
++
++fn trsm_diagonal(diag: cublasDiagType_t) -> Result<rocblas_diagonal, cublasError_t> {
++    match diag.0 {
++        0 => Ok(rocblas_diagonal::rocblas_diagonal_non_unit),
++        1 => Ok(rocblas_diagonal::rocblas_diagonal_unit),
++        _ => Err(cublasError_t::r#INVALID_VALUE),
++    }
++}
++
++macro_rules! impl_trsm_batched {
++    ($name:ident, $ty:ty, $roc_ty:ty, $roc_fn:ident) => {
++        pub(crate) unsafe fn $name(
++            handle: &Handle,
++            side: cublasSideMode_t,
++            uplo: cublasFillMode_t,
++            trans: cublasOperation_t,
++            diag: cublasDiagType_t,
++            m: i32,
++            n: i32,
++            alpha: *const $ty,
++            a: *const *const $ty,
++            lda: i32,
++            b: *const *mut $ty,
++            ldb: i32,
++            batch_count: i32,
++        ) -> cublasStatus_t {
++            if batch_count < 0 || m < 0 || n < 0 || alpha.is_null() || a.is_null() || b.is_null() {
++                return Err(cublasError_t::r#INVALID_VALUE);
++            }
++            if batch_count == 0 || m == 0 || n == 0 {
++                return Ok(());
++            }
++            let side = trsm_side(side)?;
++            let uplo = trsm_fill(uplo)?;
++            let trans = trsm_operation(trans)?;
++            let diag = trsm_diagonal(diag)?;
++            rocblas()?.$roc_fn(
++                handle.rocm_handle,
++                side,
++                uplo,
++                trans,
++                diag,
++                m,
++                n,
++                alpha.cast::<$roc_ty>(),
++                a.cast::<*const $roc_ty>(),
++                lda,
++                b.cast::<*mut $roc_ty>(),
++                ldb,
++                batch_count,
++            )?;
++            Ok(())
++        }
++    };
++}
++
++impl_trsm_batched!(strsm_batched, f32, f32, rocblas_strsm_batched);
++impl_trsm_batched!(dtrsm_batched, f64, f64, rocblas_dtrsm_batched);
++impl_trsm_batched!(ctrsm_batched, cuda_types::cublas::cuComplex, rocblas_float_complex, rocblas_ctrsm_batched);
++impl_trsm_batched!(ztrsm_batched, cuda_types::cublas::cuDoubleComplex, rocblas_double_complex, rocblas_ztrsm_batched);
++
+ pub(crate) fn set_math_mode(handle: &Handle, mode: rocblas_math_mode) -> cublasStatus_t {
+     unsafe { rocblas()?.rocblas_set_math_mode(handle.rocm_handle, mode) }?;
+     Ok(())
+@@ -172,6 +874,54 @@ pub(crate) fn sgemm_strided_batched(
+     Ok(())
+ }
+ 
++
++pub(crate) fn dgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const f64,
++    a: *const f64, lda: i32, stride_a: i64,
++    b: *const f64, ldb: i32, stride_b: i64,
++    beta: *const f64, c: *mut f64, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_dgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha,
++        a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
++pub(crate) fn cgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex, lda: i32, stride_a: i64,
++    b: *const cuda_types::cublas::cuComplex, ldb: i32, stride_b: i64,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_cgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha.cast(),
++        a.cast(), lda, stride_a, b.cast(), ldb, stride_b, beta.cast(), c.cast(), ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
++pub(crate) fn zgemm_strided_batched(
++    handle: &Handle, transa: rocblas_operation, transb: rocblas_operation,
++    m: i32, n: i32, k: i32, alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex, lda: i32, stride_a: i64,
++    b: *const cuda_types::cublas::cuDoubleComplex, ldb: i32, stride_b: i64,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex, ldc: i32, stride_c: i64,
++    batch_count: i32,
++) -> cublasStatus_t {
++    unsafe { rocblas()?.rocblas_zgemm_strided_batched(
++        handle.rocm_handle, transa, transb, m, n, k, alpha.cast(),
++        a.cast(), lda, stride_a, b.cast(), ldb, stride_b, beta.cast(), c.cast(), ldc, stride_c, batch_count,
++    ) }?;
++    Ok(())
++}
++
+ pub(crate) fn sgemm_v2(
+     handle: &Handle,
+     transa: rocblas_operation,
+@@ -209,6 +959,82 @@ pub(crate) fn sgemm_v2(
+     Ok(())
+ }
+ 
++
++pub(crate) fn dgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const f64,
++    a: *const f64,
++    lda: ::core::ffi::c_int,
++    b: *const f64,
++    ldb: ::core::ffi::c_int,
++    beta: *const f64,
++    c: *mut f64,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_dgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha, a, lda, b, ldb, beta, c, ldc,
++        )
++    }?;
++    Ok(())
++}
++
++pub(crate) fn cgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex,
++    lda: ::core::ffi::c_int,
++    b: *const cuda_types::cublas::cuComplex,
++    ldb: ::core::ffi::c_int,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_cgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha.cast(), a.cast(), lda, b.cast(), ldb, beta.cast(), c.cast(), ldc,
++        )
++    }?;
++    Ok(())
++}
++
++pub(crate) fn zgemm_v2(
++    handle: &Handle,
++    transa: rocblas_operation,
++    transb: rocblas_operation,
++    m: ::core::ffi::c_int,
++    n: ::core::ffi::c_int,
++    k: ::core::ffi::c_int,
++    alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex,
++    lda: ::core::ffi::c_int,
++    b: *const cuda_types::cublas::cuDoubleComplex,
++    ldb: ::core::ffi::c_int,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex,
++    ldc: ::core::ffi::c_int,
++) -> cublasStatus_t {
++    unsafe {
++        rocblas()?.rocblas_zgemm(
++            handle.rocm_handle, transa, transb, m, n, k,
++            alpha.cast(), a.cast(), lda, b.cast(), ldb, beta.cast(), c.cast(), ldc,
++        )
++    }?;
++    Ok(())
++}
++
+ pub(crate) fn destroy_v2(handle: cublasHandle_t) -> cublasStatus_t {
+     zluda_common::drop_checked::<Handle>(handle)
+ }
+diff --git a/zluda_blas/src/lib.rs b/zluda_blas/src/lib.rs
+index f7b190d..f7a4fa2 100644
+--- a/zluda_blas/src/lib.rs
++++ b/zluda_blas/src/lib.rs
+@@ -30,6 +30,10 @@ macro_rules! implemented {
+     };
+ }
+ 
++macro_rules! manual_implementation {
++    ($($tt:tt)*) => {};
++}
++
+ macro_rules! implemented_and_always_succeeds {
+     ($($abi:literal fn $fn_name:ident( $($arg_id:ident : $arg_type:ty),* ) -> $ret_type:ty;)*) => {
+         $(
+@@ -43,6 +47,260 @@ macro_rules! implemented_and_always_succeeds {
+     };
+ }
+ 
++
++
++
++
++
++macro_rules! manual_gels_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            m: i32,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *mut $ty,
++            lda: i32,
++            c_array: *const *mut $ty,
++            ldc: i32,
++            info: *mut i32,
++            dev_info_array: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, trans, m, n, nrhs, a_array, lda, c_array, ldc, info, dev_info_array, batch_size)
++        }
++    };
++}
++
++manual_gels_batched!(cublasSgelsBatched, sgels_batched, f32);
++manual_gels_batched!(cublasDgelsBatched, dgels_batched, f64);
++manual_gels_batched!(cublasCgelsBatched, cgels_batched, cuda_types::cublas::cuComplex);
++manual_gels_batched!(cublasZgelsBatched, zgels_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_getrf_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            n: i32,
++            a: *const *mut $ty,
++            lda: i32,
++            pivots: *mut i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, n, a, lda, pivots, info, batch_size)
++        }
++    };
++}
++
++manual_getrf_batched!(cublasSgetrfBatched, sgetrf_batched, f32);
++manual_getrf_batched!(cublasDgetrfBatched, dgetrf_batched, f64);
++manual_getrf_batched!(cublasCgetrfBatched, cgetrf_batched, cuda_types::cublas::cuComplex);
++manual_getrf_batched!(cublasZgetrfBatched, zgetrf_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_getrs_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            n: i32,
++            nrhs: i32,
++            a_array: *const *const $ty,
++            lda: i32,
++            dev_ipiv: *const i32,
++            b_array: *const *mut $ty,
++            ldb: i32,
++            info: *mut i32,
++            batch_size: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, trans, n, nrhs, a_array, lda, dev_ipiv, b_array, ldb, info, batch_size)
++        }
++    };
++}
++
++manual_getrs_batched!(cublasSgetrsBatched, sgetrs_batched, f32);
++manual_getrs_batched!(cublasDgetrsBatched, dgetrs_batched, f64);
++manual_getrs_batched!(cublasCgetrsBatched, cgetrs_batched, cuda_types::cublas::cuComplex);
++manual_getrs_batched!(cublasZgetrsBatched, zgetrs_batched, cuda_types::cublas::cuDoubleComplex);
++
++macro_rules! manual_trsm_batched {
++    ($name:ident, $impl_name:ident, $ty:ty) => {
++        #[cfg_attr(not(test), no_mangle)]
++        pub unsafe extern "system" fn $name(
++            handle: cuda_types::cublas::cublasHandle_t,
++            side: cuda_types::cublas::cublasSideMode_t,
++            uplo: cuda_types::cublas::cublasFillMode_t,
++            trans: cuda_types::cublas::cublasOperation_t,
++            diag: cuda_types::cublas::cublasDiagType_t,
++            m: i32,
++            n: i32,
++            alpha: *const $ty,
++            a: *const *const $ty,
++            lda: i32,
++            b: *const *mut $ty,
++            ldb: i32,
++            batch_count: i32,
++        ) -> cuda_types::cublas::cublasStatus_t {
++            let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++            crate::r#impl::$impl_name(handle, side, uplo, trans, diag, m, n, alpha, a, lda, b, ldb, batch_count)
++        }
++    };
++}
++
++manual_trsm_batched!(cublasStrsmBatched, strsm_batched, f32);
++manual_trsm_batched!(cublasDtrsmBatched, dtrsm_batched, f64);
++manual_trsm_batched!(cublasCtrsmBatched, ctrsm_batched, cuda_types::cublas::cuComplex);
++manual_trsm_batched!(cublasZtrsmBatched, ztrsm_batched, cuda_types::cublas::cuDoubleComplex);
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const f64,a:*const f64,lda:i32,stride_a:i64,
++    b:*const f64,ldb:i32,stride_b:i64,beta:*const f64,c:*mut f64,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::dgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const cuda_types::cublas::cuComplex,
++    a:*const cuda_types::cublas::cuComplex,lda:i32,stride_a:i64,
++    b:*const cuda_types::cublas::cuComplex,ldb:i32,stride_b:i64,
++    beta:*const cuda_types::cublas::cuComplex,c:*mut cuda_types::cublas::cuComplex,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::cgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgemmStridedBatched(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m:i32,n:i32,k:i32,alpha:*const cuda_types::cublas::cuDoubleComplex,
++    a:*const cuda_types::cublas::cuDoubleComplex,lda:i32,stride_a:i64,
++    b:*const cuda_types::cublas::cuDoubleComplex,ldb:i32,stride_b:i64,
++    beta:*const cuda_types::cublas::cuDoubleComplex,c:*mut cuda_types::cublas::cuDoubleComplex,ldc:i32,stride_c:i64,batch_count:i32,
++)->cuda_types::cublas::cublasStatus_t{
++    let handle=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&handle)?;
++    let transa=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transa)?;
++    let transb=zluda_common::FromCuda::<_,cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::zgemm_strided_batched(handle,transa,transb,m,n,k,alpha,a,lda,stride_a,b,ldb,stride_b,beta,c,ldc,stride_c,batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const f64,
++    a: *const f64, lda: i32,
++    b: *const f64, ldb: i32,
++    beta: *const f64,
++    c: *mut f64, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::dgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const cuda_types::cublas::cuComplex,
++    a: *const cuda_types::cublas::cuComplex, lda: i32,
++    b: *const cuda_types::cublas::cuComplex, ldb: i32,
++    beta: *const cuda_types::cublas::cuComplex,
++    c: *mut cuda_types::cublas::cuComplex, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::cgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgemm_v2(
++    handle: cuda_types::cublas::cublasHandle_t,
++    transa: cuda_types::cublas::cublasOperation_t,
++    transb: cuda_types::cublas::cublasOperation_t,
++    m: i32, n: i32, k: i32,
++    alpha: *const cuda_types::cublas::cuDoubleComplex,
++    a: *const cuda_types::cublas::cuDoubleComplex, lda: i32,
++    b: *const cuda_types::cublas::cuDoubleComplex, ldb: i32,
++    beta: *const cuda_types::cublas::cuDoubleComplex,
++    c: *mut cuda_types::cublas::cuDoubleComplex, ldc: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    let transa = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transa)?;
++    let transb = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&transb)?;
++    crate::r#impl::zgemm_v2(handle, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasSgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut f32, lda: i32, tau_array: *const *mut f32,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::sgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasDgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut f64, lda: i32, tau_array: *const *mut f64,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::dgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasCgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut cuda_types::cublas::cuComplex, lda: i32,
++    tau_array: *const *mut cuda_types::cublas::cuComplex,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::cgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
++#[cfg_attr(not(test), no_mangle)]
++pub unsafe extern "system" fn cublasZgeqrfBatched(
++    handle: cuda_types::cublas::cublasHandle_t, m: i32, n: i32,
++    a_array: *const *mut cuda_types::cublas::cuDoubleComplex, lda: i32,
++    tau_array: *const *mut cuda_types::cublas::cuDoubleComplex,
++    info: *mut i32, batch_count: i32,
++) -> cuda_types::cublas::cublasStatus_t {
++    let handle = zluda_common::FromCuda::<_, cublasError_t>::from_cuda(&handle)?;
++    crate::r#impl::zgeqrf_batched(handle, m, n, a_array, lda, tau_array, info, batch_count)
++}
++
+ cuda_macros::cublas_function_declarations!(
+     unimplemented,
+     implemented
+@@ -63,6 +321,35 @@ cuda_macros::cublas_function_declarations!(
+             cublasSgemmStridedBatched,
+             cublasSgemm_v2,
+         ],
++    manual_implementation
++        <= [
++            cublasSgelsBatched,
++            cublasDgelsBatched,
++            cublasCgelsBatched,
++            cublasZgelsBatched,
++            cublasSgetrfBatched,
++            cublasDgetrfBatched,
++            cublasCgetrfBatched,
++            cublasZgetrfBatched,
++            cublasSgetrsBatched,
++            cublasDgetrsBatched,
++            cublasCgetrsBatched,
++            cublasZgetrsBatched,
++            cublasStrsmBatched,
++            cublasDtrsmBatched,
++            cublasCtrsmBatched,
++            cublasZtrsmBatched,
++            cublasDgemm_v2,
++            cublasCgemm_v2,
++            cublasZgemm_v2,
++            cublasDgemmStridedBatched,
++            cublasCgemmStridedBatched,
++            cublasZgemmStridedBatched,
++            cublasSgeqrfBatched,
++            cublasDgeqrfBatched,
++            cublasCgeqrfBatched,
++            cublasZgeqrfBatched,
++        ],
+     implemented_and_always_succeeds
+         <= [
+             cublasGetStatusName,
+@@ -146,14 +433,25 @@ cuda_macros::rocblas_function_declarations!(
+             rocblas_gemm_ex,
+             rocblas_gemm_strided_batched_ex,
+             rocblas_get_math_mode,
++            rocblas_get_stream,
+             rocblas_get_vector,
+             rocblas_hgemm,
++            rocblas_dgemm,
++            rocblas_cgemm,
++            rocblas_zgemm,
+             rocblas_set_math_mode,
+             rocblas_set_pointer_mode,
+             rocblas_set_stream,
+             rocblas_set_vector,
+             rocblas_set_workspace,
++            rocblas_strsm_batched,
++            rocblas_dtrsm_batched,
++            rocblas_ctrsm_batched,
++            rocblas_ztrsm_batched,
+             rocblas_sgemm_strided_batched,
++            rocblas_dgemm_strided_batched,
++            rocblas_cgemm_strided_batched,
++            rocblas_zgemm_strided_batched,
+             rocblas_sgemm,
+         ]
+ );
+diff --git a/zluda_common/src/lib.rs b/zluda_common/src/lib.rs
+index af41f7a..8036577 100644
+--- a/zluda_common/src/lib.rs
++++ b/zluda_common/src/lib.rs
+@@ -281,6 +281,7 @@ from_cuda_transmute!(
+     cudnn9::cudnnConvolutionDescriptor_t => miopenConvolutionDescriptor_t,
+     cusparseHandle_t => rocsparse_handle,
+     cusparseMatrixType_t => rocsparse_matrix_type,
++    cusparseSpMatDescr_t => rocsparse_spmat_descr,
+     cusparseConstSpMatDescr_t => rocsparse_const_spmat_descr,
+     cusparseDnMatDescr_t => rocsparse_dnmat_descr,
+     cusparseConstDnMatDescr_t => rocsparse_const_dnmat_descr,
+diff --git a/zluda_dnn/src/impl.rs b/zluda_dnn/src/impl.rs
+index 45ec0ed..abbd2cf 100644
+--- a/zluda_dnn/src/impl.rs
++++ b/zluda_dnn/src/impl.rs
+@@ -860,6 +860,124 @@ pub(crate) unsafe fn get_convolution_forward_workspace_size(
+     )
+ }
+ 
++pub(crate) unsafe fn batch_normalization_forward_inference(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha: *const ::core::ffi::c_void,
++    beta: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    y_desc: miopenTensorDescriptor_t,
++    y: *mut ::core::ffi::c_void,
++    bn_scale_bias_mean_var_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    bn_bias: *const ::core::ffi::c_void,
++    estimated_mean: *const ::core::ffi::c_void,
++    estimated_variance: *const ::core::ffi::c_void,
++    epsilon: f64,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationForwardInference(
++        handle.base,
++        mode,
++        alpha.cast_mut(),
++        beta.cast_mut(),
++        x_desc,
++        x,
++        y_desc,
++        y,
++        bn_scale_bias_mean_var_desc,
++        bn_scale.cast_mut(),
++        bn_bias.cast_mut(),
++        estimated_mean.cast_mut(),
++        estimated_variance.cast_mut(),
++        epsilon,
++    )
++}
++
++pub(crate) unsafe fn batch_normalization_forward_training(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha: *const ::core::ffi::c_void,
++    beta: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    y_desc: miopenTensorDescriptor_t,
++    y: *mut ::core::ffi::c_void,
++    bn_scale_bias_mean_var_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    bn_bias: *const ::core::ffi::c_void,
++    exponential_average_factor: f64,
++    result_running_mean: *mut ::core::ffi::c_void,
++    result_running_variance: *mut ::core::ffi::c_void,
++    epsilon: f64,
++    result_save_mean: *mut ::core::ffi::c_void,
++    result_save_inv_variance: *mut ::core::ffi::c_void,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationForwardTraining(
++        handle.base,
++        mode,
++        alpha.cast_mut(),
++        beta.cast_mut(),
++        x_desc,
++        x,
++        y_desc,
++        y,
++        bn_scale_bias_mean_var_desc,
++        bn_scale.cast_mut(),
++        bn_bias.cast_mut(),
++        exponential_average_factor,
++        result_running_mean,
++        result_running_variance,
++        epsilon,
++        result_save_mean,
++        result_save_inv_variance,
++    )
++}
++
++pub(crate) unsafe fn batch_normalization_backward(
++    handle: &Context,
++    mode: miopenBatchNormMode_t,
++    alpha_data_diff: *const ::core::ffi::c_void,
++    beta_data_diff: *const ::core::ffi::c_void,
++    alpha_param_diff: *const ::core::ffi::c_void,
++    beta_param_diff: *const ::core::ffi::c_void,
++    x_desc: miopenTensorDescriptor_t,
++    x: *const ::core::ffi::c_void,
++    dy_desc: miopenTensorDescriptor_t,
++    dy: *const ::core::ffi::c_void,
++    dx_desc: miopenTensorDescriptor_t,
++    dx: *mut ::core::ffi::c_void,
++    d_bn_scale_bias_desc: miopenTensorDescriptor_t,
++    bn_scale: *const ::core::ffi::c_void,
++    d_bn_scale_result: *mut ::core::ffi::c_void,
++    d_bn_bias_result: *mut ::core::ffi::c_void,
++    epsilon: f64,
++    saved_mean: *const ::core::ffi::c_void,
++    saved_inv_variance: *const ::core::ffi::c_void,
++) -> miopenStatus_t {
++    miopen()?.miopenBatchNormalizationBackward(
++        handle.base,
++        mode,
++        alpha_data_diff,
++        beta_data_diff,
++        alpha_param_diff,
++        beta_param_diff,
++        x_desc,
++        x,
++        dy_desc,
++        dy,
++        dx_desc,
++        dx,
++        d_bn_scale_bias_desc,
++        bn_scale,
++        d_bn_scale_result,
++        d_bn_bias_result,
++        epsilon,
++        saved_mean,
++        saved_inv_variance,
++    )
++}
++
+ pub(crate) unsafe fn convolution_forward(
+     handle: &Context,
+     alpha: *const ::std::os::raw::c_void,
+@@ -1390,6 +1508,118 @@ pub mod dnn8 {
+         }
+     }
+ 
++    pub(crate) unsafe fn batch_normalization_forward_inference(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        estimated_mean: *const ::core::ffi::c_void,
++        estimated_variance: *const ::core::ffi::c_void,
++        epsilon: f64,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_forward_inference(
++            handle, mode, alpha, beta, x_desc, x, y_desc, y,
++            bn_scale_bias_mean_var_desc, bn_scale, bn_bias,
++            estimated_mean, estimated_variance, epsilon,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_training(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        exponential_average_factor: f64,
++        result_running_mean: *mut ::core::ffi::c_void,
++        result_running_variance: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        result_save_mean: *mut ::core::ffi::c_void,
++        result_save_inv_variance: *mut ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_forward_training(
++            handle, mode, alpha, beta, x_desc, x, y_desc, y,
++            bn_scale_bias_mean_var_desc, bn_scale, bn_bias,
++            exponential_average_factor, result_running_mean, result_running_variance,
++            epsilon, result_save_mean, result_save_inv_variance,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn batch_normalization_backward(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha_data_diff: *const ::core::ffi::c_void,
++        beta_data_diff: *const ::core::ffi::c_void,
++        alpha_param_diff: *const ::core::ffi::c_void,
++        beta_param_diff: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        dy_desc: cudnnTensorDescriptor_t,
++        dy: *const ::core::ffi::c_void,
++        dx_desc: cudnnTensorDescriptor_t,
++        dx: *mut ::core::ffi::c_void,
++        d_bn_scale_bias_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        d_bn_scale_result: *mut ::core::ffi::c_void,
++        d_bn_bias_result: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        saved_mean: *const ::core::ffi::c_void,
++        saved_inv_variance: *const ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::dnn9::batch_normalization_backward(
++            handle, mode, alpha_data_diff, beta_data_diff, alpha_param_diff, beta_param_diff,
++            x_desc, x, dy_desc, dy, dx_desc, dx, d_bn_scale_bias_desc, bn_scale,
++            d_bn_scale_result, d_bn_bias_result, epsilon, saved_mean, saved_inv_variance,
++        )?;
++        Ok(())
++    }
++
++    pub(crate) unsafe fn get_batch_normalization_forward_training_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,x:cudnnTensorDescriptor_t,z:cudnnTensorDescriptor_t,y:cudnnTensorDescriptor_t,b:cudnnTensorDescriptor_t,a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_forward_training_ex_workspace_size(h,m,o,x,z,y,b,a,s)?; Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_backward_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,x:cudnnTensorDescriptor_t,y:cudnnTensorDescriptor_t,dy:cudnnTensorDescriptor_t,dz:cudnnTensorDescriptor_t,dx:cudnnTensorDescriptor_t,b:cudnnTensorDescriptor_t,a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_backward_ex_workspace_size(h,m,o,x,y,dy,dz,dx,b,a,s)?; Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_training_ex_reserve_space_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,a:cudnnActivationDescriptor_t,x:cudnnTensorDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        super::dnn9::get_batch_normalization_training_ex_reserve_space_size(h,m,o,a,x,s)?; Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_forward_training_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,ad:*const ::core::ffi::c_void,bd:*const ::core::ffi::c_void,
++        xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,zd:cudnnTensorDescriptor_t,z:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*mut ::core::ffi::c_void,bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,
++        eaf:f64,rm:*mut ::core::ffi::c_void,rv:*mut ::core::ffi::c_void,eps:f64,sm:*mut ::core::ffi::c_void,siv:*mut ::core::ffi::c_void,
++        act:cudnnActivationDescriptor_t,ws:*mut ::core::ffi::c_void,wss:usize,rs:*mut ::core::ffi::c_void,rss:usize)->Result<(),cudnnError_t>{
++        super::dnn9::batch_normalization_forward_training_ex(h,m,o,ad,bd,xd,x,zd,z,yd,y,bnd,scale,bias,eaf,rm,rv,eps,sm,siv,act,ws,wss,rs,rss)?; Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_backward_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,add:*const ::core::ffi::c_void,bdd:*const ::core::ffi::c_void,
++        apd:*const ::core::ffi::c_void,bpd:*const ::core::ffi::c_void,xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*const ::core::ffi::c_void,dyd:cudnnTensorDescriptor_t,dy:*const ::core::ffi::c_void,
++        dzd:cudnnTensorDescriptor_t,dz:*mut ::core::ffi::c_void,dxd:cudnnTensorDescriptor_t,dx:*mut ::core::ffi::c_void,
++        bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,dscale:*mut ::core::ffi::c_void,dbias:*mut ::core::ffi::c_void,
++        eps:f64,sm:*const ::core::ffi::c_void,siv:*const ::core::ffi::c_void,act:cudnnActivationDescriptor_t,ws:*mut ::core::ffi::c_void,wss:usize,
++        rs:*mut ::core::ffi::c_void,rss:usize)->Result<(),cudnnError_t>{
++        super::dnn9::batch_normalization_backward_ex(h,m,o,add,bdd,apd,bpd,xd,x,yd,y,dyd,dy,dzd,dz,dxd,dx,bnd,scale,bias,dscale,dbias,eps,sm,siv,act,ws,wss,rs,rss)?; Ok(())
++    }
++
+     pub(crate) unsafe fn get_convolution_forward_algorithm_v7(
+         handle: cudnnHandle_t,
+         x_desc: cudnnTensorDescriptor_t,
+@@ -1585,6 +1815,148 @@ pub mod dnn9 {
+         .as_ptr()
+     }
+ 
++    fn batch_norm_mode(mode: cudnnBatchNormMode_t) -> Result<miopen_sys::miopenBatchNormMode_t, cudnnError_t> {
++        if mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_PER_ACTIVATION {
++            Ok(miopen_sys::miopenBatchNormMode_t::miopenBNPerActivation)
++        } else if mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_SPATIAL
++            || mode == cudnnBatchNormMode_t::CUDNN_BATCHNORM_SPATIAL_PERSISTENT
++        {
++            Ok(miopen_sys::miopenBatchNormMode_t::miopenBNSpatial)
++        } else {
++            Err(cudnnError_t::BAD_PARAM)
++        }
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_inference(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        estimated_mean: *const ::core::ffi::c_void,
++        estimated_variance: *const ::core::ffi::c_void,
++        epsilon: f64,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_forward_inference(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?,
++            batch_norm_mode(mode)?, alpha, beta,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&y_desc)?, y,
++            FromCuda::<_, cudnnError_t>::from_cuda(&bn_scale_bias_mean_var_desc)?,
++            bn_scale, bn_bias, estimated_mean, estimated_variance, epsilon,
++        ).map_err(Into::into)
++    }
++
++    pub(crate) unsafe fn batch_normalization_forward_training(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha: *const ::core::ffi::c_void,
++        beta: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        y_desc: cudnnTensorDescriptor_t,
++        y: *mut ::core::ffi::c_void,
++        bn_scale_bias_mean_var_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        bn_bias: *const ::core::ffi::c_void,
++        exponential_average_factor: f64,
++        result_running_mean: *mut ::core::ffi::c_void,
++        result_running_variance: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        result_save_mean: *mut ::core::ffi::c_void,
++        result_save_inv_variance: *mut ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_forward_training(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?,
++            batch_norm_mode(mode)?, alpha, beta,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&y_desc)?, y,
++            FromCuda::<_, cudnnError_t>::from_cuda(&bn_scale_bias_mean_var_desc)?,
++            bn_scale, bn_bias, exponential_average_factor,
++            result_running_mean, result_running_variance, epsilon,
++            result_save_mean, result_save_inv_variance,
++        ).map_err(Into::into)
++    }
++
++    pub(crate) unsafe fn batch_normalization_backward(
++        handle: cudnnHandle_t,
++        mode: cudnnBatchNormMode_t,
++        alpha_data_diff: *const ::core::ffi::c_void,
++        beta_data_diff: *const ::core::ffi::c_void,
++        alpha_param_diff: *const ::core::ffi::c_void,
++        beta_param_diff: *const ::core::ffi::c_void,
++        x_desc: cudnnTensorDescriptor_t,
++        x: *const ::core::ffi::c_void,
++        dy_desc: cudnnTensorDescriptor_t,
++        dy: *const ::core::ffi::c_void,
++        dx_desc: cudnnTensorDescriptor_t,
++        dx: *mut ::core::ffi::c_void,
++        d_bn_scale_bias_desc: cudnnTensorDescriptor_t,
++        bn_scale: *const ::core::ffi::c_void,
++        d_bn_scale_result: *mut ::core::ffi::c_void,
++        d_bn_bias_result: *mut ::core::ffi::c_void,
++        epsilon: f64,
++        saved_mean: *const ::core::ffi::c_void,
++        saved_inv_variance: *const ::core::ffi::c_void,
++    ) -> Result<(), cudnnError_t> {
++        super::batch_normalization_backward(
++            FromCuda::<_, cudnnError_t>::from_cuda(&handle)?, batch_norm_mode(mode)?,
++            alpha_data_diff, beta_data_diff, alpha_param_diff, beta_param_diff,
++            FromCuda::<_, cudnnError_t>::from_cuda(&x_desc)?, x,
++            FromCuda::<_, cudnnError_t>::from_cuda(&dy_desc)?, dy,
++            FromCuda::<_, cudnnError_t>::from_cuda(&dx_desc)?, dx,
++            FromCuda::<_, cudnnError_t>::from_cuda(&d_bn_scale_bias_desc)?,
++            bn_scale, d_bn_scale_result, d_bn_bias_result, epsilon,
++            saved_mean, saved_inv_variance,
++        ).map_err(Into::into)
++    }
++
++    fn batch_norm_ops_only(o:cudnnBatchNormOps_t)->Result<(),cudnnError_t>{
++        if o==cudnnBatchNormOps_t::CUDNN_BATCHNORM_OPS_BN{Ok(())}else{Err(cudnnError_t::NOT_SUPPORTED)}
++    }
++    pub(crate) unsafe fn get_batch_normalization_forward_training_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_x:cudnnTensorDescriptor_t,_z:cudnnTensorDescriptor_t,_y:cudnnTensorDescriptor_t,_b:cudnnTensorDescriptor_t,_a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_backward_ex_workspace_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_x:cudnnTensorDescriptor_t,_y:cudnnTensorDescriptor_t,_dy:cudnnTensorDescriptor_t,_dz:cudnnTensorDescriptor_t,_dx:cudnnTensorDescriptor_t,_b:cudnnTensorDescriptor_t,_a:cudnnActivationDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn get_batch_normalization_training_ex_reserve_space_size(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,_a:cudnnActivationDescriptor_t,_x:cudnnTensorDescriptor_t,s:*mut usize)->Result<(),cudnnError_t>{
++        let _ctx: &super::Context=FromCuda::<_,cudnnError_t>::from_cuda(&h)?;let _=batch_norm_mode(m)?;batch_norm_ops_only(o)?;if s.is_null(){return Err(cudnnError_t::BAD_PARAM)}*s=0;Ok(())
++    }
++    pub(crate) unsafe fn batch_normalization_forward_training_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,ad:*const ::core::ffi::c_void,bd:*const ::core::ffi::c_void,
++        xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,_zd:cudnnTensorDescriptor_t,_z:*const ::core::ffi::c_void,
++        yd:cudnnTensorDescriptor_t,y:*mut ::core::ffi::c_void,bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,bias:*const ::core::ffi::c_void,
++        eaf:f64,rm:*mut ::core::ffi::c_void,rv:*mut ::core::ffi::c_void,eps:f64,sm:*mut ::core::ffi::c_void,siv:*mut ::core::ffi::c_void,
++        _act:cudnnActivationDescriptor_t,_ws:*mut ::core::ffi::c_void,_wss:usize,_rs:*mut ::core::ffi::c_void,_rss:usize)->Result<(),cudnnError_t>{
++        batch_norm_ops_only(o)?;
++        super::batch_normalization_forward_training(FromCuda::<_,cudnnError_t>::from_cuda(&h)?,batch_norm_mode(m)?,ad,bd,
++            FromCuda::<_,cudnnError_t>::from_cuda(&xd)?,x,FromCuda::<_,cudnnError_t>::from_cuda(&yd)?,y,
++            FromCuda::<_,cudnnError_t>::from_cuda(&bnd)?,scale,bias,eaf,rm,rv,eps,sm,siv).map_err(Into::into)
++    }
++    pub(crate) unsafe fn batch_normalization_backward_ex(
++        h:cudnnHandle_t,m:cudnnBatchNormMode_t,o:cudnnBatchNormOps_t,add:*const ::core::ffi::c_void,bdd:*const ::core::ffi::c_void,
++        apd:*const ::core::ffi::c_void,bpd:*const ::core::ffi::c_void,xd:cudnnTensorDescriptor_t,x:*const ::core::ffi::c_void,
++        _yd:cudnnTensorDescriptor_t,_y:*const ::core::ffi::c_void,dyd:cudnnTensorDescriptor_t,dy:*const ::core::ffi::c_void,
++        _dzd:cudnnTensorDescriptor_t,_dz:*mut ::core::ffi::c_void,dxd:cudnnTensorDescriptor_t,dx:*mut ::core::ffi::c_void,
++        bnd:cudnnTensorDescriptor_t,scale:*const ::core::ffi::c_void,_bias:*const ::core::ffi::c_void,dscale:*mut ::core::ffi::c_void,dbias:*mut ::core::ffi::c_void,
++        eps:f64,sm:*const ::core::ffi::c_void,siv:*const ::core::ffi::c_void,_act:cudnnActivationDescriptor_t,_ws:*mut ::core::ffi::c_void,_wss:usize,
++        _rs:*mut ::core::ffi::c_void,_rss:usize)->Result<(),cudnnError_t>{
++        batch_norm_ops_only(o)?;
++        super::batch_normalization_backward(FromCuda::<_,cudnnError_t>::from_cuda(&h)?,batch_norm_mode(m)?,add,bdd,apd,bpd,
++            FromCuda::<_,cudnnError_t>::from_cuda(&xd)?,x,FromCuda::<_,cudnnError_t>::from_cuda(&dyd)?,dy,
++            FromCuda::<_,cudnnError_t>::from_cuda(&dxd)?,dx,FromCuda::<_,cudnnError_t>::from_cuda(&bnd)?,scale,dscale,dbias,eps,sm,siv).map_err(Into::into)
++    }
++
+     pub(crate) unsafe fn get_convolution_forward_algorithm_v7(
+         handle: cudnnHandle_t,
+         x_desc: cudnnTensorDescriptor_t,
+diff --git a/zluda_dnn/src/lib.rs b/zluda_dnn/src/lib.rs
+index 21b72fc..3e82e1f 100644
+--- a/zluda_dnn/src/lib.rs
++++ b/zluda_dnn/src/lib.rs
+@@ -80,6 +80,14 @@ macro_rules! dual_function_declarations {
+ dual_function_declarations! {
+     unimplemented,
+     (implemented_dnn8|implemented_dnn9) <= [
++        cudnnBatchNormalizationBackward,
++        cudnnBatchNormalizationBackwardEx,
++        cudnnBatchNormalizationForwardInference,
++        cudnnBatchNormalizationForwardTraining,
++        cudnnBatchNormalizationForwardTrainingEx,
++        cudnnGetBatchNormalizationBackwardExWorkspaceSize,
++        cudnnGetBatchNormalizationForwardTrainingExWorkspaceSize,
++        cudnnGetBatchNormalizationTrainingExReserveSpaceSize,
+         cudnnGetConvolutionBackwardDataAlgorithm_v7,
+         cudnnGetConvolutionBackwardFilterAlgorithm_v7,
+         cudnnGetConvolutionForwardAlgorithm_v7,
+@@ -189,6 +197,9 @@ cuda_macros::miopen_function_declarations!(
+     noop,
+     os::vtable_impl
+         <= [
++            miopenBatchNormalizationBackward,
++            miopenBatchNormalizationForwardInference,
++            miopenBatchNormalizationForwardTraining,
+             miopenCreate,
+             miopenCreateConvolutionDescriptor,
+             miopenCreateConvProblem,
+diff --git a/zluda_fft/Cargo.toml b/zluda_fft/Cargo.toml
+index 6b672fa..8b965c2 100644
+--- a/zluda_fft/Cargo.toml
++++ b/zluda_fft/Cargo.toml
+@@ -10,6 +10,7 @@ name = "cufft"
+ [dependencies]
+ cuda_macros = { path = "../cuda_macros" }
+ cuda_types = { path = "../cuda_types" }
++hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
+ 
+ [package.metadata.zluda]
+ linux_symlinks = [
+@@ -18,3 +19,9 @@ linux_symlinks = [
+     "libcufft.so.12",
+ ]
+ windows_paths = ["cufft64_10.dll", "cufft64_11.dll", "cufft64_12.dll"]
++
++[target.'cfg(windows)'.dependencies]
++zluda_windows = { path = "../zluda_windows" }
++libloading = "0.8"
++[target.'cfg(windows)'.build-dependencies]
++embed-resource = "3.0"
+diff --git a/zluda_fft/build.rs b/zluda_fft/build.rs
+new file mode 100644
+index 0000000..2b58647
+--- /dev/null
++++ b/zluda_fft/build.rs
+@@ -0,0 +1,10 @@
++#[cfg(windows)]
++fn main() {
++    extern crate embed_resource;
++    embed_resource::compile("../zluda_windows/manifest.rc", embed_resource::NONE)
++        .manifest_optional()
++        .unwrap();
++}
++
++#[cfg(not(windows))]
++fn main() {}
+diff --git a/zluda_fft/src/impl.rs b/zluda_fft/src/impl.rs
+index 94cc02b..a9c0bc9 100644
+--- a/zluda_fft/src/impl.rs
++++ b/zluda_fft/src/impl.rs
+@@ -1,4 +1,12 @@
+ use cuda_types::cufft::*;
++use hip_runtime_sys::hipStream_t;
++use std::collections::HashMap;
++use std::ffi::{c_int, c_void};
++use std::ptr;
++use std::sync::{Mutex, OnceLock};
++
++#[cfg(windows)]
++use libloading::os::windows::Library;
+ 
+ #[cfg(debug_assertions)]
+ pub(crate) fn unimplemented() -> cufftResult {
+@@ -7,5 +15,472 @@ pub(crate) fn unimplemented() -> cufftResult {
+ 
+ #[cfg(not(debug_assertions))]
+ pub(crate) fn unimplemented() -> cufftResult {
+-    cufftResult::ERROR_NOT_SUPPORTED
++    Err(cufftError_t::r#NOT_SUPPORTED)
++}
++
++type HipfftHandle = *mut c_void;
++type HipfftResult = c_int;
++
++fn from_hipfft(code: HipfftResult) -> cufftResult {
++    match code {
++        0 => Ok(()),
++        1 => Err(cufftError_t::r#INVALID_PLAN),
++        2 => Err(cufftError_t::r#ALLOC_FAILED),
++        3 => Err(cufftError_t::r#INVALID_TYPE),
++        4 => Err(cufftError_t::r#INVALID_VALUE),
++        5 => Err(cufftError_t::r#INTERNAL_ERROR),
++        6 => Err(cufftError_t::r#EXEC_FAILED),
++        7 => Err(cufftError_t::r#SETUP_FAILED),
++        8 => Err(cufftError_t::r#INVALID_SIZE),
++        9 => Err(cufftError_t::r#UNALIGNED_DATA),
++        11 => Err(cufftError_t::r#INVALID_DEVICE),
++        13 => Err(cufftError_t::r#NO_WORKSPACE),
++        14 => Err(cufftError_t::r#NOT_IMPLEMENTED),
++        16 => Err(cufftError_t::r#NOT_SUPPORTED),
++        _ => Err(cufftError_t::r#INTERNAL_ERROR),
++    }
++}
++
++#[cfg(windows)]
++fn hipfft_library() -> Result<&'static Library, cufftError_t> {
++    static LIB: OnceLock<Result<Library, cufftError_t>> = OnceLock::new();
++    let result = LIB.get_or_init(|| unsafe {
++        let hmodule = zluda_windows::try_load_from_self_or_hip_with_message(&["hipfft.dll"])
++            .ok_or(cufftError_t::r#MISSING_DEPENDENCY)?;
++        Ok(Library::from_raw(hmodule.0 as _))
++    });
++    result.as_ref().map_err(|e| *e)
++}
++
++#[cfg(windows)]
++unsafe fn symbol<T: Copy>(name: &'static [u8]) -> Result<T, cufftError_t> {
++    let lib = hipfft_library()?;
++    lib.get::<T>(name)
++        .map(|s| *s)
++        .map_err(|_| cufftError_t::r#MISSING_DEPENDENCY)
++}
++
++#[cfg(not(windows))]
++unsafe fn symbol<T: Copy>(_name: &'static [u8]) -> Result<T, cufftError_t> {
++    Err(cufftError_t::r#MISSING_DEPENDENCY)
++}
++
++struct PlanRegistry {
++    next: i32,
++    plans: HashMap<i32, usize>,
++}
++
++fn registry() -> &'static Mutex<PlanRegistry> {
++    static REGISTRY: OnceLock<Mutex<PlanRegistry>> = OnceLock::new();
++    REGISTRY.get_or_init(|| {
++        Mutex::new(PlanRegistry {
++            next: 1,
++            plans: HashMap::new(),
++        })
++    })
++}
++
++fn register_plan(raw: HipfftHandle) -> Result<cufftHandle, cufftError_t> {
++    if raw.is_null() {
++        return Err(cufftError_t::r#INVALID_PLAN);
++    }
++    let mut reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    for _ in 0..i32::MAX {
++        let id = if reg.next <= 0 { 1 } else { reg.next };
++        reg.next = id.wrapping_add(1);
++        if !reg.plans.contains_key(&id) {
++            reg.plans.insert(id, raw as usize);
++            return Ok(id);
++        }
++    }
++    Err(cufftError_t::r#ALLOC_FAILED)
++}
++
++fn lookup_plan(plan: cufftHandle) -> Result<HipfftHandle, cufftError_t> {
++    let reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    reg.plans
++        .get(&plan)
++        .copied()
++        .map(|p| p as HipfftHandle)
++        .ok_or(cufftError_t::r#INVALID_PLAN)
++}
++
++fn remove_plan(plan: cufftHandle) -> Result<HipfftHandle, cufftError_t> {
++    let mut reg = registry()
++        .lock()
++        .map_err(|_| cufftError_t::r#INTERNAL_ERROR)?;
++    reg.plans
++        .remove(&plan)
++        .map(|p| p as HipfftHandle)
++        .ok_or(cufftError_t::r#INVALID_PLAN)
++}
++
++unsafe fn create_registered_with<F>(plan: *mut cufftHandle, create: F) -> cufftResult
++where
++    F: FnOnce(*mut HipfftHandle) -> HipfftResult,
++{
++    if plan.is_null() {
++        return Err(cufftError_t::r#INVALID_VALUE);
++    }
++    let mut raw: HipfftHandle = ptr::null_mut();
++    from_hipfft(create(&mut raw))?;
++    let id = register_plan(raw)?;
++    *plan = id;
++    Ok(())
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftCreate(handle: *mut cufftHandle) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle) -> HipfftResult>(b"hipfftCreate\0")?;
++    create_registered_with(handle, |raw| f(raw))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan1d(plan: *mut cufftHandle, nx: c_int, type_: cufftType, batch: c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan1d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, type_.0 as c_int, batch))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan2d(plan: *mut cufftHandle, nx: c_int, ny: c_int, type_: cufftType) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan2d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, ny, type_.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlan3d(plan: *mut cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlan3d\0")?;
++    create_registered_with(plan, |raw| f(raw, nx, ny, nz, type_.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftPlanMany(
++    plan: *mut cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int) -> HipfftResult>(b"hipfftPlanMany\0")?;
++    create_registered_with(plan, |raw| f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan1d(plan: cufftHandle, nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan1d\0")?;
++    from_hipfft(f(raw, nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan2d(plan: cufftHandle, nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan2d\0")?;
++    from_hipfft(f(raw, nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlan3d(plan: cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlan3d\0")?;
++    from_hipfft(f(raw, nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlanMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftMakePlanMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftMakePlanMany64(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    type_: cufftType,
++    batch: i64,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, *mut i64, i64, i64, c_int, i64, *mut usize) -> HipfftResult>(b"hipfftMakePlanMany64\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize1d(plan: cufftHandle, nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize1d\0")?;
++    from_hipfft(f(raw, nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize2d(plan: cufftHandle, nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize2d\0")?;
++    from_hipfft(f(raw, nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize3d(plan: cufftHandle, nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSize3d\0")?;
++    from_hipfft(f(raw, nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSizeMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workArea: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftGetSizeMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workArea))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSizeMany64(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    type_: cufftType,
++    batch: i64,
++    workSize: *mut usize,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, *mut i64, i64, i64, c_int, i64, *mut usize) -> HipfftResult>(b"hipfftGetSizeMany64\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetSize(plan: cufftHandle, workSize: *mut usize) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut usize) -> HipfftResult>(b"hipfftGetSize\0")?;
++    from_hipfft(f(raw, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate1d(nx: c_int, type_: cufftType, batch: c_int, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate1d\0")?;
++    from_hipfft(f(nx, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate2d(nx: c_int, ny: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate2d\0")?;
++    from_hipfft(f(nx, ny, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimate3d(nx: c_int, ny: c_int, nz: c_int, type_: cufftType, workSize: *mut usize) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimate3d\0")?;
++    from_hipfft(f(nx, ny, nz, type_.0 as c_int, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftEstimateMany(
++    rank: c_int,
++    n: *mut c_int,
++    inembed: *mut c_int,
++    istride: c_int,
++    idist: c_int,
++    onembed: *mut c_int,
++    ostride: c_int,
++    odist: c_int,
++    type_: cufftType,
++    batch: c_int,
++    workSize: *mut usize,
++) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, *mut c_int, *mut c_int, c_int, c_int, *mut c_int, c_int, c_int, c_int, c_int, *mut usize) -> HipfftResult>(b"hipfftEstimateMany\0")?;
++    from_hipfft(f(rank, n, inembed, istride, idist, onembed, ostride, odist, type_.0 as c_int, batch, workSize))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtMakePlanMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    inputtype: cudaDataType,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    outputtype: cudaDataType,
++    batch: i64,
++    workSize: *mut usize,
++    executiontype: cudaDataType,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, c_int, *mut i64, i64, i64, c_int, i64, *mut usize, c_int) -> HipfftResult>(b"hipfftXtMakePlanMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, inputtype.0 as c_int, onembed, ostride, odist, outputtype.0 as c_int, batch, workSize, executiontype.0 as c_int))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtGetSizeMany(
++    plan: cufftHandle,
++    rank: c_int,
++    n: *mut i64,
++    inembed: *mut i64,
++    istride: i64,
++    idist: i64,
++    inputtype: cudaDataType,
++    onembed: *mut i64,
++    ostride: i64,
++    odist: i64,
++    outputtype: cudaDataType,
++    batch: i64,
++    workSize: *mut usize,
++    executiontype: cudaDataType,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int, *mut i64, *mut i64, i64, i64, c_int, *mut i64, i64, i64, c_int, i64, *mut usize, c_int) -> HipfftResult>(b"hipfftXtGetSizeMany\0")?;
++    from_hipfft(f(raw, rank, n, inembed, istride, idist, inputtype.0 as c_int, onembed, ostride, odist, outputtype.0 as c_int, batch, workSize, executiontype.0 as c_int))
++}
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftXtExec(
++    plan: cufftHandle,
++    input: *mut c_void,
++    output: *mut c_void,
++    direction: c_int,
++) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut c_void, *mut c_void, c_int) -> HipfftResult>(b"hipfftXtExec\0")?;
++    from_hipfft(f(raw, input, output, direction))
++}
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetWorkArea(plan: cufftHandle, workArea: *mut c_void) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut c_void) -> HipfftResult>(b"hipfftSetWorkArea\0")?;
++    from_hipfft(f(raw, workArea))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetAutoAllocation(plan: cufftHandle, autoAllocate: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, c_int) -> HipfftResult>(b"hipfftSetAutoAllocation\0")?;
++    from_hipfft(f(raw, autoAllocate))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecC2C(plan: cufftHandle, idata: *mut cufftComplex, odata: *mut cufftComplex, direction: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftComplex, *mut cufftComplex, c_int) -> HipfftResult>(b"hipfftExecC2C\0")?;
++    from_hipfft(f(raw, idata, odata, direction))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecR2C(plan: cufftHandle, idata: *mut cufftReal, odata: *mut cufftComplex) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftReal, *mut cufftComplex) -> HipfftResult>(b"hipfftExecR2C\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecC2R(plan: cufftHandle, idata: *mut cufftComplex, odata: *mut cufftReal) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftComplex, *mut cufftReal) -> HipfftResult>(b"hipfftExecC2R\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecZ2Z(plan: cufftHandle, idata: *mut cufftDoubleComplex, odata: *mut cufftDoubleComplex, direction: c_int) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleComplex, *mut cufftDoubleComplex, c_int) -> HipfftResult>(b"hipfftExecZ2Z\0")?;
++    from_hipfft(f(raw, idata, odata, direction))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecD2Z(plan: cufftHandle, idata: *mut cufftDoubleReal, odata: *mut cufftDoubleComplex) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleReal, *mut cufftDoubleComplex) -> HipfftResult>(b"hipfftExecD2Z\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftExecZ2D(plan: cufftHandle, idata: *mut cufftDoubleComplex, odata: *mut cufftDoubleReal) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, *mut cufftDoubleComplex, *mut cufftDoubleReal) -> HipfftResult>(b"hipfftExecZ2D\0")?;
++    from_hipfft(f(raw, idata, odata))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftSetStream(plan: cufftHandle, stream: cudaStream_t) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    let hip_stream = hipStream_t(stream.0.cast());
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle, hipStream_t) -> HipfftResult>(b"hipfftSetStream\0")?;
++    from_hipfft(f(raw, hip_stream))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftDestroy(plan: cufftHandle) -> cufftResult {
++    let raw = lookup_plan(plan)?;
++    if zluda_windows::process_shutdown_in_progress() {
++        let _ = remove_plan(plan);
++        return Ok(());
++    }
++    let f = symbol::<unsafe extern "C" fn(HipfftHandle) -> HipfftResult>(b"hipfftDestroy\0")?;
++    let result = from_hipfft(f(raw));
++    if result.is_ok() {
++        let _ = remove_plan(plan);
++    }
++    result
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetVersion(version: *mut c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(*mut c_int) -> HipfftResult>(b"hipfftGetVersion\0")?;
++    from_hipfft(f(version))
++}
++
++#[allow(non_snake_case)]
++pub(crate) unsafe fn cufftGetProperty(type_: libraryPropertyType, value: *mut c_int) -> cufftResult {
++    let f = symbol::<unsafe extern "C" fn(c_int, *mut c_int) -> HipfftResult>(b"hipfftGetProperty\0")?;
++    from_hipfft(f(type_.0 as c_int, value))
+ }
+diff --git a/zluda_fft/src/lib.rs b/zluda_fft/src/lib.rs
+index 9de500c..aefce62 100644
+--- a/zluda_fft/src/lib.rs
++++ b/zluda_fft/src/lib.rs
+@@ -14,4 +14,57 @@ macro_rules! unimplemented {
+     };
+ }
+ 
+-cuda_macros::cufft_function_declarations!(unimplemented);
++macro_rules! implemented {
++    ($($abi:literal fn $fn_name:ident( $($arg_id:ident : $arg_type:ty),* ) -> $ret_type:ty;)*) => {
++        $(
++            #[cfg_attr(not(test), no_mangle)]
++            #[allow(improper_ctypes)]
++            #[allow(improper_ctypes_definitions)]
++            #[allow(unused_variables)]
++            pub unsafe extern $abi fn $fn_name ( $( $arg_id : $arg_type),* ) -> $ret_type {
++                crate::r#impl::$fn_name($($arg_id),*)
++            }
++        )*
++    };
++}
++
++cuda_macros::cufft_function_declarations!(
++    unimplemented,
++    implemented <= [
++        cufftPlan1d,
++        cufftPlan2d,
++        cufftPlan3d,
++        cufftPlanMany,
++        cufftMakePlan1d,
++        cufftMakePlan2d,
++        cufftMakePlan3d,
++        cufftMakePlanMany,
++        cufftMakePlanMany64,
++        cufftGetSizeMany64,
++        cufftEstimate1d,
++        cufftEstimate2d,
++        cufftEstimate3d,
++        cufftEstimateMany,
++        cufftCreate,
++        cufftGetSize1d,
++        cufftGetSize2d,
++        cufftGetSize3d,
++        cufftGetSizeMany,
++        cufftGetSize,
++        cufftSetWorkArea,
++        cufftSetAutoAllocation,
++        cufftExecC2C,
++        cufftExecR2C,
++        cufftExecC2R,
++        cufftExecZ2Z,
++        cufftExecD2Z,
++        cufftExecZ2D,
++        cufftSetStream,
++        cufftDestroy,
++        cufftGetVersion,
++        cufftGetProperty,
++        cufftXtMakePlanMany,
++        cufftXtGetSizeMany,
++        cufftXtExec,
++    ]
++);
+diff --git a/zluda_ml/Cargo.toml b/zluda_ml/Cargo.toml
+index 592d87c..acbf071 100644
+--- a/zluda_ml/Cargo.toml
++++ b/zluda_ml/Cargo.toml
+@@ -21,3 +21,6 @@ linux_symlinks = [
+     "libnvidia-ml.so",
+     "libnvidia-ml.so.1",
+ ]
++
++[target.'cfg(windows)'.dependencies]
++libloading = "0.8"
+diff --git a/zluda_ml/src/impl_win.rs b/zluda_ml/src/impl_win.rs
+index 99c93cc..63981f7 100644
+--- a/zluda_ml/src/impl_win.rs
++++ b/zluda_ml/src/impl_win.rs
+@@ -1,77 +1,227 @@
+ use cuda_types::nvml::*;
++use libloading::os::windows::Library;
++use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
++use std::sync::OnceLock;
+ 
+ pub(crate) use crate::impl_common::error_string;
+ pub(crate) use crate::impl_common::system_get_driver_version;
+ 
++type CuResult = c_int;
++type CuDevice = c_int;
++type CuContext = *mut c_void;
++
++fn handle_from_index(index: u32) -> nvmlDevice_t {
++    (index as usize + 1) as nvmlDevice_t
++}
++
++fn index_from_handle(device: nvmlDevice_t) -> Result<CuDevice, nvmlReturn_t> {
++    if device.is_null() {
++        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
++    }
++    let raw = device as usize;
++    if raw == 0 || raw - 1 > c_int::MAX as usize {
++        return Err(nvmlReturn_t::ERROR_INVALID_ARGUMENT);
++    }
++    Ok((raw - 1) as CuDevice)
++}
++
++fn driver_library() -> Result<&'static Library, nvmlReturn_t> {
++    static LIB: OnceLock<Result<Library, ()>> = OnceLock::new();
++    let result = LIB.get_or_init(|| {
++        Library::open_already_loaded("nvcuda")
++            .or_else(|_| unsafe { Library::new("nvcuda.dll") })
++            .map_err(|_| ())
++    });
++    result.as_ref().map_err(|_| nvmlReturn_t::ERROR_UNKNOWN)
++}
++
++unsafe fn symbol<T: Copy>(name: &'static [u8]) -> Result<T, nvmlReturn_t> {
++    driver_library()?
++        .get::<T>(name)
++        .map(|s| *s)
++        .map_err(|_| nvmlReturn_t::ERROR_NOT_SUPPORTED)
++}
++
++unsafe fn ensure_cuda() -> nvmlReturn_t {
++    let init = match symbol::<unsafe extern "system" fn(c_uint) -> CuResult>(b"cuInit\0") {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
++    if init(0) == 0 {
++        nvmlReturn_t::SUCCESS
++    } else {
++        nvmlReturn_t::ERROR_UNKNOWN
++    }
++}
++
++unsafe fn device_count() -> Result<u32, nvmlReturn_t> {
++    let init = ensure_cuda();
++    if init.is_err() {
++        return Err(init);
++    }
++    let f = symbol::<unsafe extern "system" fn(*mut c_int) -> CuResult>(b"cuDeviceGetCount\0")?;
++    let mut count = 0i32;
++    if f(&mut count) != 0 {
++        return Err(nvmlReturn_t::ERROR_UNKNOWN);
++    }
++    Ok(count.max(0) as u32)
++}
++
++fn valid_index(index: u32) -> bool {
++    unsafe { device_count().map(|count| index < count).unwrap_or(false) }
++}
++
+ pub(crate) unsafe fn init() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    // NVML must not initialize HIP directly on Windows. Doing so creates HIP
++    // runtime state outside ZLUDA's CUDA context model and can break rocSPARSE
++    // handle creation later in the same process. Query the already-loaded
++    // CUDA-facing ZLUDA driver instead.
++    ensure_cuda()
+ }
+ 
+ pub(crate) unsafe fn init_v2() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    init()
+ }
+ 
+-pub(crate) unsafe fn init_with_flags(_flags: ::core::ffi::c_uint) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) unsafe fn init_with_flags(_flags: c_uint) -> nvmlReturn_t {
++    init()
+ }
+ 
+ pub(crate) unsafe fn shutdown() -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    // ZLUDA/CUDA driver lifetime belongs to the process, not NVML.
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) unsafe fn device_get_count_v2(_device_count: &mut ::core::ffi::c_uint) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) unsafe fn device_get_count_v2(device_count_out: &mut c_uint) -> nvmlReturn_t {
++    match device_count() {
++        Ok(count) => {
++            *device_count_out = count;
++            nvmlReturn_t::SUCCESS
++        }
++        Err(e) => e,
++    }
+ }
+ 
+ pub(crate) unsafe fn device_get_handle_by_pci_bus_id_v2(
+-    _pci_bus_id: &std::ffi::CStr,
+-    _device: &mut cuda_types::nvml::nvmlDevice_t,
++    pci_bus_id: &CStr,
++    device: &mut nvmlDevice_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    ensure_cuda()?;
++    let f = match symbol::<unsafe extern "system" fn(*mut CuDevice, *const c_char) -> CuResult>(
++        b"cuDeviceGetByPCIBusId\0",
++    ) {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
++    let mut cuda_device = 0;
++    if f(&mut cuda_device, pci_bus_id.as_ptr()) != 0 || cuda_device < 0 {
++        return nvmlReturn_t::ERROR_NOT_FOUND;
++    }
++    *device = handle_from_index(cuda_device as u32);
++    nvmlReturn_t::SUCCESS
+ }
+ 
+ pub(crate) unsafe fn device_get_field_values(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _values_count: ::core::ffi::c_int,
+-    _values: &mut cuda_types::nvml::nvmlFieldValue_t,
++    _device: nvmlDevice_t,
++    _values_count: c_int,
++    _values: &mut nvmlFieldValue_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    nvmlReturn_t::ERROR_NOT_SUPPORTED
+ }
+ 
+ pub(crate) unsafe fn device_get_gpu_fabric_info(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _gpu_fabric_info: &mut cuda_types::nvml::nvmlGpuFabricInfo_t,
++    _device: nvmlDevice_t,
++    _gpu_fabric_info: &mut nvmlGpuFabricInfo_t,
+ ) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++    nvmlReturn_t::ERROR_NOT_SUPPORTED
+ }
+ 
+-pub(crate) fn device_get_handle_by_index_v2(
+-    _index: ::core::ffi::c_uint,
+-    _device: &mut cuda_types::nvml::nvmlDevice_t,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) fn device_get_handle_by_index_v2(index: c_uint, device: &mut nvmlDevice_t) -> nvmlReturn_t {
++    if !valid_index(index) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    *device = handle_from_index(index);
++    nvmlReturn_t::SUCCESS
+ }
+ 
+ pub(crate) fn device_get_compute_running_processes(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    info_count: &mut ::core::ffi::c_uint,
+-    _infos: Option<&mut cuda_types::nvml::nvmlProcessInfo_v1_t>,
++    _device: nvmlDevice_t,
++    info_count: &mut c_uint,
++    _infos: Option<&mut nvmlProcessInfo_v1_t>,
+ ) -> nvmlReturn_t {
++    // Process accounting is not exposed by the CUDA driver API. Keep this
++    // conservative until a Windows telemetry backend is added.
+     *info_count = 0;
+-    Ok(())
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) unsafe fn device_get_memory_info(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _memory: &mut cuda_types::nvml::nvmlMemory_t,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) unsafe fn device_get_memory_info(device: nvmlDevice_t, memory: &mut nvmlMemory_t) -> nvmlReturn_t {
++    let index = match index_from_handle(device) {
++        Ok(i) => i,
++        Err(e) => return e,
++    };
++    if !valid_index(index as u32) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++
++    let total_mem = match symbol::<unsafe extern "system" fn(*mut usize, CuDevice) -> CuResult>(
++        b"cuDeviceTotalMem_v2\0",
++    ) {
++        Ok(f) => f,
++        Err(e) => return e,
++    };
++    let mut total = 0usize;
++    if total_mem(&mut total, index) != 0 {
++        return nvmlReturn_t::ERROR_UNKNOWN;
++    }
++
++    // Free/used memory is only queried when a CUDA context already exists.
++    // Creating or switching a hidden context from NVML would be observable by
++    // the application and previously caused cross-library initialization bugs.
++    let mut free = total;
++    if let (Ok(ctx_get), Ok(mem_get)) = (
++        symbol::<unsafe extern "system" fn(*mut CuContext) -> CuResult>(b"cuCtxGetCurrent\0"),
++        symbol::<unsafe extern "system" fn(*mut usize, *mut usize) -> CuResult>(b"cuMemGetInfo_v2\0"),
++    ) {
++        let mut ctx: CuContext = std::ptr::null_mut();
++        if ctx_get(&mut ctx) == 0 && !ctx.is_null() {
++            let mut current_total = 0usize;
++            let mut current_free = 0usize;
++            if mem_get(&mut current_free, &mut current_total) == 0 && current_total > 0 {
++                total = current_total;
++                free = current_free.min(total);
++            }
++        }
++    }
++
++    memory.total = total as u64;
++    memory.free = free as u64;
++    memory.used = total.saturating_sub(free) as u64;
++    nvmlReturn_t::SUCCESS
+ }
+ 
+-pub(crate) fn device_get_name(
+-    _device: cuda_types::nvml::nvmlDevice_t,
+-    _name: *mut ::core::ffi::c_char,
+-    _length: ::core::ffi::c_uint,
+-) -> nvmlReturn_t {
+-    crate::impl_common::unimplemented()
++pub(crate) fn device_get_name(device: nvmlDevice_t, name: *mut c_char, length: c_uint) -> nvmlReturn_t {
++    if name.is_null() || length == 0 {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    let index = match index_from_handle(device) {
++        Ok(i) => i,
++        Err(e) => return e,
++    };
++    if !valid_index(index as u32) {
++        return nvmlReturn_t::ERROR_INVALID_ARGUMENT;
++    }
++    unsafe {
++        let f = match symbol::<unsafe extern "system" fn(*mut c_char, c_int, CuDevice) -> CuResult>(
++            b"cuDeviceGetName\0",
++        ) {
++            Ok(f) => f,
++            Err(e) => return e,
++        };
++        if f(name, length.min(c_int::MAX as u32) as c_int, index) != 0 {
++            return nvmlReturn_t::ERROR_UNKNOWN;
++        }
++        *name.add(length as usize - 1) = 0;
++    }
++    nvmlReturn_t::SUCCESS
+ }
+diff --git a/zluda_sparse/Cargo.toml b/zluda_sparse/Cargo.toml
+index a6614c9..44ff977 100644
+--- a/zluda_sparse/Cargo.toml
++++ b/zluda_sparse/Cargo.toml
+@@ -11,6 +11,7 @@ name = "cusparse"
+ cuda_macros = { path = "../cuda_macros" }
+ cuda_types = { path = "../cuda_types" }
+ rocsparse-sys = { path = "../ext/rocsparse-sys" }
++hip_runtime-sys = { path = "../ext/hip_runtime-sys" }
+ zluda_common = { path = "../zluda_common" }
+ unwrap_or = "1.0.1"
+ 
+@@ -24,4 +25,3 @@ libloading = "0.8"
+ 
+ [target.'cfg(windows)'.build-dependencies]
+ embed-resource = "3.0"
+-
+diff --git a/zluda_sparse/src/impl.rs b/zluda_sparse/src/impl.rs
+index ead8614..6bf4856 100644
+--- a/zluda_sparse/src/impl.rs
++++ b/zluda_sparse/src/impl.rs
+@@ -1,4 +1,5 @@
+ use cuda_types::cusparse::*;
++use hip_runtime_sys::hipStream_t;
+ use rocsparse_sys::*;
+ use std::{ptr, sync::OnceLock};
+ use unwrap_or::unwrap_ok_or;
+@@ -89,10 +90,44 @@ pub(crate) unsafe fn get_mat_diag_type(descr: rocsparse_mat_descr) -> rocsparse_
+     rocsparse.rocsparse_get_mat_diag_type(descr)
+ }
+ 
++pub(crate) unsafe fn set_stream(handle: rocsparse_handle, stream: hipStream_t) -> rocsparse_status {
++    rocsparse()?.rocsparse_set_stream(handle, stream)
++}
++
++pub(crate) unsafe fn xcoo2csr(
++    handle: rocsparse_handle,
++    coo_row_ind: *const i32,
++    nnz: i32,
++    m: i32,
++    csr_row_ptr: *mut i32,
++    idx_base: rocsparse_index_base,
++) -> rocsparse_status {
++    rocsparse()?.rocsparse_coo2csr(handle, coo_row_ind, nnz, m, csr_row_ptr, idx_base)
++}
++
+ pub(crate) unsafe fn create(context: *mut rocsparse_handle) -> rocsparse_status {
+     rocsparse()?.rocsparse_create_handle(context)
+ }
+ 
++pub(crate) unsafe fn create_csr(
++    descr: *mut rocsparse_spmat_descr,
++    rows: i64,
++    cols: i64,
++    nnz: i64,
++    csr_row_ptr: *mut ::core::ffi::c_void,
++    csr_col_ind: *mut ::core::ffi::c_void,
++    csr_val: *mut ::core::ffi::c_void,
++    row_ptr_type: rocsparse_indextype,
++    col_ind_type: rocsparse_indextype,
++    idx_base: rocsparse_index_base,
++    data_type: rocsparse_datatype,
++) -> rocsparse_status {
++    rocsparse()?.rocsparse_create_csr_descr(
++        descr, rows, cols, nnz, csr_row_ptr, csr_col_ind, csr_val,
++        row_ptr_type, col_ind_type, idx_base, data_type,
++    )
++}
++
+ pub(crate) unsafe fn create_const_coo(
+     descr: *mut rocsparse_const_spmat_descr,
+     rows: i64,
+@@ -160,6 +195,9 @@ pub(crate) unsafe fn create_dn_mat(
+ }
+ 
+ pub(crate) unsafe fn destroy(context: rocsparse_handle) -> rocsparse_status {
++    if zluda_windows::process_shutdown_in_progress() {
++        return Ok(());
++    }
+     rocsparse()?.rocsparse_destroy_handle(context)
+ }
+ 
+diff --git a/zluda_sparse/src/lib.rs b/zluda_sparse/src/lib.rs
+index 6ae899d..ddb0166 100644
+--- a/zluda_sparse/src/lib.rs
++++ b/zluda_sparse/src/lib.rs
+@@ -75,6 +75,9 @@ cuda_macros::cusparse_function_declarations!(
+     implemented
+         <= [
+             cusparseCreate,
++            cusparseSetStream,
++            cusparseXcoo2csr,
++            cusparseCreateCsr,
+             cusparseCreateConstCoo,
+             cusparseCreateConstDnMat,
+             cusparseCreateDnMat,
+@@ -155,6 +158,7 @@ cuda_macros::rocsparse_function_declarations!(
+     noop,
+     os_macro::vtable_impl
+         <= [
++            rocsparse_create_csr_descr,
+             rocsparse_create_const_coo_descr,
+             rocsparse_create_const_dnmat_descr,
+             rocsparse_create_dnmat_descr,
+@@ -169,5 +173,7 @@ cuda_macros::rocsparse_function_declarations!(
+             rocsparse_spmm_buffer_size,
+             rocsparse_spmm_preprocess,
+             rocsparse_spmm,
++            rocsparse_set_stream,
++            rocsparse_coo2csr,
+         ]
+ );
+diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
+index 1a293a9..a9f714d 100644
+--- a/zluda_windows/src/lib.rs
++++ b/zluda_windows/src/lib.rs
+@@ -10,6 +10,15 @@ use std::{
+ use trie_hard::TrieHard;
+ use uuid::uuid;
+ use widestring::{u16str, U16Str, U16String};
++
++#[link(name = "ntdll")]
++unsafe extern "system" {
++    fn RtlDllShutdownInProgress() -> u8;
++}
++
++pub fn process_shutdown_in_progress() -> bool {
++    unsafe { RtlDllShutdownInProgress() != 0 }
++}
+ use windows::{
+     core::{w, HRESULT, PCWSTR},
+     Win32::{

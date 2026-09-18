@@ -51,6 +51,23 @@ function Get-ArchMetadata {
     return $null
 }
 
+function Test-ProjectValidation {
+    param([string]$Name, $Meta, [string]$Status)
+    if (-not $Meta -or -not $Meta.project_validation) { return $false }
+    if ([string]$Meta.project_validation.status -ne $Status) { return $false }
+    $pattern = [string]$Meta.project_validation.model_pattern
+    return (-not $pattern -or [bool]($Name -match $pattern))
+}
+
+function Get-ProjectStatus {
+    param([string]$Name, $Meta, [bool]$IsReference)
+    if ($IsReference) { return 'validated-reference' }
+    if (Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-external') { return 'validated-external' }
+    if ($Meta -and $Meta.community_report -and $Meta.community_report.status -eq 'partial') { return 'community-partial' }
+    if ($Meta -and $Meta.current_windows_hip_sdk) { return 'unverified-candidate' }
+    return 'experimental'
+}
+
 $resolvedHip = Find-HipRoot $HipRoot
 $hipVersion = if ($resolvedHip) { Split-Path $resolvedHip -Leaf } else { $null }
 $hipInfoPath = if ($resolvedHip) { Join-Path $resolvedHip 'bin\hipInfo.exe' } else { $null }
@@ -91,8 +108,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($d in $hipDevices) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
-        $isReference = (($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200') -or
-            ($d.name -eq 'AMD Radeon AI PRO R9700' -and $d.gfx -eq 'gfx1201' -and $hipVersion -match '^7\.14'))
+        $isReference = Test-ProjectValidation -Name $d.name -Meta $meta -Status 'validated-reference'
         $devices += [pscustomobject][ordered]@{
             index = $d.index
             name = $d.name
@@ -102,8 +118,12 @@ if ($hipDevices.Count -gt 0) {
             driver_version = if ($wmi) { $wmi.driver_version } else { $null }
             detection = 'hipInfo'
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
+            minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
+            community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
+            project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
             project_tested = $isReference
-            project_status = if ($isReference) { 'validated-reference' } elseif ($meta -and $meta.current_windows_hip_sdk) { 'unverified-candidate' } else { 'experimental' }
+            project_status = Get-ProjectStatus -Name $d.name -Meta $meta -IsReference $isReference
+            functional_validation_required = [bool](-not $isReference)
         }
     }
 } else {
@@ -111,8 +131,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($wmi in $wmiDevices) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
-        $isReference = (($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200') -or
-            ($wmi.name -eq 'AMD Radeon AI PRO R9700' -and $arch -eq 'gfx1201' -and $hipVersion -match '^7\.14'))
+        $isReference = Test-ProjectValidation -Name $wmi.name -Meta $meta -Status 'validated-reference'
         $devices += [pscustomobject][ordered]@{
             index = $i++
             name = $wmi.name
@@ -122,8 +141,12 @@ if ($hipDevices.Count -gt 0) {
             driver_version = $wmi.driver_version
             detection = 'WMI-fallback'
             current_windows_hip_sdk = if ($meta) { [bool]$meta.current_windows_hip_sdk } else { $null }
+            minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
+            community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
+            project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
             project_tested = $isReference
-            project_status = if ($isReference) { 'validated-reference' } elseif ($meta -and $meta.current_windows_hip_sdk) { 'unverified-candidate' } else { 'experimental' }
+            project_status = Get-ProjectStatus -Name $wmi.name -Meta $meta -IsReference $isReference
+            functional_validation_required = [bool](-not $isReference)
         }
     }
 }

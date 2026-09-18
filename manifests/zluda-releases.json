@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "channels": {
+    "stable": {
+      "release": "v6-preview.69",
+      "windows_asset": "zluda-windows-87531d3.zip",
+      "sha256": "E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A"
+    },
+    "latest": {
+      "release": "v7-preview.10",
+      "windows_asset": "zluda-windows-9c8b43f.zip",
+      "sha256": "A80CFA84217773A1CA0F6B7EB2EE1DE9DE8CFD654ADCAB052B1978B031CCB74B"
+    }
+  }
+}

@@ -1,33 +1,150 @@
 {
-  "schema": 1,
-  "checked": "2026-09-14",
+  "schema": 2,
+  "checked": "2026-09-15",
   "hip_sdk_target": "7.14.0a20260612",
   "hip_sdk_package": "therock-dist-windows-gfx120X-all-7.14.0a20260612.tar.gz",
-  "source": "https://rocm.docs.amd.com/projects/HIP/en/latest/hip-sdk/windows/system-requirements.html",
+  "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
   "architectures": {
-    "gfx1200": { "generation": "RDNA4", "current_windows_hip_sdk": true },
-    "gfx1201": { "generation": "RDNA4", "current_windows_hip_sdk": true },
-    "gfx1150": { "generation": "RDNA3.5", "current_windows_hip_sdk": true },
-    "gfx1151": { "generation": "RDNA3.5", "current_windows_hip_sdk": true },
-    "gfx1100": { "generation": "RDNA3", "current_windows_hip_sdk": true },
-    "gfx1101": { "generation": "RDNA3", "current_windows_hip_sdk": true },
-    "gfx1102": { "generation": "RDNA3", "current_windows_hip_sdk": true },
-    "gfx1030": { "generation": "RDNA2", "current_windows_hip_sdk": false },
-    "gfx1031": { "generation": "RDNA2", "current_windows_hip_sdk": false },
-    "gfx1032": { "generation": "RDNA2", "current_windows_hip_sdk": false }
+    "gfx1200": {
+      "generation": "RDNA4",
+      "current_windows_hip_sdk": true,
+      "project_validation": {
+        "status": "validated-reference",
+        "gpu": "Radeon RX 9060 XT",
+        "model_pattern": "RX 9060 XT",
+        "target": "gfx1200",
+        "evidence": "public-reproducible-validation",
+        "validation_doc": "docs/VALIDATION.md",
+        "notes": "Current maintainer reference GPU. Public ZLUDA/HIP runtime validation includes CUDA-facing LibTorch PPO training plus repeated synthetic and capability regressions."
+      }
+    },
+    "gfx1201": {
+      "generation": "RDNA4",
+      "current_windows_hip_sdk": true,
+      "project_validation": {
+        "status": "validated-external",
+        "gpu": "Radeon RX 9070 XT",
+        "model_pattern": "RX 9070 XT",
+        "target": "gfx1201",
+        "evidence": "archived-tested-bundle",
+        "notes": "Archived Windows AMD/ZLUDA training bundle from a separately tested RX 9070 XT machine. The package targets HIP device 1 as Radeon RX 9070 XT / gfx1201 and includes gfx1201-specific hipBLASLt/Tensile kernels. The current maintainer reference GPU remains RX 9060 XT."
+      }
+    },
+    "gfx1150": {
+      "generation": "RDNA3.5",
+      "current_windows_hip_sdk": true,
+      "minimum_hip_sdk": "7.2",
+      "community_report": {
+        "status": "partial",
+        "gpu": "Radeon 890M",
+        "issue": "https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/3",
+        "notes": "HIP 7.2 runtime and GEMM work, but conv2d hung and memory-efficient SDPA returned incorrect values in the reported ZLUDA/PyTorch workload."
+      }
+    },
+    "gfx1151": {
+      "generation": "RDNA3.5",
+      "current_windows_hip_sdk": true,
+      "minimum_hip_sdk": "7.2"
+    },
+    "gfx1152": {
+      "generation": "RDNA3.5",
+      "current_windows_hip_sdk": true,
+      "minimum_hip_sdk": "7.2"
+    },
+    "gfx1153": {
+      "generation": "RDNA3.5",
+      "current_windows_hip_sdk": true,
+      "minimum_hip_sdk": "7.2"
+    },
+    "gfx1100": {
+      "generation": "RDNA3",
+      "current_windows_hip_sdk": true
+    },
+    "gfx1101": {
+      "generation": "RDNA3",
+      "current_windows_hip_sdk": true
+    },
+    "gfx1102": {
+      "generation": "RDNA3",
+      "current_windows_hip_sdk": true
+    },
+    "gfx1030": {
+      "generation": "RDNA2",
+      "current_windows_hip_sdk": false
+    },
+    "gfx1031": {
+      "generation": "RDNA2",
+      "current_windows_hip_sdk": false
+    },
+    "gfx1032": {
+      "generation": "RDNA2",
+      "current_windows_hip_sdk": false
+    }
   },
   "fallback_model_patterns": [
-    { "pattern": "RX 9060( XT)?", "gfx": "gfx1200" },
-    { "pattern": "RX 9070( XT| GRE)?", "gfx": "gfx1201" },
-    { "pattern": "Radeon AI PRO R9700", "gfx": "gfx1201" },
-    { "pattern": "RX 7900 (XTX|XT)", "gfx": "gfx1100" },
-    { "pattern": "PRO W7900|PRO W7800", "gfx": "gfx1100" },
-    { "pattern": "RX 7800 XT|RX 7700 XT|PRO W7700", "gfx": "gfx1101" },
-    { "pattern": "RX 7650 GRE|RX 7600( XT)?", "gfx": "gfx1102" },
-    { "pattern": "Ryzen AI MAX|Ryzen AI Max", "gfx": "gfx1151" },
-    { "pattern": "Ryzen AI (9 )?(300|400)", "gfx": "gfx1150" },
-    { "pattern": "RX 6950 XT|RX 6900 XT|RX 6800( XT)?", "gfx": "gfx1030" },
-    { "pattern": "RX 6750 XT|RX 6700( XT)?", "gfx": "gfx1031" },
-    { "pattern": "RX 6650 XT|RX 6600( XT)?", "gfx": "gfx1032" }
+    {
+      "pattern": "RX 9060( XT)?",
+      "gfx": "gfx1200"
+    },
+    {
+      "pattern": "RX 9070( XT| GRE)?",
+      "gfx": "gfx1201"
+    },
+    {
+      "pattern": "Radeon AI PRO R9700",
+      "gfx": "gfx1201"
+    },
+    {
+      "pattern": "Radeon 890M",
+      "gfx": "gfx1150"
+    },
+    {
+      "pattern": "Radeon 880M",
+      "gfx": "gfx1150"
+    },
+    {
+      "pattern": "Radeon 860M",
+      "gfx": "gfx1152"
+    },
+    {
+      "pattern": "Radeon 840M",
+      "gfx": "gfx1152"
+    },
+    {
+      "pattern": "RX 7900 (XTX|XT)",
+      "gfx": "gfx1100"
+    },
+    {
+      "pattern": "PRO W7900|PRO W7800",
+      "gfx": "gfx1100"
+    },
+    {
+      "pattern": "RX 7800 XT|RX 7700 XT|PRO W7700",
+      "gfx": "gfx1101"
+    },
+    {
+      "pattern": "RX 7650 GRE|RX 7600( XT)?",
+      "gfx": "gfx1102"
+    },
+    {
+      "pattern": "Ryzen AI MAX|Ryzen AI Max",
+      "gfx": "gfx1151"
+    },
+    {
+      "pattern": "Ryzen AI (9 )?(300|400)",
+      "gfx": "gfx1150"
+    },
+    {
+      "pattern": "RX 6950 XT|RX 6900 XT|RX 6800( XT)?",
+      "gfx": "gfx1030"
+    },
+    {
+      "pattern": "RX 6750 XT|RX 6700( XT)?",
+      "gfx": "gfx1031"
+    },
+    {
+      "pattern": "RX 6650 XT|RX 6600( XT)?",
+      "gfx": "gfx1032"
+    }
   ]
 }

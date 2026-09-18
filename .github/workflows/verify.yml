@@ -25,6 +25,25 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      - name: Validate Python probes
+        shell: pwsh
+        run: |
+          python -m py_compile scripts/functional_probe.py scripts/capability_probe.py scripts/gemm_benchmark.py scripts/training_warmup.py scripts/summarize-zluda-trace.py
+          python scripts/summarize-zluda-trace.py --self-test
+          $tests = @(python scripts/functional_probe.py --list-tests)
+          $expected = @('matmul','conv2d','sdpa_math','sdpa_mem_efficient')
+          foreach ($name in $expected) {
+            if ($tests -notcontains $name) { throw "Missing functional probe: $name" }
+          }
+          Write-Host "Functional probe modes: $($tests -join ', ')"
+
+          $capabilityTests = @(python scripts/capability_probe.py --list-tests)
+          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_pdl_semantics','driver_func_attributes','driver_function_metadata','linalg_svd','sdpa_mem_efficient')
+          foreach ($name in $requiredCapabilityTests) {
+            if ($capabilityTests -notcontains $name) { throw "Missing capability probe: $name" }
+          }
+          Write-Host "Capability probes: $($capabilityTests.Count)"
+
       - name: Validate JSON manifests
         shell: pwsh
         run: |
@@ -32,14 +51,44 @@ jobs:
             Write-Host "Parsing $($_.Name)"
             Get-Content $_.FullName -Raw | ConvertFrom-Json | Out-Null
           }
+          $profiles = Get-Content manifests/windows-gpu-profiles.json -Raw | ConvertFrom-Json
+          if ($profiles.schema -lt 2) { throw 'GPU profile schema did not include functional compatibility metadata' }
+          if ($profiles.architectures.gfx1200.project_validation.status -ne 'validated-reference') { throw 'gfx1200 reference validation missing' }
+          if ($profiles.architectures.gfx1201.project_validation.status -ne 'validated-external') { throw 'gfx1201 external validation missing' }
+          if ($profiles.architectures.gfx1150.minimum_hip_sdk -ne '7.2') { throw 'gfx1150 HIP floor missing' }
+          if ($profiles.architectures.gfx1150.community_report.status -ne 'partial') { throw 'gfx1150 partial report missing' }
 
       - name: GPU scanner no-GPU smoke test
         shell: pwsh
         run: |
           $json = & ./scripts/gpu-scan.ps1 -AsJson
           $report = $json | ConvertFrom-Json
-          if ($report.schema -ne 1) { throw 'Unexpected scanner schema' }
+          if ($report.schema -ne 2) { throw 'Unexpected scanner schema' }
           Write-Host "Scanner schema $($report.schema) OK"
+
+      - name: Verify experimental ZLUDA patch series applies
+        shell: pwsh
+        run: |
+          $series = Get-Content patches/zluda-v7-preview10/series.json -Raw | ConvertFrom-Json
+          if ($series.schema -ne 1) { throw 'Unexpected ZLUDA patch-series schema' }
+          if ($series.upstream.commit -ne '9c8b43f242985150f86a7f485218b7b82c3e96ca') { throw 'Pinned ZLUDA commit drifted' }
+          $orders = @($series.patches | ForEach-Object { [int]$_.order })
+          if (($orders | Sort-Object -Unique).Count -ne $orders.Count) { throw 'Duplicate ZLUDA patch-series order value' }
+          foreach ($entry in $series.patches) {
+            $path = Join-Path 'patches/zluda-v7-preview10' ([string]$entry.file)
+            if (-not (Test-Path $path)) { throw "Patch-series file missing: $path" }
+            if (@('validated','candidate') -notcontains [string]$entry.status) { throw "Unexpected patch status: $($entry.status)" }
+          }
+
+          git init zluda-upstream
+          Set-Location zluda-upstream
+          git remote add origin https://github.com/vosen/ZLUDA.git
+          git fetch --depth 1 origin 9c8b43f242985150f86a7f485218b7b82c3e96ca
+          git checkout --detach FETCH_HEAD
+          Set-Location ..
+
+          ./scripts/apply-zluda-patches.ps1 -ZludaSourceRoot ./zluda-upstream -IncludeCandidates | Write-Host
+          Write-Host 'Validated machine-readable patch series plus all current candidates against pinned upstream.'
 
       - name: Verify pinned ZLUDA release asset
         shell: pwsh

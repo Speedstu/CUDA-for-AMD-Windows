@@ -116,13 +116,19 @@ if (-not $HipRoot) {
 }
 
 if ($DownloadZluda) {
-    $zludaPkg = Join-Path $RuntimeRoot 'zluda-v6-preview69'
-    $zludaZip = Join-Path $RuntimeRoot 'zluda-windows-87531d3.zip'
-    $zludaUrl = 'https://github.com/vosen/ZLUDA/releases/download/v6-preview.69/zluda-windows-87531d3.zip'
+    $releaseManifest = Get-Content (Join-Path $repo 'manifests\zluda-releases.json') -Raw | ConvertFrom-Json
+    $channel = $releaseManifest.channels.$ZludaChannel
+    if (-not $channel) { throw "Unknown ZLUDA channel: $ZludaChannel" }
+    $release = [string]$channel.release
+    $asset = [string]$channel.windows_asset
+    $expectedZluda = ([string]$channel.sha256).ToUpperInvariant()
+    $slug = ($release -replace '[^A-Za-z0-9._-]', '-')
+    $zludaPkg = Join-Path $RuntimeRoot "zluda-$slug"
+    $zludaZip = Join-Path $RuntimeRoot $asset
+    $zludaUrl = "https://github.com/vosen/ZLUDA/releases/download/$release/$asset"
     if (-not (Test-Path (Join-Path $zludaPkg 'zluda\zluda.exe'))) {
-        Write-Host '[setup] Downloading ZLUDA v6-preview.69 (Windows, commit 87531d3)...'
+        Write-Host "[setup] Downloading ZLUDA $release ($ZludaChannel channel)..."
         Download-File -Uri $zludaUrl -Destination $zludaZip
-        $expectedZluda = 'E2959ED17C8DDAE6BF2BF76CF3A7348F577A2548754685D776389DF2220E5D9A'
         $actualZluda = Get-Sha256WithProgress -Path $zludaZip
         if ($actualZluda -ne $expectedZluda) { Remove-Item $zludaZip -Force; throw "ZLUDA SHA-256 mismatch: $actualZluda" }
         Write-Host "[setup] ZLUDA SHA-256 verified: $actualZluda"

@@ -3,7 +3,9 @@ param(
     [Parameter(Mandatory=$true)][string]$Program,
     [string[]]$ProgramArgs = @(),
     [string]$RuntimeRoot,
-    [switch]$NoStage
+    [switch]$NoStage,
+    [switch]$PyTorchSafeSDPA,
+    [switch]$AllowUnsafeFusedSDPA
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,15 +27,40 @@ $hip = $config.hip_root
 $libtorch = $config.libtorch_root
 $env:ZLUDA_CC = if ($config.zluda_cc) { $config.zluda_cc } else { '8.6' }
 $env:TORCH_ALLOW_TF32_CUBLAS_OVERRIDE = '1'
-if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
+if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -match '^\d+$') {
     $env:HIP_VISIBLE_DEVICES = [string]$config.gpu.hip_visible_device
     Remove-Item Env:ROCR_VISIBLE_DEVICES -ErrorAction SilentlyContinue
     Write-Host "[run] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES"
 }
+
+# The pinned upstream "latest" asset is intentionally unpatched. On PyTorch,
+# its fused Flash / memory-efficient SDPA paths can return incorrect tensors
+# instead of safely refusing the unsupported NVIDIA-cubin path.
+$latestChannel = [bool](
+    $config.upstream -and
+    [string]$config.upstream.zluda_channel -eq 'latest'
+)
+$programLeaf = [System.IO.Path]::GetFileName($Program)
+$pythonProgram = [bool]($programLeaf -match '^python(?:w|[0-9.]*)?\.exe$')
+$autoSafeSDPA = [bool]($latestChannel -and $pythonProgram -and -not $AllowUnsafeFusedSDPA)
+$useSafeSDPA = [bool]($PyTorchSafeSDPA -or $autoSafeSDPA)
+if ($useSafeSDPA) {
+    $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
+    if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {
+        throw "Missing PyTorch safe-site hook: $safeSite"
+    }
+    $env:CUDAAMD_PYTORCH_SAFE_SDPA = '1'
+    $env:PYTHONPATH = $safeSite + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })
+}
 if ($hip) {
     $env:HIP_PATH = $hip
     $env:ROCBLAS_TENSILE_LIBPATH = Join-Path $hip 'bin\rocblas\library'
-    $env:HIPBLASLT_TENSILE_LIBPATH = Join-Path $hip 'bin\hipblaslt\library'
+    $hipblasltLib = Join-Path $hip 'bin\hipblaslt\library'
+    if ($config.gpu -and $config.gpu.arch) {
+        $archLib = Join-Path $hipblasltLib ([string]$config.gpu.arch)
+        if (Test-Path $archLib) { $hipblasltLib = $archLib }
+    }
+    $env:HIPBLASLT_TENSILE_LIBPATH = $hipblasltLib
 }
 
 $parts = @($targetDir, $zluda)
@@ -44,6 +71,10 @@ $env:PATH = (($parts | Where-Object { $_ -and (Test-Path $_) }) -join ';') + ';'
 $launcher = Join-Path $zluda 'zluda.exe'
 if (-not (Test-Path $launcher)) { throw "Missing ZLUDA launcher: $launcher" }
 Write-Host "[run] ZLUDA_CC=$env:ZLUDA_CC"
+if ($useSafeSDPA) {
+    $reason = if ($PyTorchSafeSDPA) { 'explicit' } else { 'automatic for unpatched latest channel' }
+    Write-Host "[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on ($reason)"
+}
 Write-Host "[run] $launcher -- $Program $($ProgramArgs -join ' ')"
 & $launcher '--' $Program @ProgramArgs
 exit $LASTEXITCODE
