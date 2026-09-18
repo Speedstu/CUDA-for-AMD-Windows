@@ -22,6 +22,7 @@ TESTS = (
     "driver_pci_bus_id",
     "driver_api",
     "driver_launch_ex",
+    "driver_func_attributes",
     "nvml",
     "memory_copy",
     "streams_events",
@@ -304,6 +305,127 @@ def run_driver_launch_ex(torch):
                 "cooperative_1": "reported separately because device support can vary",
                 "pdl_1": "801 is a safe refusal when the backend has no equivalent semantics",
             },
+        }
+    finally:
+        if module.value:
+            try:
+                cuda.cuModuleUnload(module)
+            except Exception:
+                pass
+        if created_ctx and ctx.value:
+            try:
+                cuda.cuCtxDestroy_v2(ctx)
+            except Exception:
+                pass
+
+
+def run_driver_func_attributes(torch):
+    """Validate the dynamic shared-memory function-attribute boundary.
+
+    Recent llama.cpp Flash Attention paths opt in to larger dynamic shared
+    memory with cudaFuncSetAttribute.  This probe records the device-advertised
+    opt-in ceiling and verifies the driver accepts values at/below it while
+    refusing a value beyond it.
+    """
+    cuda = _load_win_dll("nvcuda.dll")
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cuda.cuDeviceGet.restype = ctypes.c_int
+    cuda.cuDeviceGetAttribute.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
+    cuda.cuDeviceGetAttribute.restype = ctypes.c_int
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    cuda.cuCtxCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_int]
+    cuda.cuCtxCreate_v2.restype = ctypes.c_int
+    cuda.cuCtxDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuCtxDestroy_v2.restype = ctypes.c_int
+    cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cuda.cuModuleLoadData.restype = ctypes.c_int
+    cuda.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
+    cuda.cuModuleGetFunction.restype = ctypes.c_int
+    cuda.cuFuncSetAttribute.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    cuda.cuFuncSetAttribute.restype = ctypes.c_int
+    cuda.cuModuleUnload.argtypes = [ctypes.c_void_p]
+    cuda.cuModuleUnload.restype = ctypes.c_int
+
+    def ck(code: int, call: str):
+        if code != 0:
+            raise RuntimeError(f"{call} returned CUDA error {code}")
+
+    ck(cuda.cuInit(0), "cuInit")
+    dev = ctypes.c_int()
+    ck(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+
+    # CUDA Driver API enum values:
+    #   8  = CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK
+    #   81 = CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
+    #   97 = CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+    device_attrs = {}
+    for attr, name in (
+        (8, "max_shared_per_block"),
+        (81, "max_shared_per_sm"),
+        (97, "max_shared_optin"),
+    ):
+        value = ctypes.c_int()
+        rc = int(cuda.cuDeviceGetAttribute(ctypes.byref(value), attr, dev.value))
+        device_attrs[name] = {"attribute": attr, "rc": rc, "value": int(value.value)}
+
+    optin = device_attrs["max_shared_optin"]["value"]
+    if device_attrs["max_shared_optin"]["rc"] != 0 or optin <= 0:
+        raise RuntimeError("MAX_SHARED_MEMORY_PER_BLOCK_OPTIN is unavailable")
+
+    ctx = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
+    created_ctx = False
+    if not ctx.value:
+        ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
+        created_ctx = True
+
+    ptx = b""".version 7.0
+.target sm_80
+.address_size 64
+.visible .entry noop() {
+    ret;
+}
+\0"""
+    module = ctypes.c_void_p()
+    try:
+        ck(
+            cuda.cuModuleLoadData(
+                ctypes.byref(module),
+                ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
+            ),
+            "cuModuleLoadData",
+        )
+        func = ctypes.c_void_p()
+        ck(cuda.cuModuleGetFunction(ctypes.byref(func), module, b"noop"), "cuModuleGetFunction")
+
+        # CUDA function attribute enum:
+        #   8 = CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
+        safe_value = min(optin, 32 * 1024)
+        at_limit_rc = int(cuda.cuFuncSetAttribute(func, 8, optin))
+        safe_rc = int(cuda.cuFuncSetAttribute(func, 8, safe_value))
+        over_value = optin + 16 * 1024
+        over_limit_rc = int(cuda.cuFuncSetAttribute(func, 8, over_value))
+
+        ok = (
+            device_attrs["max_shared_per_block"]["rc"] == 0
+            and device_attrs["max_shared_per_sm"]["rc"] == 0
+            and safe_rc == 0
+            and at_limit_rc == 0
+            and over_limit_rc != 0
+        )
+        return {
+            "ok": ok,
+            "device_attributes": device_attrs,
+            "func_attribute": "MAX_DYNAMIC_SHARED_SIZE_BYTES",
+            "safe_value": safe_value,
+            "safe_rc": safe_rc,
+            "at_limit_value": optin,
+            "at_limit_rc": at_limit_rc,
+            "over_limit_value": over_value,
+            "over_limit_rc": over_limit_rc,
         }
     finally:
         if module.value:
@@ -1138,6 +1260,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_pci_bus_id": run_driver_pci_bus_id,
     "driver_api": run_driver_api,
     "driver_launch_ex": run_driver_launch_ex,
+    "driver_func_attributes": run_driver_func_attributes,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,
     "streams_events": run_streams_events,
