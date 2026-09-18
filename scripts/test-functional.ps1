@@ -84,6 +84,8 @@ if ($LASTEXITCODE -ne 0) {
     $result = [ordered]@{
         schema = 1
         generated_utc = (Get-Date).ToUniversalTime().ToString('o')
+        project_revision = $projectRevision
+        runtime_hashes = $runtimeHashes
         available = $false
         correctness_ok = $false
         full_support = $false
