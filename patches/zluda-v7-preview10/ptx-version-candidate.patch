@@ -71,7 +71,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
              mutable: Mutex::new(ModuleMutable {
                  functions: FxHashMap::default(),
              }),
-@@ -158,11 +163,17 @@ impl Module {
+@@ -158,11 +162,17 @@ impl Module {
          });
          mutable
 -            .get_function(self.base, self.sm_version, name.to_owned(), explicit_args)
@@ -91,7 +91,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
      image: CodeLibraryRef<'_>,
 -) -> Result<(hipModule_t, u32, Option<Metadata32Bit>), CUerror> {
 +) -> Result<(hipModule_t, u32, u32, Option<Metadata32Bit>), CUerror> {
-@@ -237,6 +248,8 @@ fn get_best_ptx_and_compile(
+@@ -237,6 +247,8 @@ fn get_best_ptx_and_compile(
              )
          }
      };
@@ -100,7 +100,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
      // TODO: get this information on initialization
      let hip_properties = get_hip_properties()?;
      let gcn_arch = get_gcn_arch(&hip_properties)?;
-@@ -260,7 +273,7 @@ fn get_best_ptx_and_compile(
+@@ -260,7 +272,7 @@ fn get_best_ptx_and_compile(
          .or_else(|_| compile_and_cache(gcn_arch, attributes, module, &mut cache_with_key))?;
      let mut hip_module = unsafe { mem::zeroed() };
      unsafe { hipModuleLoadData(&mut hip_module, elf_module.as_ptr().cast()) }?;
@@ -109,7 +109,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
  }
  
  fn cow_bytes_to_str<'a>(data: Cow<'a, [u8]>) -> Option<Cow<'a, str>> {
-@@ -273,7 +286,7 @@ fn cow_bytes_to_str<'a>(data: Cow<'a, [u8]>) -> Option<Cow<'a, str>> {
+@@ -273,7 +285,7 @@ fn cow_bytes_to_str<'a>(data: Cow<'a, [u8]>) -> Option<Cow<'a, str>> {
  
  pub(crate) fn load_hip_module(
      library: CodeLibraryRef,
@@ -118,7 +118,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
      let global_state = driver::global_state()?;
      get_best_ptx_and_compile(global_state, library)
  }
-@@ -372,14 +385,14 @@ pub(crate) fn load(module: &mut CUmodule, fname: &CStr) -> CUresult {
+@@ -372,14 +384,14 @@ pub(crate) fn load(module: &mut CUmodule, fname: &CStr) -> CUresult {
      let library = unsafe { CodeLibraryRef::try_load(image.as_ptr() as *const std::ffi::c_void) }
          .map_err(|_| CUerror::NO_BINARY_FOR_GPU)?;
 -    let (hip_module, sm_version, meta32) = load_hip_module(library)?;
