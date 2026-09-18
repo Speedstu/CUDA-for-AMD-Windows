@@ -27,7 +27,16 @@ Use:
 .\scripts\install.ps1 -SkipLibTorch -ZludaChannel latest
 ```
 
-Then confirm the CUDA backend is actually visible:
+Then confirm the CUDA backend is actually visible. The repository includes a registration-only smoke test that does not load a model or launch inference kernels:
+
+```powershell
+.\scripts\test-llama-registration.ps1 `
+  -LlamaRoot C:\path\to\llama-b10978-bin-win-cuda-12.4-x64
+```
+
+It runs `llama-cli.exe --list-devices` through the configured ZLUDA runtime, requires an AMD `[ZLUDA]` CUDA device, rejects `(none)` / CPU-only fallback, and writes `.runtime\llama-registration-test.json` with executable/runtime hashes.
+
+You can still inspect the application directly with:
 
 ```powershell
 llama-cli.exe --list-devices
