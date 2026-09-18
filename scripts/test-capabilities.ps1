@@ -254,6 +254,7 @@ $report = [ordered]@{
     python = $PythonExe
     pytorch = ($torchCheck | Out-String).Trim()
     gpu = if ($config.gpu) { $config.gpu } else { $null }
+    zluda_cc = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
     initial_timeout_seconds = $TimeoutSeconds
     retry_timeout_seconds = $RetryTimeoutSeconds
     timeout_retries = $retried.Count
