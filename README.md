@@ -173,7 +173,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
   -DownloadZluda
 ```
 
-When multiple AMD GPUs are present, automatic detection prefers `gfx1201` instead of blindly choosing device 0. The selected HIP device is also isolated at launch with `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES`. To select a specific HIP device explicitly, pass its index:
+When multiple AMD GPUs are present, automatic detection prefers `gfx1201` instead of blindly choosing device 0. The selected HIP device is isolated at launch with `HIP_VISIBLE_DEVICES`; the launcher removes any inherited `ROCR_VISIBLE_DEVICES` value so it cannot remap or hide the selected device on Windows. To select a specific HIP device explicitly, pass its index:
 
 ```powershell
 .\scripts\gpu-scan.ps1
@@ -194,7 +194,7 @@ The following details are important for reproducing the working configuration:
 2. The `gfx120X` package was selected because the R9700 reports `gfx1201`. The extracted SDK root must contain `bin\hipInfo.exe`, `bin\rocblas.dll` and the other runtime DLLs.
 3. `hipInfo.exe` was used instead of relying only on Windows device ordering. It confirmed both the integrated `gfx1036` device and the dedicated `gfx1201` device.
 4. Automatic GPU selection was changed to prefer `gfx1201`; `-GpuIndex` remains available for explicit selection.
-5. The launcher exports both `HIP_VISIBLE_DEVICES` and `ROCR_VISIBLE_DEVICES`, preventing the application from falling back to the integrated GPU.
+5. The launcher exports `HIP_VISIBLE_DEVICES` and removes any inherited `ROCR_VISIBLE_DEVICES`, preventing the application from falling back to or hiding the selected GPU.
 6. LibTorch is downloaded as the CUDA-facing `2.3.0+cu118` build. The large archive uses resumable `curl.exe` retries and visible SHA-256 progress before extraction.
 7. Re-running `setup.ps1` preserves an existing LibTorch installation and can rediscover `.runtime\libtorch-2.3.0-cu118\libtorch` if the generated configuration was incomplete.
 8. The runtime probe was made compatible with Windows PowerShell 5.1, which does not support the newer `ProcessStartInfo.ArgumentList` workflow used by PowerShell 7 examples.

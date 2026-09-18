@@ -27,7 +27,7 @@ $env:ZLUDA_CC = if ($config.zluda_cc) { $config.zluda_cc } else { '8.6' }
 $env:TORCH_ALLOW_TF32_CUBLAS_OVERRIDE = '1'
 if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
     $env:HIP_VISIBLE_DEVICES = [string]$config.gpu.hip_visible_device
-    $env:ROCR_VISIBLE_DEVICES = [string]$config.gpu.hip_visible_device
+    Remove-Item Env:ROCR_VISIBLE_DEVICES -ErrorAction SilentlyContinue
     Write-Host "[run] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES"
 }
 if ($hip) {

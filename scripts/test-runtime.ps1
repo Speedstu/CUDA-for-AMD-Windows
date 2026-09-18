@@ -38,7 +38,7 @@ $environment['HIPBLASLT_TENSILE_LIBPATH'] = Join-Path $hip 'bin\hipblaslt\librar
 $environment['PATH'] = "$($hip)\bin;$zluda;" + $env:PATH
 if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -ne '') {
     $environment['HIP_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
-    $environment['ROCR_VISIBLE_DEVICES'] = [string]$config.gpu.hip_visible_device
+    $environment.Remove('ROCR_VISIBLE_DEVICES')
 }
 
 function Stop-ProcessTree {
