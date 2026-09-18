@@ -49,9 +49,26 @@ For llama.cpp registration, use the model-free smoke first:
 
 ```powershell
 .\scripts\test-llama-registration.ps1 -LlamaRoot C:\path\to\llama-cuda-build
+
+# If a CUDA-facing PyTorch environment is available, include the focused
+# driver metadata/launch preflight without loading a model:
+.\scripts\test-llama-registration.ps1 `
+  -LlamaRoot C:\path\to\llama-cuda-build `
+  -PythonExe C:\path\to\cuda-facing-venv\Scripts\python.exe
 ```
 
 Do not jump directly to risky inference kernels on an unvalidated GPU.
+
+If a model run later fails only at a generic CUDA launch location, capture a ZLUDA trace as the final diagnostic step:
+
+```powershell
+.\scripts\capture-zluda-trace.ps1 `
+  -Program C:\path\to\llama-cli.exe `
+  -ProgramArgs @('-m','C:\path\to\small-test-model.gguf','-fa','off') `
+  -AcknowledgeGpuResetRisk
+```
+
+Trace mode executes the application workload. The acknowledgement switch is intentional: killing the process cannot guarantee recovery from a GPU/driver hard lock.
 
 ## Compatibility reports
 
