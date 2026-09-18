@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "upstream": {
+    "repository": "https://github.com/vosen/ZLUDA.git",
+    "commit": "9c8b43f242985150f86a7f485218b7b82c3e96ca",
+    "label": "v7-preview.10"
+  },
+  "patches": [
+    {
+      "order": 10,
+      "file": "windows-amd-compat.patch",
+      "status": "validated",
+      "purpose": "Validated Windows AMD compatibility patch set",
+      "required_probes": [
+        "nvml",
+        "sparse_mm",
+        "fft",
+        "cuda_graph",
+        "streams_events"
+      ]
+    },
+    {
+      "order": 20,
+      "file": "launch-attributes-candidate.patch",
+      "status": "candidate",
+      "purpose": "Accept benign cuLaunchKernelEx zero-valued launch attributes without changing PDL semantics",
+      "required_probes": [
+        "driver_launch_ex"
+      ]
+    },
+    {
+      "order": 30,
+      "file": "ptx-version-candidate.patch",
+      "status": "candidate",
+      "purpose": "Report PTX ISA version separately from target SM in CUDA function metadata",
+      "required_probes": [
+        "driver_function_metadata"
+      ]
+    }
+  ]
+}
