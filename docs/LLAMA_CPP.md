@@ -39,6 +39,11 @@ Then confirm the CUDA backend is actually visible. The repository includes a reg
 ```powershell
 .\scripts\test-llama-registration.ps1 `
   -LlamaRoot C:\path\to\llama-b10978-bin-win-cuda-12.4-x64
+
+# Optional: add the focused CUDA driver metadata/launch preflight:
+.\scripts\test-llama-registration.ps1 `
+  -LlamaRoot C:\path\to\llama-b10978-bin-win-cuda-12.4-x64 `
+  -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe
 ```
 
 It runs `llama-cli.exe --list-devices` through the configured ZLUDA runtime, requires an AMD `[ZLUDA]` CUDA device, rejects `(none)` / CPU-only fallback, and writes `.runtime\llama-registration-test.json` with executable/runtime hashes.
@@ -72,8 +77,51 @@ Run the focused driver probes with:
 ```powershell
 .\scripts\test-capabilities.ps1 `
   -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
-  -Tests driver_pci_bus_id,driver_launch_ex,driver_func_attributes
+  -Tests driver_pci_bus_id,driver_launch_ex,driver_func_attributes,driver_function_metadata
 ```
+
+## PTX metadata: target SM is not PTX ISA version
+
+There is a second driver-level problem behind the unexpected PDL path.
+
+Upstream ZLUDA currently answers `CU_FUNC_ATTRIBUTE_PTX_VERSION` with the parsed module's `sm_version` (the `.target sm_XX` value). CUDA defines `PTX_VERSION` differently: it is the PTX ISA major/minor encoded as `major * 10 + minor`.
+
+That distinction matters directly to b10978. Its launcher only opts into PDL when:
+
+```text
+cudaFuncAttributes.ptxVersion >= 90
+```
+
+For a known module:
+
+```text
+.version 7.0
+.target sm_80
+```
+
+the correct CUDA metadata is:
+
+```text
+PTX_VERSION = 70
+```
+
+not `80`.
+
+CUDA 12.4 corresponds to PTX ISA 8.4, so treating an `sm_90` target as `PTX_VERSION=90` can make a CUDA 12.4 application appear PDL-capable when its PTX ISA version does not meet that gate.
+
+The repository therefore includes:
+
+- `ptx-version-candidate.patch`, which preserves the real parsed PTX version separately from the target SM without changing the on-disk ZLUDA cache format;
+- `driver_function_metadata`, which loads a known `.version 7.0 / .target sm_80` module and requires `CU_FUNC_ATTRIBUTE_PTX_VERSION=70`;
+- diagnostic reporting for `BINARY_VERSION`, because frameworks such as PyTorch can also use that value for architecture gating. The binary-version behavior is **not changed yet** by this candidate.
+
+This candidate remains outside the validated patch set until the rebuilt driver passes the direct probe and real workload regression on the reference GPU.
+
+NVIDIA reference:
+https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
+
+CUDA 12.4 / PTX 8.4 release note:
+https://docs.nvidia.com/cuda/archive/12.4.0/cuda-toolkit-release-notes/
 
 ## Dynamic shared-memory boundary
 
