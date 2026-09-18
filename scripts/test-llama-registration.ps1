@@ -166,8 +166,17 @@ if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 't
                 $ptxMetadata.ptx_version.rc -eq 0 -and
                 $ptxVersion -eq $ptxVersionExpected
             )
-            # llama.cpp b10978 enables PDL only when cudaFuncAttributes.ptxVersion >= 90.
-            # A wrong SM-as-PTX value can therefore select PDL when PTX ISA is actually < 9.0.
+        }
+        if ($ptxMetadata.PSObject.Properties.Name -contains 'llama_b10978_false_pdl_gate') {
+            $pdlGateRisk = [bool]$ptxMetadata.llama_b10978_false_pdl_gate
+            if ($ptxMetadata.cases -and $ptxMetadata.cases.llama_b10978_ptx84_sm90) {
+                $llamaCase = $ptxMetadata.cases.llama_b10978_ptx84_sm90
+                $ptxVersion = [int]$llamaCase.ptx_version.value
+                $ptxVersionExpected = [int]$llamaCase.ptx_version.expected
+                $ptxMetadataOk = [bool]$llamaCase.ok
+            }
+        } elseif ($null -ne $ptxVersion -and $null -ne $ptxVersionExpected) {
+            # Backward compatibility with older single-case capability reports.
             $pdlGateRisk = [bool]($ptxVersion -ge 90 -and $ptxVersionExpected -lt 90)
         }
     }
