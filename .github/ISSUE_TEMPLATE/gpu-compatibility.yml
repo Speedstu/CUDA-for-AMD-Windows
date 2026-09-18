@@ -42,14 +42,34 @@ body:
     validations:
       required: false
 
+  - type: input
+    id: zluda
+    attributes:
+      label: ZLUDA build / channel
+      description: Include the release/channel and commit or project commit when known.
+      placeholder: v7-preview.10 / latest, repo commit 6eda902
+    validations:
+      required: true
+
+  - type: input
+    id: zluda_cc
+    attributes:
+      label: ZLUDA_CC
+      description: CUDA-facing compute capability exposed to the application.
+      placeholder: "8.6"
+    validations:
+      required: false
+
   - type: dropdown
     id: result
     attributes:
       label: Result
       options:
-        - Works - training/inference completed
+        - Works - end-to-end workload completed
         - Works - basic CUDA workload only
-        - Partial - launches but some operations fail
+        - Partial - clean unsupported/errors
+        - Incorrect numerical result
+        - Hangs / process crash / GPU reset
         - Fails to launch
         - GPU/HIP not detected
     validations:
@@ -78,6 +98,24 @@ body:
     attributes:
       label: GPU scanner report
       description: Drag `gpu-report.json` here, or paste the relevant fields from `scripts\gpu-scan.ps1 -AsJson`.
+    validations:
+      required: false
+
+  - type: textarea
+    id: capability_report
+    attributes:
+      label: Capability report
+      description: If possible, run `scripts\test-capabilities.ps1 -PythonExe <cuda-facing-python>` and attach `.runtime\capability-test.json`. For app-specific failures, include the smallest focused probe that reproduces it.
+      placeholder: Drag capability-test.json here, or paste the relevant probe result(s).
+    validations:
+      required: false
+
+  - type: textarea
+    id: fallback_check
+    attributes:
+      label: Device / fallback check
+      description: If the application can silently fall back to CPU or another backend, show how you confirmed the AMD/ZLUDA device actually executed the workload.
+      placeholder: --list-devices output, device assignment lines, torch.cuda.get_device_name(0), etc.
     validations:
       required: false
 
