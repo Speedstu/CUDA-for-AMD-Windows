@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,20 @@ def self_test() -> None:
     assert result["launches"][1]["function_name"] == "kernel_bad"
     assert result["launches"][1]["status"] == "CUDA_ERROR_LAUNCH_FAILED"
     assert result["non_success_count"] == 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        (run_dir / "log.txt").write_text("\n".join(sample) + "\n", encoding="utf-8")
+        (run_dir / "module_0001_01.ptx").write_text(
+            '.version 8.4\n.target sm_90\n.visible .entry kernel_bad() { ret; }\n',
+            encoding="utf-8",
+        )
+        file_result = summarize(run_dir, 4)
+        assert file_result["last_launch"]["function_name"] == "kernel_bad"
+        assert file_result["last_launch"]["ptx_modules"]
+        assert file_result["last_launch"]["ptx_modules"][0].endswith(
+            "module_0001_01.ptx"
+        )
     print("self-test: ok")
 
 
