@@ -454,12 +454,12 @@ def run_driver_func_attributes(torch):
 
 
 def run_driver_function_metadata(torch):
-    """Check CUDA function metadata semantics using known PTX text.
+    """Validate CUDA PTX/BINARY function metadata with known source modules.
 
-    ZLUDA historically returned the PTX target SM from
-    CU_FUNC_ATTRIBUTE_PTX_VERSION.  CUDA defines this attribute as the PTX ISA
-    version instead.  A module with .version 7.0 and .target sm_80 must report
-    PTX_VERSION=70, not 80.
+    CUDA defines CU_FUNC_ATTRIBUTE_PTX_VERSION as PTX ISA major/minor encoded
+    as major*10+minor.  It is not the module target SM.  The sm_90 / PTX 8.4
+    case mirrors the llama.cpp b10978 false-PDL gate: returning 90 instead of
+    84 can incorrectly satisfy ptxVersion >= 90.
     """
     cuda = _load_win_dll("nvcuda.dll")
     cuda.cuInit.argtypes = [ctypes.c_uint]
@@ -496,69 +496,93 @@ def run_driver_function_metadata(torch):
         ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
         created_ctx = True
 
-    ptx = b""".version 7.0
-.target sm_80
+    device_capability = tuple(int(x) for x in torch.cuda.get_device_capability(0))
+    expected_binary_version = device_capability[0] * 10 + device_capability[1]
+
+    def probe_case(ptx_version_text: str, target_sm: int, expected_ptx_version: int, kernel_name: str):
+        ptx = f""".version {ptx_version_text}
+.target sm_{target_sm}
 .address_size 64
-.visible .entry metadata_probe() {
+.visible .entry {kernel_name}() {{
     ret;
-}
-\0"""
-    module = ctypes.c_void_p()
+}}
+\0""".encode("ascii")
+        module = ctypes.c_void_p()
+        try:
+            ck(
+                cuda.cuModuleLoadData(
+                    ctypes.byref(module),
+                    ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
+                ),
+                f"cuModuleLoadData({ptx_version_text}/sm_{target_sm})",
+            )
+            func = ctypes.c_void_p()
+            ck(
+                cuda.cuModuleGetFunction(ctypes.byref(func), module, kernel_name.encode("ascii")),
+                f"cuModuleGetFunction({kernel_name})",
+            )
+
+            # CUDA function attribute enum values:
+            #   5 = CU_FUNC_ATTRIBUTE_PTX_VERSION
+            #   6 = CU_FUNC_ATTRIBUTE_BINARY_VERSION
+            ptx_version = ctypes.c_int()
+            binary_version = ctypes.c_int()
+            ptx_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(ptx_version), 5, func))
+            binary_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(binary_version), 6, func))
+            ptx_ok = ptx_rc == 0 and int(ptx_version.value) == expected_ptx_version
+            return {
+                "ok": bool(ptx_ok and binary_rc == 0 and binary_version.value >= 0),
+                "ptx_source": {
+                    "version": ptx_version_text,
+                    "target": f"sm_{target_sm}",
+                },
+                "ptx_version": {
+                    "rc": ptx_rc,
+                    "value": int(ptx_version.value),
+                    "expected": expected_ptx_version,
+                    "matches_target_sm_by_accident": int(ptx_version.value) == target_sm,
+                },
+                "binary_version": {
+                    "rc": binary_rc,
+                    "value": int(binary_version.value),
+                    "device_capability_value": expected_binary_version,
+                    "matches_device_capability": int(binary_version.value) == expected_binary_version,
+                },
+            }
+        finally:
+            if module.value:
+                try:
+                    cuda.cuModuleUnload(module)
+                except Exception:
+                    pass
+
     try:
-        ck(
-            cuda.cuModuleLoadData(
-                ctypes.byref(module),
-                ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
-            ),
-            "cuModuleLoadData",
-        )
-        func = ctypes.c_void_p()
-        ck(cuda.cuModuleGetFunction(ctypes.byref(func), module, b"metadata_probe"), "cuModuleGetFunction")
-
-        # CUDA function attribute enum values:
-        #   5 = CU_FUNC_ATTRIBUTE_PTX_VERSION
-        #   6 = CU_FUNC_ATTRIBUTE_BINARY_VERSION
-        ptx_version = ctypes.c_int()
-        binary_version = ctypes.c_int()
-        ptx_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(ptx_version), 5, func))
-        binary_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(binary_version), 6, func))
-
-        expected_ptx_version = 70
-        device_capability = tuple(int(x) for x in torch.cuda.get_device_capability(0))
-        expected_binary_version = device_capability[0] * 10 + device_capability[1]
-        binary_matches_device = int(binary_version.value) == expected_binary_version
-        ok = (
-            ptx_rc == 0
-            and ptx_version.value == expected_ptx_version
-            and binary_rc == 0
-            and binary_version.value >= 0
+        baseline = probe_case("7.0", 80, 70, "metadata_probe_70")
+        llama_gate = probe_case("8.4", 90, 84, "metadata_probe_84")
+        false_pdl_gate = bool(
+            llama_gate["ptx_version"]["value"] >= 90
+            and llama_gate["ptx_version"]["expected"] < 90
         )
         return {
-            "ok": ok,
-            "ptx_source": {"version": "7.0", "target": "sm_80"},
+            "ok": bool(baseline["ok"] and llama_gate["ok"] and not false_pdl_gate),
+            # Keep the original top-level fields for report consumers that
+            # predate the multi-case regression.
+            "ptx_source": baseline["ptx_source"],
             "device_capability": list(device_capability),
-            "ptx_version": {
-                "rc": ptx_rc,
-                "value": int(ptx_version.value),
-                "expected": expected_ptx_version,
+            "ptx_version": baseline["ptx_version"],
+            "binary_version": baseline["binary_version"],
+            "cases": {
+                "baseline_ptx70_sm80": baseline,
+                "llama_b10978_ptx84_sm90": llama_gate,
             },
-            "binary_version": {
-                "rc": binary_rc,
-                "value": int(binary_version.value),
-                "device_capability_value": expected_binary_version,
-                "matches_device_capability": binary_matches_device,
-            },
+            "llama_b10978_false_pdl_gate": false_pdl_gate,
             "notes": {
                 "semantic_regression": "PTX_VERSION must describe PTX ISA version, not target SM",
+                "llama_b10978": "PTX 8.4 targeted at sm_90 must report 84; reporting 90 can falsely enable ptxVersion>=90 PDL dispatch",
                 "binary_version": "recorded separately because applications may use it for architecture gating; mismatch is diagnostic until validated",
             },
         }
     finally:
-        if module.value:
-            try:
-                cuda.cuModuleUnload(module)
-            except Exception:
-                pass
         if created_ctx and ctx.value:
             try:
                 cuda.cuCtxDestroy_v2(ctx)
