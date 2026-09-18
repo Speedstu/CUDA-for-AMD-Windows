@@ -524,6 +524,9 @@ def run_driver_function_metadata(torch):
         binary_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(binary_version), 6, func))
 
         expected_ptx_version = 70
+        device_capability = tuple(int(x) for x in torch.cuda.get_device_capability(0))
+        expected_binary_version = device_capability[0] * 10 + device_capability[1]
+        binary_matches_device = int(binary_version.value) == expected_binary_version
         ok = (
             ptx_rc == 0
             and ptx_version.value == expected_ptx_version
@@ -533,6 +536,7 @@ def run_driver_function_metadata(torch):
         return {
             "ok": ok,
             "ptx_source": {"version": "7.0", "target": "sm_80"},
+            "device_capability": list(device_capability),
             "ptx_version": {
                 "rc": ptx_rc,
                 "value": int(ptx_version.value),
@@ -541,9 +545,12 @@ def run_driver_function_metadata(torch):
             "binary_version": {
                 "rc": binary_rc,
                 "value": int(binary_version.value),
+                "device_capability_value": expected_binary_version,
+                "matches_device_capability": binary_matches_device,
             },
             "notes": {
                 "semantic_regression": "PTX_VERSION must describe PTX ISA version, not target SM",
+                "binary_version": "recorded separately because applications may use it for architecture gating; mismatch is diagnostic until validated",
             },
         }
     finally:
