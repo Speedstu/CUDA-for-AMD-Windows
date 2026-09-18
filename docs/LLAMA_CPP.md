@@ -258,9 +258,16 @@ The helper:
 - copies `log.txt`, `module_*.ptx`, `module_*.elf` and related trace artifacts;
 - records SHA-256 provenance for the program, launcher, `nvcuda.dll` and runtime config;
 - writes `trace-report.json`;
+- when Python is available, runs `scripts/summarize-zluda-trace.py` automatically and stores a per-trace summary JSON;
 - produces a ZIP under `.runtime\traces`.
 
-The useful part of `log.txt` is normally the final successful `cuModuleGetFunction` / `cuLaunchKernel` sequence before the error. The matching `module_*.ptx` then tells us which translated CUDA kernel was actually selected.
+The summarizer correlates `cuModuleGetFunction` handles with `cuLaunchKernel` / `cuLaunchKernelEx` calls, reports non-success CUDA calls, and searches the captured `module_*.ptx` files for the resolved kernel name. That normally gives us the exact PTX module behind the final failing launch instead of only the generic llama.cpp call site.
+
+It can also be run manually:
+
+```powershell
+python .\scripts\summarize-zluda-trace.py C:\path\to\trace-run --json trace-summary.json
+```
 
 > [!WARNING]
 > The timeout only kills the process tree. It cannot restore a GPU/driver that has already entered an unrecoverable state. The helper therefore requires `-AcknowledgeGpuResetRisk` explicitly. Do not use it on a machine where a forced reboot would be unacceptable.
