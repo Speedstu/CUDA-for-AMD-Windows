@@ -83,12 +83,14 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
 +                explicit_args,
 +            )
              .map(|f| unsafe { (f as *const Function).as_ref().unwrap() })
-@@ -165,4 +175,4 @@
+@@ -165,6 +175,6 @@
  fn get_best_ptx_and_compile(
      global_state: &GlobalState,
      image: CodeLibraryRef<'_>,
 -) -> Result<(hipModule_t, u32, Option<Metadata32Bit>), CUerror> {
 +) -> Result<(hipModule_t, u32, u32, Option<Metadata32Bit>), CUerror> {
+     let mut ptx_modules = Vec::new();
+     unsafe {
 @@ -237,6 +247,8 @@ fn get_best_ptx_and_compile(
              )
          }
