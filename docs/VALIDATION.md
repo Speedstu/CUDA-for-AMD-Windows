@@ -106,13 +106,17 @@ The source patch at ZLUDA commit `9c8b43f`, tested on RX 9060 XT / `gfx1200` wit
 
 ```text
 33/35 PASS
-2/34 UNSUPPORTED (safe refusal)
+2/35 UNSUPPORTED (safe refusal)
 0 incorrect
 0 timeouts
 0 process hangs
 0 process crashes
 0 errors
 ```
+
+This is a **historical full-run snapshot**, not the score of the current larger probe list. On 2026-09-18, `driver_launch_ex` and `driver_func_attributes` were added specifically for the newer llama.cpp boundary; those diagnostics are not folded into the 33/35 percentage until the rebuilt patched runtime is re-run end-to-end.
+
+On the RX 9060 XT with unpatched v7-preview.10, the direct launch probe records no-attribute and PDL=0 launches as successful while PDL=1 and cooperative launch attributes return 801. The project intentionally keeps PDL=1 as a safe refusal until the AMD backend has equivalent programmatic-stream-serialization semantics. A separate function-attribute probe records the dynamic shared-memory resource boundary; the manually reproduced gfx1200 value was 65,536 bytes opt-in, with requests through 64 KiB accepted and larger requests rejected.
 
 The capability runner uses a two-stage timeout policy: probes get a short initial budget, and only true timeouts are retried with a longer budget (180 s by default). This prevents slow first-touch JIT compilation from being misreported as breakage and, more importantly, prevents slow numerical corruption from being hidden in the timeout bucket. On the RX 9060 XT with the unpatched upstream v7-preview.10 asset, a forced 1 s first attempt followed by the long retry correctly reclassified `linalg_svd` as numerically incorrect (large case reconstruction max_abs about 3.60) instead of leaving it as a timeout.
 
