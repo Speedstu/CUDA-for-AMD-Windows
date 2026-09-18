@@ -72,12 +72,19 @@ The expected policy is:
 
 The project deliberately does **not** turn `PDL=1` into a silent no-op just to make an application advance further. A clean refusal is safer than changing launch ordering semantics and risking incorrect computation.
 
+The capability matrix also includes `driver_pdl_semantics`. It uses two PTX kernels in the same stream:
+
+- a producer performs a deliberately non-trivial sequence of volatile global writes, stores `41`, and executes `griddepcontrol.launch_dependents`;
+- a dependent kernel executes `griddepcontrol.wait`, reads the value, increments it and stores `42`.
+
+If the backend returns `801` for `PDL=1`, the probe reports a normal unsupported/safe-refusal. If a future ZLUDA candidate accepts the launch attribute, success is only considered valid when the producer→consumer ordering remains numerically correct across repeated runs. A conservative backend that simply preserves ordinary same-stream serialization is allowed; a backend that accepts the attribute but breaks dependency ordering is not.
+
 Run the focused driver probes with:
 
 ```powershell
 .\scripts\test-capabilities.ps1 `
   -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
-  -Tests driver_pci_bus_id,driver_launch_ex,driver_func_attributes,driver_function_metadata
+  -Tests driver_pci_bus_id,driver_launch_ex,driver_pdl_semantics,driver_func_attributes,driver_function_metadata
 ```
 
 ## PTX metadata: target SM is not PTX ISA version
