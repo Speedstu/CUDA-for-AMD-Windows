@@ -149,6 +149,30 @@ $driverOk = $null
 if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 'correctness_ok') {
     $driverOk = [bool]$driverPreflight.correctness_ok
 }
+
+$ptxMetadata = $null
+$ptxVersion = $null
+$ptxVersionExpected = $null
+$ptxMetadataOk = $null
+$pdlGateRisk = $null
+if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 'tests') {
+    $metadataEntry = @($driverPreflight.tests | Where-Object { $_.test -eq 'driver_function_metadata' } | Select-Object -First 1)
+    if ($metadataEntry.Count -gt 0 -and $metadataEntry[0].result) {
+        $ptxMetadata = $metadataEntry[0].result
+        if ($ptxMetadata.ptx_version) {
+            $ptxVersion = [int]$ptxMetadata.ptx_version.value
+            $ptxVersionExpected = [int]$ptxMetadata.ptx_version.expected
+            $ptxMetadataOk = [bool](
+                $ptxMetadata.ptx_version.rc -eq 0 -and
+                $ptxVersion -eq $ptxVersionExpected
+            )
+            # llama.cpp b10978 enables PDL only when cudaFuncAttributes.ptxVersion >= 90.
+            # A wrong SM-as-PTX value can therefore select PDL when PTX ISA is actually < 9.0.
+            $pdlGateRisk = [bool]($ptxVersion -ge 90 -and $ptxVersionExpected -lt 90)
+        }
+    }
+}
+
 $ok = [bool]($registrationOk -and ($null -eq $driverOk -or $driverOk))
 
 $report = [ordered]@{
@@ -172,6 +196,12 @@ $report = [ordered]@{
     registration_ok = $registrationOk
     driver_preflight_ok = $driverOk
     driver_preflight = $driverPreflight
+    ptx_metadata = [ordered]@{
+        observed_ptx_version = $ptxVersion
+        expected_ptx_version = $ptxVersionExpected
+        metadata_ok = $ptxMetadataOk
+        llama_b10978_pdl_gate_risk = $pdlGateRisk
+    }
     environment = [ordered]@{
         zluda_cc = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
         ggml_cuda_pdl = 'not_overridden'
@@ -195,6 +225,12 @@ Write-Host "Report    : $ReportPath"
 Write-Host 'Model     : not loaded; no inference kernels executed'
 if ($null -ne $driverOk) {
     Write-Host "Driver    : $(if ($driverOk) { 'focused preflight passed' } else { 'focused preflight failed' })"
+}
+if ($null -ne $ptxMetadataOk) {
+    Write-Host "PTX meta  : observed=$ptxVersion expected=$ptxVersionExpected $(if ($ptxMetadataOk) { 'OK' } else { 'MISMATCH' })"
+}
+if ($true -eq $pdlGateRisk) {
+    Write-Warning 'PTX metadata can falsely satisfy llama.cpp b10978 ptxVersion>=90 and select PDL. Use the PTX-version candidate only after its rebuilt runtime is validated.'
 }
 
 if (-not $ok) {
