@@ -43,12 +43,44 @@ This is narrower than mapping cooperative launch to HIP and avoids pretending th
 
 The candidate is **not counted as validated support yet**. It moves into `windows-amd-compat.patch` only after a rebuilt `nvcuda.dll` passes `driver_launch_ex` on the reference GPU and the real recent llama.cpp path is re-tested.
 
+## PTX function-metadata candidate patch
+
+`ptx-version-candidate.patch` fixes a separate CUDA metadata bug and is also intentionally kept outside the validated patch set for now.
+
+Upstream ZLUDA currently implements `CU_FUNC_ATTRIBUTE_PTX_VERSION` by returning the selected PTX module's **target SM** (`sm_version`). Those are different values. CUDA defines `PTX_VERSION` as the PTX ISA major/minor encoded as `major * 10 + minor`.
+
+For example:
+
+```text
+.version 7.0
+.target sm_80
+
+correct CU_FUNC_ATTRIBUTE_PTX_VERSION : 70
+upstream ZLUDA value                  : 80
+```
+
+This matters to real applications. Recent llama.cpp checks `cudaFuncAttributes.ptxVersion >= 90` before enabling Programmatic Dependent Launch. Confusing `sm_90` with PTX ISA 9.0 can therefore select `cudaLaunchKernelEx` even when the PTX ISA itself does not provide that feature set.
+
+The candidate keeps the parsed PTX version alongside the existing SM target in ZLUDA's in-memory Module/Function objects and returns the actual PTX version from `cuFuncGetAttribute`. It does **not** change the on-disk ZLUDA cache format: the source PTX is already parsed on module load, so the PTX version can be propagated independently of the cached AMD binary.
+
+The repository's `driver_function_metadata` probe validates this directly with a known `.version 7.0 / .target sm_80` module and requires `PTX_VERSION=70`. It also records ZLUDA's reported `BINARY_VERSION` separately because that value is used by some CUDA frameworks for architecture gating; no binary-version behavior is changed by this candidate yet.
+
+NVIDIA's CUDA Driver API documents the PTX-version encoding here:
+https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
+
+Like the launch-attribute candidate, this patch is **compile-tested but not counted as runtime-validated support** until the rebuilt driver passes the direct metadata probe and workload regressions on the reference GPU.
+
 ## Apply
 
 From a clean ZLUDA checkout at commit `9c8b43f`:
 
 ```powershell
 git apply C:\path\to\CUDA-for-AMD-Windows\patches\zluda-v7-preview10\windows-amd-compat.patch
+
+# Optional, still-candidate driver fixes:
+git apply C:\path\to\CUDA-for-AMD-Windows\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+git apply C:\path\to\CUDA-for-AMD-Windows\patches\zluda-v7-preview10\ptx-version-candidate.patch
+
 cargo +1.96.0 build -p zluda -p zluda_sparse -p zluda_fft -p zluda_ml --release
 ```
 
