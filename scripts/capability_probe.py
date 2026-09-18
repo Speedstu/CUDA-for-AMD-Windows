@@ -188,7 +188,7 @@ def run_driver_launch_ex(torch):
 
     class CUlaunchAttribute(ctypes.Structure):
         _fields_ = [
-            ("id", ctypes.c_int),
+            ("id", ctypes.c_uint),
             ("_pad", ctypes.c_byte * 4),
             ("value", CUlaunchAttributeValue),
         ]
@@ -206,6 +206,17 @@ def run_driver_launch_ex(torch):
             ("attrs", ctypes.POINTER(CUlaunchAttribute)),
             ("numAttrs", ctypes.c_uint),
         ]
+
+    expected_attr_size = 72
+    expected_config_size = 56
+    actual_attr_size = ctypes.sizeof(CUlaunchAttribute)
+    actual_config_size = ctypes.sizeof(CUlaunchConfig)
+    if actual_attr_size != expected_attr_size or actual_config_size != expected_config_size:
+        raise RuntimeError(
+            "cuLaunchKernelEx ABI mismatch: "
+            f"CUlaunchAttribute={actual_attr_size} (expected {expected_attr_size}), "
+            f"CUlaunchConfig={actual_config_size} (expected {expected_config_size})"
+        )
 
     cuda.cuInit.argtypes = [ctypes.c_uint]
     cuda.cuInit.restype = ctypes.c_int
