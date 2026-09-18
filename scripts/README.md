@@ -47,6 +47,10 @@ The script filenames in this directory are part of the project's practical publi
 | `gemm_benchmark.py` | Python side of GEMM measurements |
 | `build-cusolver-proxy.ps1` | Build the experimental cuSOLVER compatibility proxy |
 | `stage-cusolver-proxy.ps1` | Stage that proxy reversibly for testing |
+| `build-cudnn-bridge.ps1` | Build the experimental cuDNN v8 → MIOpen compatibility proxy from a user-supplied cuDNN DLL |
+| `stage-cudnn-bridge.ps1` | Stage/restore that cuDNN proxy with SHA-256 state tracking |
+| `test-cudnn-bridge.ps1` | Header-free ABI/correctness self-test for the cuDNN bridge |
+| `test-cudnn-bridge-pytorch.py` | Reference PyTorch forward/backward training matrix for the experimental bridge |
 
 ## Stability rule
 

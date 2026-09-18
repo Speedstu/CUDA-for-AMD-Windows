@@ -1,0 +1,100 @@
+name: cudnn-bridge
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cudnn-bridge.yml'
+      - 'native/cudnn_bridge/**'
+      - 'scripts/build-cudnn-bridge.ps1'
+      - 'scripts/stage-cudnn-bridge.ps1'
+      - 'scripts/test-cudnn-bridge.ps1'
+      - 'scripts/test-cudnn-bridge-pytorch.py'
+  pull_request:
+    paths:
+      - '.github/workflows/cudnn-bridge.yml'
+      - 'native/cudnn_bridge/**'
+      - 'scripts/build-cudnn-bridge.ps1'
+      - 'scripts/stage-cudnn-bridge.ps1'
+      - 'scripts/test-cudnn-bridge.ps1'
+      - 'scripts/test-cudnn-bridge-pytorch.py'
+
+jobs:
+  windows-abi-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-binutils
+
+      - name: Parse PowerShell bridge scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          @(
+            'scripts/build-cudnn-bridge.ps1',
+            'scripts/stage-cudnn-bridge.ps1',
+            'scripts/test-cudnn-bridge.ps1'
+          ) | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $_).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count) {
+              $failed = $true
+              Write-Host "::error file=$_::$($errors | Out-String)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Validate Python reference probe
+        shell: pwsh
+        run: |
+          python -m py_compile scripts/test-cudnn-bridge-pytorch.py
+
+      - name: Validate bridge manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content native/cudnn_bridge/bridge-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 1) { throw 'Unexpected cuDNN bridge manifest schema.' }
+          if ($manifest.abi -ne 'cudnn-v8') { throw 'Unexpected cuDNN bridge ABI.' }
+          $required = @(
+            'cudnnConvolutionForward',
+            'cudnnGetConvolutionForwardWorkspaceSize',
+            'cudnnGetConvolutionForwardAlgorithm_v7',
+            'cudnnConvolutionBackwardData',
+            'cudnnGetConvolutionBackwardDataWorkspaceSize',
+            'cudnnGetConvolutionBackwardDataAlgorithm_v7',
+            'cudnnConvolutionBackwardFilter',
+            'cudnnGetConvolutionBackwardFilterWorkspaceSize',
+            'cudnnGetConvolutionBackwardFilterAlgorithm_v7'
+          )
+          foreach ($name in $required) {
+            if (@($manifest.overrides) -notcontains $name) {
+              throw "Missing required bridge override: $name"
+            }
+          }
+
+      - name: Build and run header-free bridge self-test
+        shell: msys2 {0}
+        run: |
+          GCC_WIN="$(cygpath -w /mingw64/bin/gcc.exe)"
+          OBJDUMP_WIN="$(cygpath -w /mingw64/bin/objdump.exe)"
+          SCRIPT_WIN="$(cygpath -w "$PWD/scripts/test-cudnn-bridge.ps1")"
+          "/c/Program Files/PowerShell/7/pwsh.exe" -NoProfile -File "$SCRIPT_WIN" -Gcc "$GCC_WIN" -Objdump "$OBJDUMP_WIN"
+
+      - name: Upload bridge self-test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cudnn-bridge-selftest-report
+          path: .runtime/cudnn-bridge-selftest/cudnn-bridge-selftest.json
+          if-no-files-found: error

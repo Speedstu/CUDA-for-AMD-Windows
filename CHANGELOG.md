@@ -4,6 +4,14 @@ This file records user-visible project milestones. Detailed experimental evidenc
 
 ## Unreleased
 
+### Experimental cuDNN / MIOpen bridge
+
+- Added a source-built cuDNN v8 compatibility proxy for a narrow 2D forward + backward-data + backward-filter subset on Windows.
+- Preserves the original top-level cuDNN export surface while overriding only the validated bridge entry points.
+- Added exact MIOpen solution-ID/workspace binding and fail-closed handling for unsupported streams, modes, algorithms and scaling semantics.
+- Added header-free forward/backward correctness self-tests plus a PyTorch 2.3.0+cu118 training matrix validated on the RX 9060 XT / gfx1200 reference system, including FP32/FP16, padding, stride, dilation, groups and a bias-training case.
+- No third-party cuDNN or MIOpen binaries are committed or redistributed.
+
 ### Repository organization
 
 - Simplified the root README around the stable user path.

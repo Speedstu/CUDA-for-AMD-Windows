@@ -20,6 +20,7 @@ The root [`README`](../README.md) is intentionally kept focused on installation,
 | [`LLAMA_CPP.md`](LLAMA_CPP.md) | llama.cpp registration and end-to-end GPU validation |
 | [`RX9070XT_VALIDATION.md`](RX9070XT_VALIDATION.md) | Separately tested RX 9070 XT / gfx1201 environment |
 | [`SMOKE_TEST.md`](SMOKE_TEST.md) | Small integration smoke procedure |
+| [`CUDNN_BRIDGE.md`](CUDNN_BRIDGE.md) | Experimental cuDNN v8 forward/backward convolution → MIOpen bridge and gfx1200 validation |
 
 Real application checks are evidence for the exact versions and hardware recorded in each document. They are not blanket claims for every GPU or CUDA application.
 

@@ -68,10 +68,19 @@ Validated/reference-machine work includes:
 - cuFFT and cuSPARSE paths;
 - NVML compatibility;
 - experimental cuSOLVER → hipSOLVER bridging;
+- experimental cuDNN v8 forward/backward convolution → MIOpen bridging on the gfx1200 reference system;
 - SDPA guards for unsafe fallback kernels;
 - llama.cpp registration and end-to-end GPU smoke.
 
 A source patch compiling successfully is not proof that it is functionally correct on every AMD GPU.
+
+### Experimental cuDNN v8 convolution bridge
+
+A separate source-built top-level `cudnn64_8.dll` compatibility proxy is validated on the RX 9060 XT / `gfx1200` reference system with PyTorch `2.3.0+cu118` and a TheRock 7.14.0 MIOpen backend.
+
+Validated forward cases include FP32 and FP16 basic/padding/stride/dilation/grouped convolutions. The same matrix now validates autograd backward-data (input gradient) and backward-filter (weight gradient). `aten::cudnn_convolution`, public `torch.nn.functional.conv2d`, and the public autograd path matched CPU references for the fixed test tensors, with zero max absolute error in the 2026-09-19 gfx1200 reference run.
+
+This is **not full cuDNN support**. The current bridge is limited to a narrow legacy cuDNN v8 2D forward + backward-data + backward-filter subset, default stream execution, cross-correlation mode, non-deterministic-algorithm reporting, and `alpha=1`, `beta=0`. cuDNN backward-bias, non-default streams, deterministic guarantees, fused APIs, and the cuDNN frontend are not claimed. See [`CUDNN_BRIDGE.md`](CUDNN_BRIDGE.md).
 
 ## Safe failure matters
 

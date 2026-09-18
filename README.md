@@ -92,6 +92,7 @@ Validated work on the reference machine includes areas such as:
 - cuFFT and cuSPARSE paths
 - NVML compatibility
 - experimental cuSOLVER → hipSOLVER bridging
+- experimental cuDNN v8 forward/backward convolution → MIOpen bridging on the reference gfx1200 system
 - fail-closed handling for unsafe fused SDPA fallbacks
 - modern llama.cpp registration and GPU execution
 
@@ -177,6 +178,7 @@ Start with [`docs/README.md`](docs/README.md) instead of searching through the r
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Experimental v7 patch set](patches/zluda-v7-preview10/README.md)
 - [Experimental cuSOLVER proxy](native/cusolver_proxy/README.md)
+- [Experimental cuDNN v8 → MIOpen convolution bridge](docs/CUDNN_BRIDGE.md)
 
 Historical reconstruction material is still preserved, but it is no longer part of the recommended path.
 
@@ -199,7 +201,7 @@ Please include the GPU model, `gfxXXXX` target, driver, HIP version, ZLUDA chann
 - ZLUDA does not implement the entire CUDA ecosystem.
 - Passing `cuda_check` or device detection alone does not establish numerical correctness.
 - Windows exposes only part of the full ROCm ecosystem.
-- The validated stable Windows HIP path does not provide a complete cuDNN/MIOpen equivalent stack.
+- The validated stable Windows HIP path does not provide a complete cuDNN/MIOpen equivalent stack. A separate experimental v7 bridge validates a narrow cuDNN v8 2D forward + backward-data + backward-filter subset on gfx1200; see docs/CUDNN_BRIDGE.md.
 - NCCL, TensorRT, unsupported PTX behavior, custom CUDA extensions and architecture-specific kernels may fail.
 - Fused Flash/memory-efficient SDPA paths can depend on NVIDIA cubins; unsafe fallbacks are treated as unsupported rather than accepted as correct.
 - `ZLUDA_CC=8.6` is a CUDA-facing compatibility value, not the native AMD GPU architecture.
