@@ -20,11 +20,35 @@ $configPath = Join-Path $RuntimeRoot 'runtime-config.json'
 $probePath = Join-Path $PSScriptRoot 'capability_probe.py'
 if (-not (Test-Path $configPath)) { throw "Missing runtime config: $configPath" }
 if (-not (Test-Path $probePath)) { throw "Missing capability probe: $probePath" }
+
+function Get-Sha256OrNull([string]$Path) {
+    if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) { return $null }
+    try { return (Get-FileHash $Path -Algorithm SHA256 -ErrorAction Stop).Hash }
+    catch { return $null }
+}
+
+$projectRevision = $null
+try {
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { $git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($git) {
+        $rev = (& $git.Source -C $repo rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -eq 0 -and $rev) { $projectRevision = ([string]$rev).Trim() }
+    }
+} catch {}
+
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 $zluda = [string]$config.zluda_root
 $hip = [string]$config.hip_root
 $launcher = Join-Path $zluda 'zluda.exe'
 if (-not (Test-Path $launcher)) { throw "Missing zluda.exe: $launcher" }
+
+$runtimeHashes = [ordered]@{
+    launcher_sha256 = Get-Sha256OrNull $launcher
+    nvcuda_sha256 = Get-Sha256OrNull (Join-Path $zluda 'nvcuda.dll')
+    runtime_config_sha256 = Get-Sha256OrNull $configPath
+    capability_probe_sha256 = Get-Sha256OrNull $probePath
+}
 if (-not $hip -or -not (Test-Path (Join-Path $hip 'bin'))) { throw "HIP SDK bin directory is missing: $hip" }
 
 if (-not $PythonExe) {
@@ -220,6 +244,9 @@ $score = if ($total) { [math]::Round(100.0 * $passed.Count / $total, 1) } else {
 $report = [ordered]@{
     schema = 1
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
+    project_revision = $projectRevision
+    selected_tests = @($Tests)
+    runtime_hashes = $runtimeHashes
     profile = if ($config.profile) { [string]$config.profile } elseif ($config.recovered_profile) { [string]$config.recovered_profile } else { $null }
     runtime_root = $RuntimeRoot
     zluda_root = $zluda
