@@ -38,7 +38,7 @@ jobs:
           Write-Host "Functional probe modes: $($tests -join ', ')"
 
           $capabilityTests = @(python scripts/capability_probe.py --list-tests)
-          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_func_attributes','linalg_svd','sdpa_mem_efficient')
+          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_func_attributes','driver_function_metadata','linalg_svd','sdpa_mem_efficient')
           foreach ($name in $requiredCapabilityTests) {
             if ($capabilityTests -notcontains $name) { throw "Missing capability probe: $name" }
           }
