@@ -1,7 +1,7 @@
 diff --git a/zluda/src/impl/function.rs b/zluda/src/impl/function.rs
 --- a/zluda/src/impl/function.rs
 +++ b/zluda/src/impl/function.rs
-@@ -5,6 +5,7 @@ pub(crate) struct Function {
+@@ -5,5 +5,6 @@ pub(crate) struct Function {
      pub(crate) base: hipFunction_t,
      pub(crate) sm_version: u32,
 +    pub(crate) ptx_version: u32,
@@ -58,7 +58,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
                      explicit_args_size_align,
                  });
                  &*entry.insert(func)
-@@ -131,10 +134,12 @@ pub(crate) struct Global32Bit {
+@@ -131,10 +134,11 @@ pub(crate) struct Global32Bit {
  }
  
  impl Module {
@@ -71,7 +71,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
              mutable: Mutex::new(ModuleMutable {
                  functions: FxHashMap::default(),
              }),
-@@ -158,14 +163,20 @@ impl Module {
+@@ -158,11 +163,17 @@ impl Module {
          });
          mutable
 -            .get_function(self.base, self.sm_version, name.to_owned(), explicit_args)
@@ -118,7 +118,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
      let global_state = driver::global_state()?;
      get_best_ptx_and_compile(global_state, library)
  }
-@@ -372,16 +385,16 @@ pub(crate) fn load(module: &mut CUmodule, fname: &CStr) -> CUresult {
+@@ -372,14 +385,14 @@ pub(crate) fn load(module: &mut CUmodule, fname: &CStr) -> CUresult {
      let library = unsafe { CodeLibraryRef::try_load(image.as_ptr() as *const std::ffi::c_void) }
          .map_err(|_| CUerror::NO_BINARY_FOR_GPU)?;
 -    let (hip_module, sm_version, meta32) = load_hip_module(library)?;
