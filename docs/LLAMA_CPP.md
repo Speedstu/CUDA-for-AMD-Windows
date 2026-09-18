@@ -15,6 +15,13 @@ The most detailed community report is [issue #3](https://github.com/Speedstu/CUD
 | b9009 | Device registration works, but compute reaches a kernel-level failure |
 | b10978 | Registration works with the pinned ZLUDA v7 channel; newer launch/kernel paths still fail |
 
+For the b10978 investigation, the pinned upstream source commit is `1e7bcf3da4b2741868d152fa47976fb2501c85e3`. The official Windows CUDA 12.4 package used for reproduction is:
+
+```text
+llama-b10978-bin-win-cuda-12.4-x64.zip
+SHA-256 62D7478A88888574BFDE7A0B8FFDA4AABEC152E1C4DA69CC051CF1B7BA9DF043
+```
+
 The project does **not** currently claim modern llama.cpp support on every AMD GPU.
 
 ## Registration: fixed by the v7 channel
