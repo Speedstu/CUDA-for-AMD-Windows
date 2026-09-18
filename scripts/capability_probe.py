@@ -301,10 +301,11 @@ def run_driver_launch_ex(torch):
         normal_ok = results["no_attrs"] == {"launch": 0, "sync": 0}
         cooperative_zero_ok = results["cooperative_0"] == {"launch": 0, "sync": 0}
         pdl_zero_ok = results["pdl_0"] == {"launch": 0, "sync": 0}
-        pdl_one_safe = (
-            results["pdl_1"]["launch"] == 801
-            or results["pdl_1"] == {"launch": 0, "sync": 0}
-        )
+        # Until we have a semantic PDL ordering/serialization probe, a clean
+        # NOT_SUPPORTED result is the only result we can call safe here.
+        # Counting SUCCESS would allow a broken "ignore PDL=1" implementation
+        # to pass this regression without proving CUDA-equivalent semantics.
+        pdl_one_safe = results["pdl_1"]["launch"] == 801
         return {
             "ok": normal_ok and cooperative_zero_ok and pdl_zero_ok and pdl_one_safe,
             "results": results,
@@ -314,7 +315,7 @@ def run_driver_launch_ex(torch):
             },
             "notes": {
                 "cooperative_1": "reported separately because device support can vary",
-                "pdl_1": "801 is a safe refusal when the backend has no equivalent semantics",
+                "pdl_1": "801 is required until a semantic PDL implementation has its own correctness probe",
             },
         }
     finally:
