@@ -218,6 +218,40 @@ It selects the newest `log.txt` under the supplied trace directory, maps functio
 
 Because gfx1150 has previously hard-locked during newer llama.cpp kernel experiments, trace mode does **not** make the test safe. Only collect this on a machine where a forced restart is acceptable, and prefer the smallest possible workload/output length.
 
+## Capturing the first failing CUDA kernel
+
+For failures that only surface as a generic `ggml_cuda_compute_forward` / `cudaGetLastError`, use ZLUDA's trace mode instead of guessing from the llama.cpp call site.
+
+The repository wraps upstream `zluda.exe --zluda-trace -- ...` with:
+
+```powershell
+.\scripts\capture-zluda-trace.ps1 `
+  -Program C:\path\to\llama-cli.exe `
+  -ProgramArgs @(
+    '-m', 'C:\path\to\small-test-model.gguf',
+    '-fa', 'off'
+  ) `
+  -TimeoutSeconds 120 `
+  -AcknowledgeGpuResetRisk
+```
+
+The helper:
+
+- stages the configured runtime unless `-NoStage` is used;
+- records stdout/stderr;
+- detects only newly-created `%TEMP%\zluda\<app>[_N]` directories;
+- copies `log.txt`, `module_*.ptx`, `module_*.elf` and related trace artifacts;
+- records SHA-256 provenance for the program, launcher, `nvcuda.dll` and runtime config;
+- writes `trace-report.json`;
+- produces a ZIP under `.runtime\traces`.
+
+The useful part of `log.txt` is normally the final successful `cuModuleGetFunction` / `cuLaunchKernel` sequence before the error. The matching `module_*.ptx` then tells us which translated CUDA kernel was actually selected.
+
+> [!WARNING]
+> The timeout only kills the process tree. It cannot restore a GPU/driver that has already entered an unrecoverable state. The helper therefore requires `-AcknowledgeGpuResetRisk` explicitly. Do not use it on a machine where a forced reboot would be unacceptable.
+
+This helper is for isolating the remaining modern llama.cpp kernel boundary; a captured trace is not evidence that the workload is supported.
+
 ## Stability warning
 
 Issue #3 includes hard GPU/system lockups on gfx1150 with newer llama.cpp kernels. A process timeout is not guaranteed to recover a GPU after an invalid kernel has already damaged the driver state.
