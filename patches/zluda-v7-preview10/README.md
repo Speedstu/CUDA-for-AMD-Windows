@@ -28,6 +28,21 @@ A clean-checkout rebuild passes a combined strict **NVML + `torch.sparse.mm` + F
 
 Advanced cuFFT/cuSPARSE/NVML/Graph entry points not covered by the patch still fall back to normal ZLUDA unsupported behavior.
 
+## Launch-attribute candidate patch
+
+`launch-attributes-candidate.patch` is intentionally **separate from the validated patch set**.
+
+It contains one minimal `cuLaunchKernelEx` compatibility change:
+
+- keep no-attribute launches unchanged;
+- keep `PROGRAMMATIC_STREAM_SERIALIZATION=0` accepted;
+- accept `COOPERATIVE=0` as a benign no-op;
+- continue returning `CUDA_ERROR_NOT_SUPPORTED` for `COOPERATIVE=1`, `PDL=1`, and unknown attributes.
+
+This is narrower than mapping cooperative launch to HIP and avoids pretending that CUDA programmatic stream serialization exists on the AMD backend. CI checks that the candidate applies cleanly on top of the pinned upstream source plus the main compatibility patch.
+
+The candidate is **not counted as validated support yet**. It moves into `windows-amd-compat.patch` only after a rebuilt `nvcuda.dll` passes `driver_launch_ex` on the reference GPU and the real recent llama.cpp path is re-tested.
+
 ## Apply
 
 From a clean ZLUDA checkout at commit `9c8b43f`:
