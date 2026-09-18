@@ -132,6 +132,28 @@ Use it to isolate the failing layer, not as evidence that the underlying kernel 
 
 For the tested Windows llama.cpp packages, keep the stock NVIDIA `cudart` that ships with the CUDA build. ZLUDA replaces the CUDA **driver** surface through `nvcuda.dll`; renaming `nvcudart_hybrid64.dll` over the application's stock `cudart` can change behavior and was reported to break otherwise-working older llama.cpp builds.
 
+## Tracing the remaining classic-kernel failure
+
+When `GGML_CUDA_PDL=0` and Flash Attention is disabled, issue #3 still reports an unspecified launch failure in the generic compute path. The application-level location alone does not identify the failing CUDA kernel.
+
+ZLUDA's Windows trace mode can record the driver calls, resolved kernel function names, PTX modules and compiler diagnostics:
+
+```powershell
+$env:GGML_CUDA_PDL = '0'
+C:\path\to\zluda.exe --zluda-trace -- `
+  C:\path\to\llama-cli.exe <normal arguments> -fa off
+```
+
+Trace output is written under:
+
+```text
+%TEMP%\zluda
+```
+
+The useful evidence is the final `log.txt` region around the first failed launch plus any `module_*.ptx` / `module_*.log` generated for that run. A `cuModuleGetFunction` record can be correlated with the function handle later passed to `cuLaunchKernel`, which lets us identify the actual failing kernel rather than attributing everything to the high-level `ggml_cuda_compute_forward` call.
+
+Because gfx1150 has previously hard-locked during newer llama.cpp kernel experiments, trace mode does **not** make the test safe. Only collect this on a machine where a forced restart is acceptable, and prefer the smallest possible workload/output length.
+
 ## Stability warning
 
 Issue #3 includes hard GPU/system lockups on gfx1150 with newer llama.cpp kernels. A process timeout is not guaranteed to recover a GPU after an invalid kernel has already damaged the driver state.
