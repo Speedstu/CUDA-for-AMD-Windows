@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$LlamaRoot,
     [string]$RuntimeRoot,
     [string]$LlamaExe,
+    [string]$PythonExe,
     [int]$TimeoutSeconds = 45,
     [string]$ReportPath
 )
@@ -80,6 +81,22 @@ $hashes = [ordered]@{
     runtime_config_sha256 = Get-Sha256OrNull $configPath
 }
 
+$driverPreflight = $null
+$driverReportPath = Join-Path $RuntimeRoot 'llama-driver-preflight.json'
+if ($PythonExe) {
+    try {
+        & (Join-Path $PSScriptRoot 'test-capabilities.ps1') -RuntimeRoot $RuntimeRoot -PythonExe $PythonExe -Tests @('driver_pci_bus_id','driver_launch_ex','driver_func_attributes','driver_function_metadata') -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds 0 -ReportPath $driverReportPath
+        if (Test-Path $driverReportPath) {
+            $driverPreflight = Get-Content $driverReportPath -Raw | ConvertFrom-Json
+        }
+    } catch {
+        $driverPreflight = [pscustomobject]@{
+            error = $_.Exception.Message
+            report_path = $driverReportPath
+        }
+    }
+}
+
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $launcher
 $psi.Arguments = '-- ' + (Quote-Arg $LlamaExe) + ' --list-devices'
@@ -91,7 +108,6 @@ $psi.CreateNoWindow = $true
 
 Set-Env $psi 'HIP_PATH' $hip
 Set-Env $psi 'ZLUDA_CC' $(if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' })
-Set-Env $psi 'GGML_CUDA_PDL' '0'
 $rocblasLib = Join-Path $hip 'bin\rocblas\library'
 if (Test-Path $rocblasLib) { Set-Env $psi 'ROCBLAS_TENSILE_LIBPATH' $rocblasLib }
 $hipblasltLib = Join-Path $hip 'bin\hipblaslt\library'
@@ -128,14 +144,21 @@ $combined = ($stdout + "`n" + $stderr)
 $zludaDevice = [bool]($combined -match '(?im)^\s*(CUDA\d+|Device\s+\d+).*AMD.*\[ZLUDA\]')
 $explicitNone = [bool]($combined -match '(?im)Available devices:\s*(?:\r?\n)?\s*\(none\)')
 $cpuFallbackOnly = [bool](-not $zludaDevice -and $combined -match '(?i)CPU')
-$ok = [bool](-not $timedOut -and $exitCode -eq 0 -and $zludaDevice -and -not $explicitNone)
+$registrationOk = [bool](-not $timedOut -and $exitCode -eq 0 -and $zludaDevice -and -not $explicitNone)
+$driverOk = $null
+if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 'correctness_ok') {
+    $driverOk = [bool]$driverPreflight.correctness_ok
+}
+$ok = [bool]($registrationOk -and ($null -eq $driverOk -or $driverOk))
 
 $report = [ordered]@{
     schema = 1
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
     project_revision = $projectRevision
     test = 'llama_registration'
-    status = if ($ok) { 'pass' } elseif ($timedOut) { 'timeout' } elseif ($explicitNone -or $cpuFallbackOnly) { 'fallback_or_no_cuda_device' } else { 'error' }
+    mode = 'registration_only'
+    model_kernels_executed = $false
+    status = if ($ok) { 'pass' } elseif ($timedOut) { 'timeout' } elseif ($explicitNone -or $cpuFallbackOnly) { 'fallback_or_no_cuda_device' } elseif ($false -eq $driverOk) { 'driver_preflight_failed' } else { 'error' }
     runtime_root = $RuntimeRoot
     llama_root = $LlamaRoot
     llama_exe = $LlamaExe
@@ -146,9 +169,12 @@ $report = [ordered]@{
     zluda_device_detected = $zludaDevice
     explicit_no_devices = $explicitNone
     cpu_fallback_only = $cpuFallbackOnly
+    registration_ok = $registrationOk
+    driver_preflight_ok = $driverOk
+    driver_preflight = $driverPreflight
     environment = [ordered]@{
         zluda_cc = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
-        ggml_cuda_pdl = '0'
+        ggml_cuda_pdl = 'not_overridden'
         gpu = if ($config.gpu) { $config.gpu } else { $null }
     }
     hashes = $hashes
@@ -163,9 +189,13 @@ Write-Host '=== llama.cpp registration smoke ==='
 Write-Host "llama-cli : $LlamaExe"
 Write-Host "ZLUDA     : $zluda"
 Write-Host "HIP       : $hip"
-Write-Host "PDL       : 0 (registration-only diagnostic)"
+Write-Host "PDL       : not overridden (no model kernels are launched)"
 Write-Host "Status    : $($report.status)"
 Write-Host "Report    : $ReportPath"
+Write-Host 'Model     : not loaded; no inference kernels executed'
+if ($null -ne $driverOk) {
+    Write-Host "Driver    : $(if ($driverOk) { 'focused preflight passed' } else { 'focused preflight failed' })"
+}
 
 if (-not $ok) {
     if ($timedOut) { Write-Warning 'llama.cpp device enumeration timed out.' }
