@@ -1,0 +1,16 @@
+diff --git a/zluda/src/impl/driver.rs b/zluda/src/impl/driver.rs
+--- a/zluda/src/impl/driver.rs
++++ b/zluda/src/impl/driver.rs
+@@ -700,9 +700,11 @@ pub(crate) unsafe fn launch_kernel_ex(
+ ) -> CUresult {
+     let attrs = std::slice::from_raw_parts(config.attrs, config.numAttrs as usize);
+     if attrs.iter().any(|&attr| {
+-        !(attr.id == CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
+-            && attr.value.programmaticStreamSerializationAllowed == 0)
++        !((attr.id == CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
++            && attr.value.programmaticStreamSerializationAllowed == 0)
++            || (attr.id == CUlaunchAttributeID::CU_LAUNCH_ATTRIBUTE_COOPERATIVE
++                && attr.value.cooperative == 0))
+     }) {
+         return CUresult::ERROR_NOT_SUPPORTED;
+     }
