@@ -296,6 +296,7 @@ $result = [ordered]@{
     python = $PythonExe
     pytorch = ($torchCheck | Out-String).Trim()
     gpu = if ($config.gpu) { $config.gpu } else { $null }
+    zluda_cc = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
     core_profile = 'dense-ppo-gemm'
     core_tests = $coreTestNames
     core_correctness_ok = [bool]$coreCorrectnessOk
