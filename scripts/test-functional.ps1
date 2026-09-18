@@ -17,11 +17,35 @@ $probePath = Join-Path $PSScriptRoot 'functional_probe.py'
 
 if (-not (Test-Path $configPath)) { throw "Missing runtime config: $configPath. Run install.ps1 or setup.ps1 first." }
 if (-not (Test-Path $probePath)) { throw "Missing functional probe: $probePath" }
+
+function Get-Sha256OrNull([string]$Path) {
+    if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) { return $null }
+    try { return (Get-FileHash $Path -Algorithm SHA256 -ErrorAction Stop).Hash }
+    catch { return $null }
+}
+
+$projectRevision = $null
+try {
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { $git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($git) {
+        $rev = (& $git.Source -C $repo rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -eq 0 -and $rev) { $projectRevision = ([string]$rev).Trim() }
+    }
+} catch {}
+
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 $zluda = [string]$config.zluda_root
 $hip = [string]$config.hip_root
 $launcher = Join-Path $zluda 'zluda.exe'
 if (-not (Test-Path $launcher)) { throw "Missing zluda.exe: $launcher" }
+
+$runtimeHashes = [ordered]@{
+    launcher_sha256 = Get-Sha256OrNull $launcher
+    nvcuda_sha256 = Get-Sha256OrNull (Join-Path $zluda 'nvcuda.dll')
+    runtime_config_sha256 = Get-Sha256OrNull $configPath
+    functional_probe_sha256 = Get-Sha256OrNull $probePath
+}
 
 if (-not $PythonExe) {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -41,6 +65,8 @@ if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
     $result = [ordered]@{
         schema = 1
         generated_utc = (Get-Date).ToUniversalTime().ToString('o')
+        project_revision = $projectRevision
+        runtime_hashes = $runtimeHashes
         available = $false
         correctness_ok = $false
         full_support = $false
@@ -261,6 +287,9 @@ $fullSupport = ($passed.Count -eq $tests.Count)
 $result = [ordered]@{
     schema = 1
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
+    project_revision = $projectRevision
+    selected_tests = @($testNames)
+    runtime_hashes = $runtimeHashes
     available = $true
     python = $PythonExe
     pytorch = ($torchCheck | Out-String).Trim()
