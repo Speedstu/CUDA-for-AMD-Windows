@@ -61,6 +61,10 @@ $psi.CreateNoWindow = $true
 Set-ProcessEnvironment $psi 'HIP_PATH' $hip
 Set-ProcessEnvironment $psi 'ZLUDA_CC' $(if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' })
 Set-ProcessEnvironment $psi 'ROCBLAS_TENSILE_LIBPATH' (Join-Path $hip 'bin\rocblas\library')
+if ($config.gpu -and $null -ne $config.gpu.hip_visible_device -and [string]$config.gpu.hip_visible_device -match '^\d+$') {
+    Set-ProcessEnvironment $psi 'HIP_VISIBLE_DEVICES' ([string]$config.gpu.hip_visible_device)
+    [void]$psi.EnvironmentVariables.Remove('ROCR_VISIBLE_DEVICES')
+}
 $hipblasltLib = Join-Path $hip 'bin\hipblaslt\library'
 if ($config.gpu -and $config.gpu.arch) {
     $archLib = Join-Path $hipblasltLib ([string]$config.gpu.arch)

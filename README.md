@@ -37,8 +37,16 @@ This does **not** mean every CUDA program or AI model works. CUDA API/library co
 | --- | --- | --- | --- |
 | Radeon RX 9060 XT | `gfx1200` | ✅ validated reference | Project integration workload completed |
 | Radeon RX 9070 XT | `gfx1201` | ✅ validated external | Archived Windows AMD/ZLUDA training setup from a separately tested RX 9070 XT machine; see [`docs/RX9070XT_VALIDATION.md`](docs/RX9070XT_VALIDATION.md) |
+| Radeon AI PRO R9700 | `gfx1201` | ⚪ recognized candidate | PR validation profile; select the verified HIP device explicitly when needed |
 | Radeon 890M | `gfx1150` | 🟡 community partial | HIP 7.2 runtime/GEMM worked; reported `conv2d` hang and incorrect memory-efficient SDPA output in issue #3 |
 | Other recognized AMD GPUs | architecture-dependent | ⚪ unverified candidate | Runtime detection is not functional validation |
+
+The scanner recognizes both RDNA4 targets, `gfx1200` and `gfx1201`. With no
+`-GpuIndex`, it prefers a detected `gfx1201` device; pass `-GpuIndex` to select
+a specific HIP device. The generated runtime configuration records a verified
+HIP index. Launches set `HIP_VISIBLE_DEVICES` to that index and remove an
+inherited `ROCR_VISIBLE_DEVICES` value rather than assigning it, preventing
+environment inheritance from remapping the selected device.
 
 For `gfx1150`/RDNA 3.5, the project records **HIP SDK 7.2 or newer** as the minimum compatible floor. Do not install HIP 6.4 merely to match the historical RX 9060 XT reference profile.
 

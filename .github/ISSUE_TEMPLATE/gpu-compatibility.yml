@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing another GPU. **RX 9060 XT / gfx1200 is currently the only validated reference GPU.** Successful and failed reports are both useful.
+        Thanks for testing another GPU. **RX 9060 XT / gfx1200 remains the original validated reference, and Radeon AI PRO R9700 / gfx1201 with TheRock HIP SDK nightly 7.14.0a20260612 is the additional reference profile.** Successful and failed reports are both useful.
 
   - type: input
     id: gpu
@@ -30,7 +30,7 @@ body:
     id: hip
     attributes:
       label: HIP / ROCm version
-      placeholder: 7.2
+      placeholder: 7.14.0a20260612
     validations:
       required: true
 
@@ -124,5 +124,5 @@ body:
     attributes:
       label: Validation note
       options:
-        - label: I understand that only RX 9060 XT / gfx1200 is currently validated by the project and this report is community compatibility data.
+        - label: I understand that RX 9060 XT / gfx1200 and Radeon AI PRO R9700 / gfx1201 are project reference profiles, and this report is compatibility data.
           required: true

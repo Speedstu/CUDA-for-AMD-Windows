@@ -2,11 +2,9 @@
 param(
     [string]$RuntimeRoot,
     [switch]$AutoDetectGpu,
-    [int]$GpuIndex = 0,
+    [int]$GpuIndex = -1,
     [string]$ZludaCc = '8.6',
     [switch]$DownloadZluda,
-    [ValidateSet('stable','latest')]
-    [string]$ZludaChannel = 'stable',
     [switch]$DownloadLibTorch,
     [string]$LibTorchRoot,
     [string]$ZludaRoot,
@@ -22,6 +20,73 @@ $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
 if (-not $RecoveredOverlayRoot) { $RecoveredOverlayRoot = Join-Path $repo 'local-artifacts\custom' }
 New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
+if (-not $LibTorchRoot) {
+    $existingConfigPath = Join-Path $RuntimeRoot 'runtime-config.json'
+    if (Test-Path $existingConfigPath) {
+        $existingConfig = Get-Content $existingConfigPath -Raw | ConvertFrom-Json
+        if ($existingConfig.libtorch_root -and (Test-Path (Join-Path ([string]$existingConfig.libtorch_root) 'lib\torch_cuda.dll'))) {
+            $LibTorchRoot = [string]$existingConfig.libtorch_root
+        }
+    }
+    if (-not $LibTorchRoot) {
+        $defaultLibTorchRoot = Join-Path $RuntimeRoot 'libtorch-2.3.0-cu118\libtorch'
+        if (Test-Path (Join-Path $defaultLibTorchRoot 'lib\torch_cuda.dll')) {
+            $LibTorchRoot = $defaultLibTorchRoot
+        }
+    }
+}
+
+function Download-File {
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter(Mandatory=$true)][string]$Destination
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        Write-Host '[setup] Downloading with curl (resume/retry enabled)...'
+        & $curl.Source --fail --location --retry 5 --retry-delay 3 --retry-all-errors --continue-at - --output $Destination $Uri
+        if ($LASTEXITCODE -eq 0) { return }
+        throw "curl failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Warning 'curl.exe was not found; falling back to Invoke-WebRequest (no resume support).'
+    Invoke-WebRequest -Uri $Uri -OutFile $Destination
+}
+
+function Get-Sha256WithProgress {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $buffer = New-Object byte[] (4MB)
+        $total = $stream.Length
+        $readTotal = [int64]0
+        $lastPercent = -1
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        Write-Host ("[setup] Verifying SHA-256: {0:N2} GB" -f ($total / 1GB))
+
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            [void]$sha256.TransformBlock($buffer, 0, $read, $buffer, 0)
+            $readTotal += $read
+            $percent = [int][Math]::Floor(($readTotal * 100) / $total)
+            if ($percent -ge ($lastPercent + 5) -or $readTotal -eq $total) {
+                $rate = if ($timer.Elapsed.TotalSeconds -gt 0) { $readTotal / 1MB / $timer.Elapsed.TotalSeconds } else { 0 }
+                Write-Host ("[setup] Hash progress: {0,3}% ({1:N1}/{2:N1} GB, {3:N1} MB/s)" -f $percent, ($readTotal / 1GB), ($total / 1GB), $rate)
+                $lastPercent = $percent
+            }
+        }
+        [void]$sha256.TransformFinalBlock([byte[]]::new(0), 0, 0)
+        return ([BitConverter]::ToString($sha256.Hash) -replace '-', '').ToUpperInvariant()
+    } finally {
+        if ($sha256) { $sha256.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 $scan = $null
 $scanPath = $null
 if ($AutoDetectGpu) {
@@ -36,12 +101,16 @@ if (-not $HipRoot) {
     if ($env:HIP_PATH -and (Test-Path $env:HIP_PATH)) {
         $HipRoot = $env:HIP_PATH.TrimEnd('\')
     } else {
-        $rocmBase = Join-Path $env:ProgramFiles 'AMD\ROCm'
-        if (Test-Path $rocmBase) {
-            $candidate = Get-ChildItem $rocmBase -Directory -ErrorAction SilentlyContinue | Sort-Object {
-                try { [version]$_.Name } catch { [version]'0.0' }
-            } -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'bin\hipInfo.exe') } | Select-Object -First 1
-            if ($candidate) { $HipRoot = $candidate.FullName }
+        $rocmBases = @('C:\ROCm', (Join-Path $env:ProgramFiles 'AMD\ROCm'))
+        foreach ($rocmBase in $rocmBases) {
+            if (Test-Path $rocmBase) {
+                $candidate = Get-ChildItem $rocmBase -Directory -ErrorAction SilentlyContinue | Sort-Object {
+                    $match = [regex]::Match($_.Name, '^\d+(?:\.\d+){0,3}')
+                    if ($match.Success) { try { [version]$match.Value } catch { [version]'0.0' } }
+                    else { [version]'0.0' }
+                } -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'bin\hipInfo.exe') } | Select-Object -First 1
+                if ($candidate) { $HipRoot = $candidate.FullName; break }
+            }
         }
     }
 }
@@ -59,8 +128,8 @@ if ($DownloadZluda) {
     $zludaUrl = "https://github.com/vosen/ZLUDA/releases/download/$release/$asset"
     if (-not (Test-Path (Join-Path $zludaPkg 'zluda\zluda.exe'))) {
         Write-Host "[setup] Downloading ZLUDA $release ($ZludaChannel channel)..."
-        Invoke-WebRequest -Uri $zludaUrl -OutFile $zludaZip
-        $actualZluda = (Get-FileHash $zludaZip -Algorithm SHA256).Hash.ToUpperInvariant()
+        Download-File -Uri $zludaUrl -Destination $zludaZip
+        $actualZluda = Get-Sha256WithProgress -Path $zludaZip
         if ($actualZluda -ne $expectedZluda) { Remove-Item $zludaZip -Force; throw "ZLUDA SHA-256 mismatch: $actualZluda" }
         Write-Host "[setup] ZLUDA SHA-256 verified: $actualZluda"
         if (Test-Path $zludaPkg) { Remove-Item $zludaPkg -Recurse -Force }
@@ -78,9 +147,9 @@ if ($DownloadLibTorch) {
     $url = 'https://download.pytorch.org/libtorch/cu118/libtorch-win-shared-with-deps-2.3.0%2Bcu118.zip'
     if (-not (Test-Path (Join-Path $dest 'libtorch\lib\torch_cuda.dll'))) {
         Write-Host '[setup] Downloading LibTorch 2.3.0+cu118 (~2.66 GB)...'
-        Invoke-WebRequest -Uri $url -OutFile $zip
+        Download-File -Uri $url -Destination $zip
         $expectedTorch = 'E7D57EE5052996E1A9AAEAD5ECC3C491BA7C0DB21316FB1FA8A4A8136005C6CC'
-        $actualTorch = (Get-FileHash $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+        $actualTorch = Get-Sha256WithProgress -Path $zip
         if ($actualTorch -ne $expectedTorch) { Remove-Item $zip -Force; throw "LibTorch SHA-256 mismatch: $actualTorch" }
         Write-Host "[setup] LibTorch SHA-256 verified: $actualTorch"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -88,10 +157,6 @@ if ($DownloadLibTorch) {
     }
     $LibTorchRoot = Join-Path $dest 'libtorch'
 }
-
-if (-not $release) { $release = if ($ZludaChannel -eq 'latest') { 'v7-preview.10' } else { 'v6-preview.69' } }
-if (-not $asset) { $asset = if ($ZludaChannel -eq 'latest') { 'zluda-windows-9c8b43f.zip' } else { 'zluda-windows-87531d3.zip' } }
-if (-not $slug) { $slug = ($release -replace '[^A-Za-z0-9._-]', '-') }
 
 $zludaRuntime = $null
 if ($ZludaRoot) {
@@ -112,8 +177,12 @@ if ($UseRecoveredCustomOverlay) {
     if (-not (Test-Path (Join-Path $RecoveredOverlayRoot 'cublas64_11.dll'))) {
         throw "Recovered custom overlay not found at $RecoveredOverlayRoot"
     }
-    if ($scan -and -not $scan.selected_gpu.project_tested) {
-        Write-Warning 'The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on this GPU is experimental.'
+    $overlayReference = ($scan -and
+        $scan.selected_gpu.name -match 'RX 9060 XT' -and
+        $scan.selected_gpu.gfx -eq 'gfx1200')
+    if (-not $overlayReference) {
+        $selectedName = if ($scan) { "$($scan.selected_gpu.name) / $($scan.selected_gpu.gfx)" } else { 'the selected device' }
+        Write-Warning "The recovered custom BLAS/HIP overlay was only tested on RX 9060 XT / gfx1200. Using it on $selectedName is experimental."
     }
     $overlayRuntime = Join-Path $RuntimeRoot 'custom-overlay'
     if (Test-Path $overlayRuntime) { Remove-Item $overlayRuntime -Recurse -Force }
@@ -124,13 +193,17 @@ if ($UseRecoveredCustomOverlay) {
 $gpuName = if ($scan) { [string]$scan.selected_gpu.name } else { $null }
 $gpuArch = if ($scan) { [string]$scan.selected_gpu.gfx } else { $null }
 $gpuStatus = if ($scan) { [string]$scan.selected_gpu.project_status } else { 'not-scanned' }
+$hipSdkVersion = if ($scan -and $scan.hip_version) { [string]$scan.hip_version } elseif ($HipRoot) { Split-Path $HipRoot -Leaf } else { $null }
 $isReference = [bool]($scan -and $scan.selected_gpu.project_tested)
-$profileName = if ($isReference -and $overlayRuntime) {
-    'reference-gfx1200-zluda-v6-preview69-custom-overlay-libtorch230-cu118'
+$overlayReference = ($scan -and
+    $scan.selected_gpu.name -match 'RX 9060 XT' -and
+    $scan.selected_gpu.gfx -eq 'gfx1200')
+$profileName = if ($overlayReference -and $overlayRuntime) {
+    "reference-$gpuArch-zluda-v6-preview69-custom-overlay-libtorch230-cu118"
 } elseif ($gpuArch) {
-    "auto-$gpuArch-zluda-$slug-libtorch230-cu118"
+    "auto-$gpuArch-zluda-v6-preview69-libtorch230-cu118"
 } else {
-    "manual-zluda-$slug-libtorch230-cu118"
+    'manual-zluda-v6-preview69-libtorch230-cu118'
 }
 
 $config = [ordered]@{
@@ -140,26 +213,28 @@ $config = [ordered]@{
         name = $gpuName
         arch = $gpuArch
         index = if ($scan) { $scan.selected_gpu.index } else { $null }
+        hip_visible_device = if ($scan -and $scan.selected_gpu.detection -eq 'hipInfo') { [string]$scan.selected_gpu.index } else { $null }
         project_status = $gpuStatus
         tested_reference = $isReference
         scanner_report = $scanPath
     }
     zluda_root = $zludaRuntime
     hip_root = $HipRoot
+    hip_sdk_target = $hipSdkVersion
     libtorch_root = $LibTorchRoot
     custom_overlay_root = $overlayRuntime
     zluda_cc = $ZludaCc
     torch_allow_tf32_cublas_override = '1'
     upstream = [ordered]@{
-        zluda_release = if ($release) { $release } else { $null }
-        zluda_windows_asset = if ($asset) { $asset } else { $null }
-        zluda_channel = $ZludaChannel
+        zluda_release = 'v6-preview.69'
+        zluda_windows_asset = 'zluda-windows-87531d3.zip'
         libtorch = '2.3.0+cu118'
     }
     validation = [ordered]@{
-        reference_gpu = 'AMD Radeon RX 9060 XT'
-        reference_arch = 'gfx1200'
-        other_gpus = 'unverified until community-tested'
+        reference_gpu = if ($isReference) { $gpuName } else { $null }
+        reference_arch = if ($isReference) { $gpuArch } else { $null }
+        hip_sdk = $hipSdkVersion
+        other_gpus = 'Other GPUs remain unverified until community-tested'
     }
 }
 $config | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $RuntimeRoot 'runtime-config.json')

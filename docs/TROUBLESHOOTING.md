@@ -31,6 +31,11 @@ If you experiment with a different `ZLUDA_CC`, treat it as a workload-specific c
 
 For recent llama.cpp behavior, see [`LLAMA_CPP.md`](LLAMA_CPP.md).
 
+The scanner supports both RDNA4 targets (`gfx1200` and `gfx1201`) and prefers
+`gfx1201` unless `-GpuIndex` is supplied. When a HIP index was verified from
+`hipInfo.exe`, the launcher sets `HIP_VISIBLE_DEVICES` to that index and
+removes inherited `ROCR_VISIBLE_DEVICES`; it does not assign a ROCR index.
+
 ## `cuLaunchKernelEx` returns 801
 
 Run the focused driver probe:

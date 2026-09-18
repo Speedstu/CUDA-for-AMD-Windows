@@ -1,6 +1,9 @@
 # Current smoke-test status
 
-The public upstream-only runtime was revalidated on 2026-09-13 on an RX 9060 XT (`gfx1200`).
+The project retains two reference profiles: the original RX 9060 XT (`gfx1200`)
+stable-SDK path and the Radeon AI PRO R9700 (`gfx1201`) TheRock HIP SDK nightly
+7.14.0a20260612 path. Results for one profile do not replace or invalidate the
+other.
 
 ## Runtime probe
 
@@ -11,12 +14,19 @@ The public upstream-only runtime was revalidated on 2026-09-13 on an RX 9060 XT 
 - cuBLASLt: PASS through hipBLASLt
 - cuSPARSE: PASS through rocSPARSE
 - cuFFT: PASS
-- cuDNN: unavailable on the validated stable Windows HIP SDK configuration
+- cuDNN 8/9: PASS through TheRock `MIOpen.dll` on the tested `7.14-nightly`
 
-The earlier partial/hanging probe was not representative of the final public path. The clean upstream configuration now exits normally.
+The earlier partial/hanging probe was not representative of the final public
+path. The clean TheRock nightly configuration now exits normally and reports
+both cuDNN compatibility groups as passing.
 
 ## Training probe
 
-A CUDA-enabled LibTorch PPO workload was run with the runtime produced by the public installation path, without the recovered custom overlay. It completed one full training iteration / 65,536 timesteps on the CUDA-facing device.
+A CUDA-enabled LibTorch PPO workload was previously run with the runtime
+produced by the public installation path, without the recovered custom
+overlay. The original `gfx1200` profile completed one full training iteration /
+65,536 timesteps. Repeat the same probe on the `gfx1201` nightly profile before
+claiming an equivalent PPO training result or performance number there; the
+runtime smoke checks and native LibTorch build are already validated.
 
 See `VALIDATION.md` for the exact recorded output and scope of the claim.

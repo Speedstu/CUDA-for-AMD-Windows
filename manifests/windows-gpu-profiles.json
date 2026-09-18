@@ -1,6 +1,8 @@
 {
   "schema": 2,
   "checked": "2026-09-15",
+  "hip_sdk_target": "7.14.0a20260612",
+  "hip_sdk_package": "therock-dist-windows-gfx120X-all-7.14.0a20260612.tar.gz",
   "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
   "architectures": {
     "gfx1200": {

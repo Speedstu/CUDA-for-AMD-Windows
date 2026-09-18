@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$HipRoot,
-    [int]$GpuIndex = 0,
+    [int]$GpuIndex = -1,
     [string]$OutputPath,
     [switch]$AsJson,
     [switch]$Quiet,
@@ -19,10 +19,14 @@ function Find-HipRoot {
     if ($env:HIP_PATH -and (Test-Path $env:HIP_PATH)) { return (Resolve-Path $env:HIP_PATH).Path }
 
     $base = Join-Path $env:ProgramFiles 'AMD\ROCm'
-    if (Test-Path $base) {
-        $dirs = Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Sort-Object {
-            $m = [regex]::Match($_.Name, '(\d+)\.(\d+)')
-            if ($m.Success) { [version]("{0}.{1}" -f $m.Groups[1].Value, $m.Groups[2].Value) } else { [version]'0.0' }
+    $roots = @()
+    if (Test-Path 'C:\ROCm') { $roots += 'C:\ROCm' }
+    if (Test-Path $base) { $roots += $base }
+    foreach ($root in $roots) {
+        $dirs = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Sort-Object {
+            $match = [regex]::Match($_.Name, '^\d+(?:\.\d+){0,3}')
+            if ($match.Success) { try { [version]$match.Value } catch { [version]'0.0' } }
+            else { [version]'0.0' }
         } -Descending
         foreach ($dir in $dirs) {
             if (Test-Path (Join-Path $dir.FullName 'bin\hipInfo.exe')) { return $dir.FullName }
@@ -52,32 +56,20 @@ function Test-ProjectValidation {
     if (-not $Meta -or -not $Meta.project_validation) { return $false }
     if ([string]$Meta.project_validation.status -ne $Status) { return $false }
     $pattern = [string]$Meta.project_validation.model_pattern
-    if (-not $pattern) { return $true }
-    return [bool]($Name -match $pattern)
-}
-
-function Test-ExternalValidation {
-    param([string]$Name, $Meta)
-    return Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-external'
-}
-
-function Test-ReferenceValidation {
-    param([string]$Name, $Meta)
-    return Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-reference'
+    return (-not $pattern -or [bool]($Name -match $pattern))
 }
 
 function Get-ProjectStatus {
-    param([string]$Name, [string]$Arch, $Meta, [bool]$IsReference)
+    param([string]$Name, $Meta, [bool]$IsReference)
     if ($IsReference) { return 'validated-reference' }
-    if (Test-ExternalValidation -Name $Name -Meta $Meta) { return 'validated-external' }
-    if ($Meta -and $Meta.community_report -and $Meta.community_report.status -eq 'partial') {
-        # The current partial evidence is specifically from Radeon 890M / gfx1150 issue #3.
-        if ($Arch -eq 'gfx1150' -and $Name -match '890M') { return 'community-partial' }
-    }
+    if (Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-external') { return 'validated-external' }
+    if ($Meta -and $Meta.community_report -and $Meta.community_report.status -eq 'partial') { return 'community-partial' }
     if ($Meta -and $Meta.current_windows_hip_sdk) { return 'unverified-candidate' }
     return 'experimental'
 }
+
 $resolvedHip = Find-HipRoot $HipRoot
+$hipVersion = if ($resolvedHip) { Split-Path $resolvedHip -Leaf } else { $null }
 $hipInfoPath = if ($resolvedHip) { Join-Path $resolvedHip 'bin\hipInfo.exe' } else { $null }
 $hipDevices = @()
 
@@ -116,10 +108,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($d in $hipDevices) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
-        $isReference = Test-ReferenceValidation -Name $d.name -Meta $meta
-        $isExternalValidated = Test-ExternalValidation -Name $d.name -Meta $meta
-        $isProjectTested = [bool]($isReference -or $isExternalValidated)
-        $status = Get-ProjectStatus -Name $d.name -Arch $d.gfx -Meta $meta -IsReference $isReference
+        $isReference = Test-ProjectValidation -Name $d.name -Meta $meta -Status 'validated-reference'
         $devices += [pscustomobject][ordered]@{
             index = $d.index
             name = $d.name
@@ -132,8 +121,8 @@ if ($hipDevices.Count -gt 0) {
             minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
             community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
             project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
-            project_tested = $isProjectTested
-            project_status = $status
+            project_tested = $isReference
+            project_status = Get-ProjectStatus -Name $d.name -Meta $meta -IsReference $isReference
             functional_validation_required = [bool](-not $isReference)
         }
     }
@@ -142,10 +131,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($wmi in $wmiDevices) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
-        $isReference = Test-ReferenceValidation -Name $wmi.name -Meta $meta
-        $isExternalValidated = Test-ExternalValidation -Name $wmi.name -Meta $meta
-        $isProjectTested = [bool]($isReference -or $isExternalValidated)
-        $status = Get-ProjectStatus -Name $wmi.name -Arch $arch -Meta $meta -IsReference $isReference
+        $isReference = Test-ProjectValidation -Name $wmi.name -Meta $meta -Status 'validated-reference'
         $devices += [pscustomobject][ordered]@{
             index = $i++
             name = $wmi.name
@@ -158,21 +144,26 @@ if ($hipDevices.Count -gt 0) {
             minimum_hip_sdk = if ($meta -and $meta.minimum_hip_sdk) { [string]$meta.minimum_hip_sdk } else { $null }
             community_report = if ($meta -and $meta.community_report) { $meta.community_report } else { $null }
             project_validation = if ($meta -and $meta.project_validation) { $meta.project_validation } else { $null }
-            project_tested = $isProjectTested
-            project_status = $status
+            project_tested = $isReference
+            project_status = Get-ProjectStatus -Name $wmi.name -Meta $meta -IsReference $isReference
             functional_validation_required = [bool](-not $isReference)
         }
     }
 }
 
-$selected = $devices | Where-Object { $_.index -eq $GpuIndex } | Select-Object -First 1
-if (-not $selected -and $devices.Count -gt 0) { $selected = $devices[0] }
-
-$hipVersion = $null
-if ($resolvedHip) { $hipVersion = Split-Path $resolvedHip -Leaf }
+if ($GpuIndex -ge 0) {
+    $selected = $devices | Where-Object { $_.index -eq $GpuIndex } | Select-Object -First 1
+    if (-not $selected -and $devices.Count -gt 0) {
+        throw "GPU index $GpuIndex was not found. Run scripts/gpu-scan.ps1 to list available devices."
+    }
+} else {
+    $selected = $devices | Where-Object { $_.gfx -eq 'gfx1201' } | Select-Object -First 1
+    if (-not $selected) { $selected = $devices | Where-Object { $_.project_tested } | Select-Object -First 1 }
+    if (-not $selected -and $devices.Count -gt 0) { $selected = $devices[0] }
+}
 
 $report = [pscustomobject][ordered]@{
-    schema = 2
+    schema = 1
     generated_utc = [DateTime]::UtcNow.ToString('o')
     windows = [Environment]::OSVersion.VersionString
     hip_root = $resolvedHip
@@ -181,17 +172,17 @@ $report = [pscustomobject][ordered]@{
     selected_gpu_index = if ($selected) { $selected.index } else { $null }
     selected_gpu = $selected
     devices = $devices
-    notes = 'Runtime detection is not proof of numerical correctness. validated-external means the project has archived validation evidence on a separate machine; re-run functional validation on your exact current stack.'
+    notes = 'The original RX 9060 XT / gfx1200 and the R9700 / gfx1201 reference profiles are preserved. Without -GpuIndex, gfx1201 is preferred; use -GpuIndex to select a specific HIP device.'
 }
 
 if ($OutputPath) {
     $parent = Split-Path $OutputPath -Parent
     if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-    $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $OutputPath
+    $report | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 $OutputPath
 }
 
 if ($AsJson) {
-    $report | ConvertTo-Json -Depth 8
+    $report | ConvertTo-Json -Depth 6
 } elseif (-not $Quiet) {
     Write-Host 'CUDA for AMD - GPU scanner'
     Write-Host '--------------------------'
@@ -201,19 +192,13 @@ if ($AsJson) {
     } else {
         $devices | Format-Table index,name,gfx,generation,detection,current_windows_hip_sdk,project_status -AutoSize
         Write-Host ''
-        if ($selected.project_status -eq 'validated-reference') {
+        if ($selected.project_tested) {
             Write-Host '[validated] This is the reference GPU tested by the project.'
-        } elseif ($selected.project_status -eq 'validated-external') {
-            Write-Host '[validated-external] This GPU has archived project validation on a separate Windows AMD/ZLUDA machine.'
-            Write-Warning 'Re-run test-functional.ps1/test-capabilities.ps1 on your exact current driver/runtime before assuming every capability matches the archived setup.'
-        } elseif ($selected.project_status -eq 'community-partial') {
-            Write-Warning 'This GPU has a community partial report: runtime/GEMM worked, but at least one functional operation failed or returned incorrect results. Run test-functional.ps1 on your exact stack.'
         } elseif ($selected.current_windows_hip_sdk) {
-            Write-Warning 'This GPU is a current Windows HIP SDK candidate, but this project has not validated it yet. Run test-functional.ps1 before trusting workload output.'
+            Write-Warning 'This GPU is a current Windows HIP SDK candidate, but this project has not validated it yet.'
         } else {
             Write-Warning 'This GPU is experimental for this project and/or not in the current Windows HIP SDK support set.'
         }
-        if ($selected.minimum_hip_sdk) { Write-Host "Minimum recorded HIP SDK for this architecture: $($selected.minimum_hip_sdk)" }
         if ($OutputPath) { Write-Host "Report: $OutputPath" }
     }
 }
