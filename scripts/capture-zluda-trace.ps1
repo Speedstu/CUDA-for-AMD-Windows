@@ -165,6 +165,24 @@ foreach ($dir in $copied) {
     })
 }
 
+$traceSummaries = @()
+$summaryScript = Join-Path $PSScriptRoot 'summarize-zluda-trace.py'
+$pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $pythonCommand) { $pythonCommand = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1 }
+if ($pythonCommand -and (Test-Path $summaryScript)) {
+    foreach ($dir in $copied) {
+        $summaryPath = Join-Path $runDir ((Split-Path $dir -Leaf) + '-summary.json')
+        & $pythonCommand.Source $summaryScript $dir --json $summaryPath *> $null
+        $summaryExit = $LASTEXITCODE
+        $traceSummaries += [pscustomobject][ordered]@{
+            trace_directory = Split-Path $dir -Leaf
+            summary_path = if (Test-Path $summaryPath) { $summaryPath.Substring($runDir.Length).TrimStart('\') } else { $null }
+            exit_code = $summaryExit
+            sha256 = Get-Sha256OrNull $summaryPath
+        }
+    }
+}
+
 $projectRevision = $null
 try {
     $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -199,6 +217,7 @@ $report = [ordered]@{
     trace_source_root = $traceBase
     captured_trace_directories = @($copied | ForEach-Object { Split-Path $_ -Leaf })
     trace_files = $traceFiles
+    trace_summaries = $traceSummaries
     stdout_sha256 = Get-Sha256OrNull $stdoutPath
     stderr_sha256 = Get-Sha256OrNull $stderrPath
     warning = 'Timeout/kill only terminates the process tree; it cannot guarantee recovery from a GPU/driver hard lock.'
