@@ -23,7 +23,41 @@ Use the manual LibTorch import-library approach in `examples/manual-libtorch-cud
 
 ## Wrong CUDA compute capability
 
-`ZLUDA_CC=8.6` was intentionally exposed to CUDA-facing software. Do not replace it with `gfx1200`; those are different architecture namespaces.
+`ZLUDA_CC=8.6` is a CUDA-facing compatibility identity. Do not replace it with `gfx1200`; CUDA SM versions and AMD `gfxXXXX` targets are different architecture namespaces.
+
+Also do not assume that advertising a higher CUDA compute capability is automatically safer or faster. CUDA applications use the reported SM generation to select kernels, instructions, launch attributes and resource profiles. A path tuned for an NVIDIA SM can therefore be a bad fit for the real AMD backend even when device enumeration succeeds.
+
+If you experiment with a different `ZLUDA_CC`, treat it as a workload-specific compatibility test: record the value, compare numerical output against a known-good path, and do not promote the result from "launches" to "supported" without end-to-end validation.
+
+For recent llama.cpp behavior, see [`LLAMA_CPP.md`](LLAMA_CPP.md).
+
+## `cuLaunchKernelEx` returns 801
+
+Run the focused driver probe:
+
+```powershell
+.\scripts\test-capabilities.ps1 `
+  -PythonExe C:\path\to\venv\Scripts\python.exe `
+  -Tests driver_launch_ex
+```
+
+The probe separates no-attribute launches, `COOPERATIVE`, and `PROGRAMMATIC_STREAM_SERIALIZATION` (PDL). A zero-valued attribute should not be treated the same as a semantic feature request.
+
+The project deliberately keeps non-zero PDL as a safe refusal until the AMD backend has equivalent ordering/serialization semantics. Silently ignoring `PDL=1` can turn an obvious compatibility failure into wrong kernel execution.
+
+## `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize...)` returns invalid argument
+
+Run:
+
+```powershell
+.\scripts\test-capabilities.ps1 `
+  -PythonExe C:\path\to\venv\Scripts\python.exe `
+  -Tests driver_func_attributes
+```
+
+This reports the device's normal, per-SM and opt-in shared-memory limits and checks the `cuFuncSetAttribute` boundary with a no-op PTX kernel.
+
+If the application asks for more dynamic shared memory than the driver advertises, do **not** clamp the request silently. That normally means the application selected a kernel/resource profile that is incompatible with the real device. Prefer a supported kernel path, disable that optimization, or fix the application's dispatch logic.
 
 ## cuFFT errors
 
