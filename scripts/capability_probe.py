@@ -22,6 +22,7 @@ TESTS = (
     "driver_pci_bus_id",
     "driver_api",
     "driver_launch_ex",
+    "driver_pdl_semantics",
     "driver_func_attributes",
     "driver_function_metadata",
     "nvml",
@@ -320,6 +321,307 @@ def run_driver_launch_ex(torch):
             },
         }
     finally:
+        if module.value:
+            try:
+                cuda.cuModuleUnload(module)
+            except Exception:
+                pass
+        if created_ctx and ctx.value:
+            try:
+                cuda.cuCtxDestroy_v2(ctx)
+            except Exception:
+                pass
+
+
+def run_driver_pdl_semantics(torch):
+    """Validate PDL conservatively instead of accepting a success code alone.
+
+    A backend may safely implement PROGRAMMATIC_STREAM_SERIALIZATION=1 by
+    preserving ordinary same-stream serialization (no overlap).  This probe
+    uses a producer/consumer pair containing PTX griddepcontrol instructions.
+    A clean 801 is reported as unsupported.  If PDL launch is accepted, the
+    dependent consumer must repeatedly observe the producer's completed write.
+    """
+    cuda = _load_win_dll("nvcuda.dll")
+
+    class CUlaunchAttributeValue(ctypes.Union):
+        _fields_ = [
+            ("pad", ctypes.c_byte * 64),
+            ("programmaticStreamSerializationAllowed", ctypes.c_int),
+        ]
+
+    class CUlaunchAttribute(ctypes.Structure):
+        _fields_ = [
+            ("id", ctypes.c_uint),
+            ("_pad", ctypes.c_byte * 4),
+            ("value", CUlaunchAttributeValue),
+        ]
+
+    class CUlaunchConfig(ctypes.Structure):
+        _fields_ = [
+            ("gridDimX", ctypes.c_uint),
+            ("gridDimY", ctypes.c_uint),
+            ("gridDimZ", ctypes.c_uint),
+            ("blockDimX", ctypes.c_uint),
+            ("blockDimY", ctypes.c_uint),
+            ("blockDimZ", ctypes.c_uint),
+            ("sharedMemBytes", ctypes.c_uint),
+            ("hStream", ctypes.c_void_p),
+            ("attrs", ctypes.POINTER(CUlaunchAttribute)),
+            ("numAttrs", ctypes.c_uint),
+        ]
+
+    if ctypes.sizeof(CUlaunchAttribute) != 72 or ctypes.sizeof(CUlaunchConfig) != 56:
+        raise RuntimeError(
+            "cuLaunchKernelEx ABI mismatch for PDL probe: "
+            f"attribute={ctypes.sizeof(CUlaunchAttribute)}, config={ctypes.sizeof(CUlaunchConfig)}"
+        )
+
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cuda.cuDeviceGet.restype = ctypes.c_int
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    cuda.cuCtxCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_int]
+    cuda.cuCtxCreate_v2.restype = ctypes.c_int
+    cuda.cuCtxDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuCtxDestroy_v2.restype = ctypes.c_int
+    cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cuda.cuModuleLoadData.restype = ctypes.c_int
+    cuda.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
+    cuda.cuModuleGetFunction.restype = ctypes.c_int
+    cuda.cuModuleUnload.argtypes = [ctypes.c_void_p]
+    cuda.cuModuleUnload.restype = ctypes.c_int
+    cuda.cuStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint]
+    cuda.cuStreamCreate.restype = ctypes.c_int
+    cuda.cuStreamDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamDestroy_v2.restype = ctypes.c_int
+    cuda.cuStreamSynchronize.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamSynchronize.restype = ctypes.c_int
+    cuda.cuMemAlloc_v2.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t]
+    cuda.cuMemAlloc_v2.restype = ctypes.c_int
+    cuda.cuMemFree_v2.argtypes = [ctypes.c_uint64]
+    cuda.cuMemFree_v2.restype = ctypes.c_int
+    cuda.cuMemcpyHtoD_v2.argtypes = [ctypes.c_uint64, ctypes.c_void_p, ctypes.c_size_t]
+    cuda.cuMemcpyHtoD_v2.restype = ctypes.c_int
+    cuda.cuMemcpyDtoH_v2.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
+    cuda.cuMemcpyDtoH_v2.restype = ctypes.c_int
+    cuda.cuLaunchKernelEx.argtypes = [
+        ctypes.POINTER(CUlaunchConfig),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    cuda.cuLaunchKernelEx.restype = ctypes.c_int
+
+    def ck(code: int, call: str):
+        if code != 0:
+            raise RuntimeError(f"{call} returned CUDA error {code}")
+
+    ck(cuda.cuInit(0), "cuInit")
+    dev = ctypes.c_int()
+    ck(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+    ctx = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
+    created_ctx = False
+    if not ctx.value:
+        ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
+        created_ctx = True
+
+    # The volatile scratch store keeps the producer busy long enough to expose
+    # an implementation that incorrectly overlaps launches while treating
+    # griddepcontrol as a no-op.  A conservative serialized implementation is
+    # valid and should still produce 42 every time.
+    ptx = b""".version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry pdl_producer(
+    .param .u64 data_ptr,
+    .param .u64 scratch_ptr
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<3>;
+    .reg .b64 %rd<3>;
+
+    ld.param.u64 %rd1, [data_ptr];
+    ld.param.u64 %rd2, [scratch_ptr];
+    mov.u32 %r1, 0;
+L_pdl_spin:
+    add.u32 %r1, %r1, 1;
+    st.volatile.global.u32 [%rd2], %r1;
+    setp.lt.u32 %p1, %r1, 200000;
+    @%p1 bra L_pdl_spin;
+
+    mov.u32 %r2, 41;
+    st.global.u32 [%rd1], %r2;
+    griddepcontrol.launch_dependents;
+    ret;
+}
+
+.visible .entry pdl_consumer(
+    .param .u64 data_ptr
+)
+{
+    .reg .b32 %r<2>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd1, [data_ptr];
+    griddepcontrol.wait;
+    ld.global.u32 %r1, [%rd1];
+    add.u32 %r1, %r1, 1;
+    st.global.u32 [%rd1], %r1;
+    ret;
+}
+\0"""
+
+    module = ctypes.c_void_p()
+    stream = ctypes.c_void_p()
+    data_dev = ctypes.c_uint64()
+    scratch_dev = ctypes.c_uint64()
+    try:
+        ck(
+            cuda.cuModuleLoadData(
+                ctypes.byref(module),
+                ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
+            ),
+            "cuModuleLoadData(PDL semantic PTX)",
+        )
+        producer = ctypes.c_void_p()
+        consumer = ctypes.c_void_p()
+        ck(cuda.cuModuleGetFunction(ctypes.byref(producer), module, b"pdl_producer"), "cuModuleGetFunction(pdl_producer)")
+        ck(cuda.cuModuleGetFunction(ctypes.byref(consumer), module, b"pdl_consumer"), "cuModuleGetFunction(pdl_consumer)")
+        ck(cuda.cuStreamCreate(ctypes.byref(stream), 1), "cuStreamCreate")
+        ck(cuda.cuMemAlloc_v2(ctypes.byref(data_dev), ctypes.sizeof(ctypes.c_uint32)), "cuMemAlloc(data)")
+        ck(cuda.cuMemAlloc_v2(ctypes.byref(scratch_dev), ctypes.sizeof(ctypes.c_uint32)), "cuMemAlloc(scratch)")
+
+        attr = CUlaunchAttribute()
+        attr.id = 6  # CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
+        attr.value.programmaticStreamSerializationAllowed = 1
+        attr_ptr = ctypes.pointer(attr)
+
+        def cfg():
+            return CUlaunchConfig(1, 1, 1, 1, 1, 1, 0, stream, attr_ptr, 1)
+
+        def params_for(*device_ptrs):
+            values = [ctypes.c_uint64(int(ptr.value)) for ptr in device_ptrs]
+            array = (ctypes.c_void_p * len(values))(
+                *[ctypes.cast(ctypes.byref(v), ctypes.c_void_p) for v in values]
+            )
+            return values, array
+
+        attempts = []
+        for iteration in range(5):
+            zero = ctypes.c_uint32(0)
+            ck(
+                cuda.cuMemcpyHtoD_v2(
+                    data_dev.value,
+                    ctypes.cast(ctypes.byref(zero), ctypes.c_void_p),
+                    ctypes.sizeof(zero),
+                ),
+                "cuMemcpyHtoD(data=0)",
+            )
+            ck(
+                cuda.cuMemcpyHtoD_v2(
+                    scratch_dev.value,
+                    ctypes.cast(ctypes.byref(zero), ctypes.c_void_p),
+                    ctypes.sizeof(zero),
+                ),
+                "cuMemcpyHtoD(scratch=0)",
+            )
+
+            producer_values, producer_params = params_for(data_dev, scratch_dev)
+            producer_cfg = cfg()
+            producer_rc = int(
+                cuda.cuLaunchKernelEx(
+                    ctypes.byref(producer_cfg),
+                    producer,
+                    ctypes.cast(producer_params, ctypes.c_void_p),
+                    None,
+                )
+            )
+            if producer_rc == 801:
+                raise RuntimeError("programmatic dependent launch not supported (CUDA error 801)")
+            ck(producer_rc, "cuLaunchKernelEx(pdl_producer)")
+
+            consumer_values, consumer_params = params_for(data_dev)
+            consumer_cfg = cfg()
+            consumer_rc = int(
+                cuda.cuLaunchKernelEx(
+                    ctypes.byref(consumer_cfg),
+                    consumer,
+                    ctypes.cast(consumer_params, ctypes.c_void_p),
+                    None,
+                )
+            )
+            if consumer_rc == 801:
+                raise RuntimeError("programmatic dependent launch not supported for dependent kernel (CUDA error 801)")
+            ck(consumer_rc, "cuLaunchKernelEx(pdl_consumer)")
+            ck(cuda.cuStreamSynchronize(stream), "cuStreamSynchronize(PDL pair)")
+
+            data_host = ctypes.c_uint32()
+            scratch_host = ctypes.c_uint32()
+            ck(
+                cuda.cuMemcpyDtoH_v2(
+                    ctypes.cast(ctypes.byref(data_host), ctypes.c_void_p),
+                    data_dev.value,
+                    ctypes.sizeof(data_host),
+                ),
+                "cuMemcpyDtoH(data)",
+            )
+            ck(
+                cuda.cuMemcpyDtoH_v2(
+                    ctypes.cast(ctypes.byref(scratch_host), ctypes.c_void_p),
+                    scratch_dev.value,
+                    ctypes.sizeof(scratch_host),
+                ),
+                "cuMemcpyDtoH(scratch)",
+            )
+            attempts.append(
+                {
+                    "iteration": iteration,
+                    "producer_launch": producer_rc,
+                    "consumer_launch": consumer_rc,
+                    "data": int(data_host.value),
+                    "scratch": int(scratch_host.value),
+                    "correct": int(data_host.value) == 42 and int(scratch_host.value) == 200000,
+                }
+            )
+
+        ok = all(x["correct"] for x in attempts)
+        return {
+            "ok": ok,
+            "mode": "semantic_ordering",
+            "expected_data": 42,
+            "attempts": attempts,
+            "notes": {
+                "safe_conservative_backend": "ordinary same-stream serialization is acceptable even without overlap",
+                "success_requirement": "PDL launch success counts only when producer/consumer ordering remains correct",
+            },
+        }
+    finally:
+        if stream.value:
+            try:
+                cuda.cuStreamSynchronize(stream)
+            except Exception:
+                pass
+        if data_dev.value:
+            try:
+                cuda.cuMemFree_v2(data_dev.value)
+            except Exception:
+                pass
+        if scratch_dev.value:
+            try:
+                cuda.cuMemFree_v2(scratch_dev.value)
+            except Exception:
+                pass
+        if stream.value:
+            try:
+                cuda.cuStreamDestroy_v2(stream)
+            except Exception:
+                pass
         if module.value:
             try:
                 cuda.cuModuleUnload(module)
@@ -1410,6 +1712,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_pci_bus_id": run_driver_pci_bus_id,
     "driver_api": run_driver_api,
     "driver_launch_ex": run_driver_launch_ex,
+    "driver_pdl_semantics": run_driver_pdl_semantics,
     "driver_func_attributes": run_driver_func_attributes,
     "driver_function_metadata": run_driver_function_metadata,
     "nvml": run_nvml,
