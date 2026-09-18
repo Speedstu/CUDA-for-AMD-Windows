@@ -47,13 +47,23 @@ function Get-ArchMetadata {
     return $null
 }
 
-function Test-ExternalValidation {
-    param([string]$Name, $Meta)
+function Test-ProjectValidation {
+    param([string]$Name, $Meta, [string]$Status)
     if (-not $Meta -or -not $Meta.project_validation) { return $false }
-    if ([string]$Meta.project_validation.status -ne 'validated-external') { return $false }
+    if ([string]$Meta.project_validation.status -ne $Status) { return $false }
     $pattern = [string]$Meta.project_validation.model_pattern
     if (-not $pattern) { return $true }
     return [bool]($Name -match $pattern)
+}
+
+function Test-ExternalValidation {
+    param([string]$Name, $Meta)
+    return Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-external'
+}
+
+function Test-ReferenceValidation {
+    param([string]$Name, $Meta)
+    return Test-ProjectValidation -Name $Name -Meta $Meta -Status 'validated-reference'
 }
 
 function Get-ProjectStatus {
@@ -106,7 +116,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($d in $hipDevices) {
         $meta = Get-ArchMetadata $d.gfx
         $wmi = $wmiDevices | Where-Object { $_.name -eq $d.name } | Select-Object -First 1
-        $isReference = ($d.name -match 'RX 9060 XT' -and $d.gfx -eq 'gfx1200')
+        $isReference = Test-ReferenceValidation -Name $d.name -Meta $meta
         $isExternalValidated = Test-ExternalValidation -Name $d.name -Meta $meta
         $isProjectTested = [bool]($isReference -or $isExternalValidated)
         $status = Get-ProjectStatus -Name $d.name -Arch $d.gfx -Meta $meta -IsReference $isReference
@@ -132,7 +142,7 @@ if ($hipDevices.Count -gt 0) {
     foreach ($wmi in $wmiDevices) {
         $arch = Get-FallbackArch $wmi.name
         $meta = Get-ArchMetadata $arch
-        $isReference = ($wmi.name -match 'RX 9060 XT' -and $arch -eq 'gfx1200')
+        $isReference = Test-ReferenceValidation -Name $wmi.name -Meta $meta
         $isExternalValidated = Test-ExternalValidation -Name $wmi.name -Meta $meta
         $isProjectTested = [bool]($isReference -or $isExternalValidated)
         $status = Get-ProjectStatus -Name $wmi.name -Arch $arch -Meta $meta -IsReference $isReference
