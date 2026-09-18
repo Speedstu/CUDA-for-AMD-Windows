@@ -85,6 +85,29 @@ On the RX 9060 XT / `gfx1200` reference machine, the manually reproduced boundar
 
 That matters because a CUDA application selecting an NVIDIA-tuned kernel can ask for more shared memory than the AMD backend exposes even when device registration itself succeeded.
 
+### b10978 source-level Flash Attention boundary
+
+For the exact llama.cpp b10978 release commit (`1e7bcf3da4b2741868d152fa47976fb2501c85e3`), the Ampere host configuration for `DKQ=DV=128, ncols=8` uses:
+
+- `nbatch_fa=128`;
+- `nbatch_K2=nbatch_V2=64`;
+- a two-stage pipeline when `ncols2 >= 2`;
+- `Q_in_reg=true`.
+
+The b10978 source also contains real template instances for `(ncols1,ncols2)=(1,8),(2,4),(4,2)`.
+
+Using b10978's own shared-memory formulas, those variants request:
+
+| `ncols1,ncols2` | requested dynamic shared memory |
+| --- | ---: |
+| `1,8` | 65,808 bytes |
+| `2,4` | 66,080 bytes |
+| `4,2` | 66,624 bytes |
+
+The manually measured gfx1200/ZLUDA opt-in boundary is 65,536 bytes. Therefore these concrete b10978 kernels exceed the advertised backend limit by only 272-1,088 bytes, which is enough for `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize...)` to return `invalid argument`.
+
+This is a **static source diagnosis**, not yet an end-to-end fix. Silently clamping the requested size is not valid because the kernel launch/layout was selected for the larger allocation. A correct workaround must select a compatible kernel/resource configuration and then pass numerical validation.
+
 ## `ZLUDA_CC` is a compatibility identity, not the AMD ISA
 
 ZLUDA exposes a CUDA compute capability so CUDA applications can choose code paths. That value must not be interpreted as proof that the AMD GPU implements every NVIDIA instruction or resource profile associated with that SM generation.
