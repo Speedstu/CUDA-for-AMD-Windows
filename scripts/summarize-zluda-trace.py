@@ -101,10 +101,30 @@ def summarize(path: Path, tail: int) -> dict[str, Any]:
     run_dir = log_path.parent
     compiler_logs = sorted(run_dir.glob("module_*.log"))
     ptx_modules = sorted(run_dir.glob("module_*.ptx"))
+
+    launched_names = {
+        item["function_name"]
+        for item in result["launches"]
+        if item.get("function_name")
+    }
+    function_ptx_modules: dict[str, list[str]] = {name: [] for name in launched_names}
+    for ptx_path in ptx_modules:
+        ptx_text = ptx_path.read_text(encoding="utf-8", errors="replace")
+        for name in launched_names:
+            if name in ptx_text:
+                function_ptx_modules[name].append(str(ptx_path))
+
+    last_launch = result.get("last_launch")
+    if last_launch and last_launch.get("function_name"):
+        last_launch["ptx_modules"] = function_ptx_modules.get(
+            last_launch["function_name"], []
+        )
+
     result.update(
         {
             "trace_log": str(log_path),
             "trace_dir": str(run_dir),
+            "function_ptx_modules": function_ptx_modules,
             "compiler_logs": [
                 {
                     "path": str(p),
