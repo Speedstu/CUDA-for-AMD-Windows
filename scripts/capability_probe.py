@@ -21,6 +21,7 @@ TESTS = (
     "device_info",
     "driver_pci_bus_id",
     "driver_api",
+    "driver_launch_ex",
     "nvml",
     "memory_copy",
     "streams_events",
@@ -165,6 +166,156 @@ def run_driver_api(torch):
     buf = ctypes.create_string_buffer(256)
     ck(cuda.cuDeviceGetName(buf, len(buf), dev.value), "cuDeviceGetName")
     return {"ok": True, "driver_version": version.value, "device_count": count.value, "device_name": buf.value.decode(errors="replace")}
+
+
+def run_driver_launch_ex(torch):
+    """Exercise cuLaunchKernelEx launch-attribute handling through the driver API.
+
+    CUDA/ZLUDA regressions here matter to newer llama.cpp builds.  The probe
+    deliberately uses a no-op PTX kernel so it tests launch semantics rather
+    than application math.  PDL=1 is allowed to fail safely with 801 until an
+    AMD backend exposes equivalent programmatic-stream-serialization semantics.
+    """
+    cuda = _load_win_dll("nvcuda.dll")
+
+    class CUlaunchAttributeValue(ctypes.Union):
+        _fields_ = [
+            ("pad", ctypes.c_byte * 64),
+            ("cooperative", ctypes.c_int),
+            ("programmaticStreamSerializationAllowed", ctypes.c_int),
+        ]
+
+    class CUlaunchAttribute(ctypes.Structure):
+        _fields_ = [
+            ("id", ctypes.c_int),
+            ("_pad", ctypes.c_byte * 4),
+            ("value", CUlaunchAttributeValue),
+        ]
+
+    class CUlaunchConfig(ctypes.Structure):
+        _fields_ = [
+            ("gridDimX", ctypes.c_uint),
+            ("gridDimY", ctypes.c_uint),
+            ("gridDimZ", ctypes.c_uint),
+            ("blockDimX", ctypes.c_uint),
+            ("blockDimY", ctypes.c_uint),
+            ("blockDimZ", ctypes.c_uint),
+            ("sharedMemBytes", ctypes.c_uint),
+            ("hStream", ctypes.c_void_p),
+            ("attrs", ctypes.POINTER(CUlaunchAttribute)),
+            ("numAttrs", ctypes.c_uint),
+        ]
+
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cuda.cuDeviceGet.restype = ctypes.c_int
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    cuda.cuCtxCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_int]
+    cuda.cuCtxCreate_v2.restype = ctypes.c_int
+    cuda.cuCtxDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuCtxDestroy_v2.restype = ctypes.c_int
+    cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cuda.cuModuleLoadData.restype = ctypes.c_int
+    cuda.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
+    cuda.cuModuleGetFunction.restype = ctypes.c_int
+    cuda.cuLaunchKernelEx.argtypes = [ctypes.POINTER(CUlaunchConfig), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    cuda.cuLaunchKernelEx.restype = ctypes.c_int
+    cuda.cuCtxSynchronize.argtypes = []
+    cuda.cuCtxSynchronize.restype = ctypes.c_int
+    cuda.cuModuleUnload.argtypes = [ctypes.c_void_p]
+    cuda.cuModuleUnload.restype = ctypes.c_int
+
+    def ck(code: int, call: str):
+        if code != 0:
+            raise RuntimeError(f"{call} returned CUDA error {code}")
+
+    ck(cuda.cuInit(0), "cuInit")
+    dev = ctypes.c_int()
+    ck(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+
+    ctx = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
+    created_ctx = False
+    if not ctx.value:
+        ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
+        created_ctx = True
+
+    ptx = b""".version 7.0
+.target sm_80
+.address_size 64
+.visible .entry noop() {
+    ret;
+}
+\0"""
+    module = ctypes.c_void_p()
+    try:
+        ck(
+            cuda.cuModuleLoadData(
+                ctypes.byref(module),
+                ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
+            ),
+            "cuModuleLoadData",
+        )
+        func = ctypes.c_void_p()
+        ck(cuda.cuModuleGetFunction(ctypes.byref(func), module, b"noop"), "cuModuleGetFunction")
+
+        def launch(attr_id=None, value=0):
+            attr = CUlaunchAttribute()
+            attr_ptr = None
+            count = 0
+            if attr_id is not None:
+                attr.id = attr_id
+                if attr_id == 2:
+                    attr.value.cooperative = value
+                elif attr_id == 6:
+                    attr.value.programmaticStreamSerializationAllowed = value
+                attr_ptr = ctypes.pointer(attr)
+                count = 1
+            cfg = CUlaunchConfig(1, 1, 1, 1, 1, 1, 0, None, attr_ptr, count)
+            rc = int(cuda.cuLaunchKernelEx(ctypes.byref(cfg), func, None, None))
+            sync_rc = int(cuda.cuCtxSynchronize()) if rc == 0 else None
+            return {"launch": rc, "sync": sync_rc}
+
+        results = {
+            "no_attrs": launch(),
+            "cooperative_0": launch(2, 0),
+            "cooperative_1": launch(2, 1),
+            "pdl_0": launch(6, 0),
+            "pdl_1": launch(6, 1),
+        }
+
+        normal_ok = results["no_attrs"] == {"launch": 0, "sync": 0}
+        cooperative_zero_ok = results["cooperative_0"] == {"launch": 0, "sync": 0}
+        pdl_zero_ok = results["pdl_0"] == {"launch": 0, "sync": 0}
+        pdl_one_safe = (
+            results["pdl_1"]["launch"] == 801
+            or results["pdl_1"] == {"launch": 0, "sync": 0}
+        )
+        return {
+            "ok": normal_ok and cooperative_zero_ok and pdl_zero_ok and pdl_one_safe,
+            "results": results,
+            "abi": {
+                "launch_attribute_size": ctypes.sizeof(CUlaunchAttribute),
+                "launch_config_size": ctypes.sizeof(CUlaunchConfig),
+            },
+            "notes": {
+                "cooperative_1": "reported separately because device support can vary",
+                "pdl_1": "801 is a safe refusal when the backend has no equivalent semantics",
+            },
+        }
+    finally:
+        if module.value:
+            try:
+                cuda.cuModuleUnload(module)
+            except Exception:
+                pass
+        if created_ctx and ctx.value:
+            try:
+                cuda.cuCtxDestroy_v2(ctx)
+            except Exception:
+                pass
 
 
 def run_nvml(torch):
@@ -986,6 +1137,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "device_info": run_device_info,
     "driver_pci_bus_id": run_driver_pci_bus_id,
     "driver_api": run_driver_api,
+    "driver_launch_ex": run_driver_launch_ex,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,
     "streams_events": run_streams_events,
