@@ -77,8 +77,11 @@ jobs:
           git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\windows-amd-compat.patch
           git apply ..\patches\zluda-v7-preview10\windows-amd-compat.patch
           git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+          git apply ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
+          git apply ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
           git diff --check
-          Write-Host 'Validated patch set and launch-attribute candidate apply cleanly to pinned upstream commit.'
+          Write-Host 'Validated patch set plus launch-attribute/PTX-version candidates apply cleanly to pinned upstream commit.'
           Set-Location ..
 
       - name: Verify pinned ZLUDA release asset
