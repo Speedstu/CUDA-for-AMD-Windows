@@ -124,6 +124,14 @@ The repository therefore includes:
 
 This candidate remains outside the validated patch set until the rebuilt driver passes the direct probe and real workload regression on the reference GPU.
 
+### Expected effect on b10978
+
+The PTX metadata candidate does **not** implement PDL. For the official CUDA 12.4 b10978 package, the expected effect is that a PTX 8.4 kernel targeted at `sm_90` reports `ptxVersion=84`. The llama.cpp host check `ptxVersion >= 90` then stays false, so it should use the classic launch path without requiring `GGML_CUDA_PDL=0`.
+
+That is separate from `launch-attributes-candidate.patch`, which fixes the benign `COOPERATIVE=0` driver case but deliberately keeps non-zero PDL unsupported.
+
+Even if the PTX metadata fix removes the erroneous `cudaLaunchKernelEx` path, it does **not** prove modern llama.cpp inference is fixed. The deeper `-fa off` kernel launch failure reported on gfx1150 still needs a real trace/runtime validation.
+
 NVIDIA reference:
 https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
 
