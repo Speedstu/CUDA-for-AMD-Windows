@@ -72,7 +72,10 @@ jobs:
           git fetch --depth 1 origin 9c8b43f242985150f86a7f485218b7b82c3e96ca
           git checkout --detach FETCH_HEAD
           git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\windows-amd-compat.patch
-          Write-Host 'Experimental patch applies cleanly to pinned upstream commit.'
+          git apply ..\patches\zluda-v7-preview10\windows-amd-compat.patch
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
+          git diff --check
+          Write-Host 'Validated patch set and launch-attribute candidate apply cleanly to pinned upstream commit.'
           Set-Location ..
 
       - name: Verify pinned ZLUDA release asset
