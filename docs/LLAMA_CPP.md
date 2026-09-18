@@ -13,7 +13,7 @@ The most detailed community report is [issue #3](https://github.com/Speedstu/CUD
 | --- | --- |
 | b4500 | Runs end-to-end through ZLUDA; decode was reported near the native ROCm result |
 | b9009 | Device registration works, but compute reaches a kernel-level failure |
-| b10978 | Registration works with the pinned ZLUDA v7 channel; newer launch/kernel paths still fail |
+| b10978 | gfx1150: registration works, but the reporter still needs to re-test the patched launch/PTX path; gfx1200: patched v7 completes an end-to-end GPU smoke with all layers offloaded |
 
 For the b10978 investigation, the pinned upstream source commit is `1e7bcf3da4b2741868d152fa47976fb2501c85e3`. The official Windows CUDA 12.4 package used for reproduction is:
 
@@ -23,6 +23,20 @@ SHA-256 62D7478A88888574BFDE7A0B8FFDA4AABEC152E1C4DA69CC051CF1B7BA9DF043
 ```
 
 The project does **not** currently claim modern llama.cpp support on every AMD GPU.
+
+### 2026-09-18 reference validation on gfx1200
+
+On the RX 9060 XT / `gfx1200` reference machine, a rebuilt v7-preview.10 runtime with the launch-attribute and PTX-metadata candidates now passes the driver preflight and a real b10978 GPU smoke:
+
+- `driver_pci_bus_id`, `driver_launch_ex`, `driver_func_attributes`, and `driver_function_metadata`: **PASS**;
+- the b10978 `.version 8.4 / .target sm_90` regression reports `PTX_VERSION=84`, so the false `ptxVersion >= 90` PDL gate stays **false**;
+- `llama-cli --list-devices` detects `CUDA0: AMD Radeon RX 9060 XT [ZLUDA]` with no CPU-only fallback;
+- a tiny GGUF smoke with `-ngl all -dev CUDA0 -fa off` and no `GGML_CUDA_PDL` override assigns **6/6 layers** to `CUDA0`, places the KV and compute buffers on CUDA0, completes CUDA Graph warmup, produces prompt/decode output, and exits cleanly;
+- the smoke was repeated and did not produce a delayed GPU reset on the reference machine.
+
+The same run still prints `no device code compatible` diagnostics from low-architecture fallback PTX embedded in the CUDA build. Those messages are not being hidden or counted as universal kernel support. The observed smoke proves that the previous registration/launch/metadata blockers are cleared on gfx1200; it does **not** prove every llama.cpp kernel shape or `gfx1150` is fixed.
+
+The CUDA 12.4 llama package also needs its matching stock NVIDIA `cudart64_12.dll` available on the process path. If only the main llama CUDA archive is extracted without the companion cudart package, b10978 can report `Available devices: (none)` even when the ZLUDA driver probes pass.
 
 ## Registration: fixed by the v7 channel
 
@@ -122,7 +136,7 @@ The repository therefore includes:
 - `driver_function_metadata`, which loads a known `.version 7.0 / .target sm_80` module and requires `CU_FUNC_ATTRIBUTE_PTX_VERSION=70`;
 - diagnostic reporting for `BINARY_VERSION`, because frameworks such as PyTorch can also use that value for architecture gating. The binary-version behavior is **not changed yet** by this candidate.
 
-This candidate remains outside the validated patch set until the rebuilt driver passes the direct probe and real workload regression on the reference GPU.
+The rebuilt candidate now passes the direct metadata probe and the b10978 end-to-end GPU smoke on the gfx1200 reference machine. It remains a separate candidate patch until the original gfx1150 report is re-tested, so the project does not generalize this reference result to RDNA 3.5 yet.
 
 ### Expected effect on b10978
 
@@ -130,7 +144,7 @@ The PTX metadata candidate does **not** implement PDL. For the official CUDA 12.
 
 That is separate from `launch-attributes-candidate.patch`, which fixes the benign `COOPERATIVE=0` driver case but deliberately keeps non-zero PDL unsupported.
 
-Even if the PTX metadata fix removes the erroneous `cudaLaunchKernelEx` path, it does **not** prove modern llama.cpp inference is fixed. The deeper `-fa off` kernel launch failure reported on gfx1150 still needs a real trace/runtime validation.
+On gfx1200, the PTX metadata fix plus the launch-attribute candidate now advance b10978 through a real `-fa off` GPU smoke with all layers offloaded. The deeper kernel failure previously reported on gfx1150 still requires confirmation on that architecture before cross-GPU support is claimed.
 
 NVIDIA reference:
 https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
@@ -204,7 +218,7 @@ For the tested Windows llama.cpp packages, keep the stock NVIDIA `cudart` that s
 
 ## Tracing the remaining classic-kernel failure
 
-When `GGML_CUDA_PDL=0` and Flash Attention is disabled, issue #3 still reports an unspecified launch failure in the generic compute path. The application-level location alone does not identify the failing CUDA kernel.
+The original gfx1150 report reached an unspecified launch failure when `GGML_CUDA_PDL=0` and Flash Attention was disabled. The current gfx1200 candidate no longer needs that PDL override for the tested b10978 smoke, but the original architecture-specific failure remains useful context until gfx1150 is re-tested.
 
 ZLUDA's Windows trace mode can record the driver calls, resolved kernel function names, PTX modules and compiler diagnostics:
 
@@ -272,7 +286,7 @@ python .\scripts\summarize-zluda-trace.py C:\path\to\trace-run --json trace-summ
 > [!WARNING]
 > The timeout only kills the process tree. It cannot restore a GPU/driver that has already entered an unrecoverable state. The helper therefore requires `-AcknowledgeGpuResetRisk` explicitly. Do not use it on a machine where a forced reboot would be unacceptable.
 
-This helper is for isolating the remaining modern llama.cpp kernel boundary; a captured trace is not evidence that the workload is supported.
+This helper remains useful for any architecture-specific modern llama.cpp kernel failure; a captured trace by itself is not evidence that the workload is supported.
 
 ## Stability warning
 
@@ -298,4 +312,4 @@ For a modern llama.cpp build, this project will treat the path as validated only
 5. Output is compared against a known-good native/reference path where practical.
 6. Repeated runs exit cleanly with no delayed driver crash.
 
-Until then, issue #3 remains intentionally open.
+The gfx1200 reference now satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. Issue #3 should remain open only until the original gfx1150 reporter confirms or rejects the same patched path; a gfx1200 pass is not silently promoted to a gfx1150 result.

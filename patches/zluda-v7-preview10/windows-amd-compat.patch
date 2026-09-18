@@ -55,7 +55,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
 index c9d4bbd..c4e8695 100644
 --- a/zluda/src/impl/module.rs
 +++ b/zluda/src/impl/module.rs
-@@ -185,6 +185,24 @@ fn get_best_ptx_and_compile(
+@@ -185,6 +185,26 @@ fn get_best_ptx_and_compile(
              _ => {}
          })
      };
@@ -71,9 +71,11 @@ index c9d4bbd..c4e8695 100644
 +        let sm_version = ptx_parser::parse_module_unchecked(src).sm_version;
 +        let memory_efficient_stub = src.contains("_Z24attention_kernel_batchedI15AttentionKernel")
 +            && src.contains("vprintf");
++        let memory_efficient_stub_modern = src.contains("fmha_cutlassF_")
++            && src.contains("vprintf");
 +        let flash_cubin_only = src.contains("_Z20fmha_fwd_loop_kernelI18FMHA_kernel_traits")
 +            && !src.contains("mma.sync");
-+        sm_version < 50 && (memory_efficient_stub || flash_cubin_only)
++        sm_version < 50 && (memory_efficient_stub || memory_efficient_stub_modern || flash_cubin_only)
 +    }) {
 +        return Err(CUerror::NO_BINARY_FOR_GPU);
 +    }

@@ -14,7 +14,7 @@ On the RX 9060 XT / `gfx1200` development machine, using a recent TheRock Window
 - **CUDA Graph legacy ABI**: implements the CUDA 10.x `cuStreamBeginCapture` and `cuStreamGetCaptureInfo` entry points that PyTorch requests through `cuGetProcAddress`, routing them to the existing HIP graph implementation.
 - **Windows cuFFT loadability**: embeds the same Common Controls v6 manifest used by the other Windows compatibility DLLs so `cufft64_*.dll` loads cleanly instead of failing with Win32 error 127 on `TaskDialogIndirect`.
 - **CUDA event elapsed-time invariant**: Windows HIP/TheRock can occasionally return a negative interval for completed in-order events. The CUDA-facing wrapper preserves positive measurements and clamps only impossible negative values to `0 ms`.
-- **Fused-SDPA fail-closed guard**: PyTorch 2.0.1 Flash and memory-efficient attention ship low-architecture PTX fallbacks whose real fused compute path is absent and lives in NVIDIA cubins. The patch detects these specific fallbacks and returns NO_BINARY_FOR_GPU instead of executing code that can silently produce invalid tensors.
+- **Fused-SDPA fail-closed guard**: observed PyTorch 2.0.1 and 2.3.0 Flash/memory-efficient attention packages ship low-architecture PTX fallbacks whose real fused compute path is absent and lives in NVIDIA cubins. The patch detects both the older attention-kernel stubs and the newer `fmha_cutlassF_*` vprintf-only stubs, returning NO_BINARY_FOR_GPU instead of executing code that can silently produce invalid tensors.
 - **Extended cuBLAS linalg bridges**: FP64/complex GEMM + strided-batched GEMM, batched TRSM/GELS, and batched LU/QR helpers are routed through rocBLAS/rocSOLVER/hipSOLVER so PyTorch `inv`, `lstsq`, and QR batch paths do not fall into unimplemented CUDA entry points.
 - **cuBLAS dtype and QR coverage**: FP64/complex GEMM plus FP64/complex strided-batched GEMM route to rocBLAS. `cublas[S/D/C/Z]geqrfBatched` is bridged to hipSOLVER generic-X using the active cuBLAS stream; the bridge explicitly synchronizes before consuming PyTorch's device-side pointer arrays and before workspace teardown so reused non-default streams remain correct.
 - **ROCm DLL coherence on Windows**: the QR bridge dynamically anchors `amdhip64_7.dll` and `hipsolver.dll` to the selected HIP/TheRock tree rather than adding a static HIP import that could resolve to an incompatible System32 runtime.
@@ -24,7 +24,7 @@ The NVML design is deliberate. An earlier direct-HIP NVML prototype passed isola
 
 The patch also guards late `hipfftDestroy` / `rocsparse_destroy_handle` calls when Windows is already in DLL shutdown. Without this guard, FFT and sparse operations returned numerically correct results but the Python process later terminated with `0xC0000409` during cached-handle teardown. Normal runtime destruction still calls the AMD backend; the guard applies only once Windows reports DLL shutdown in progress.
 
-A clean-checkout rebuild passes a combined strict **NVML + `torch.sparse.mm` + FFT + CUDA Graph + streams/events** regression with zero numerical errors, zero hangs and zero post-result process crashes on the tested `gfx1200` stack. A real PyTorch `torch.cuda.CUDAGraph` capture → replay → synchronization probe also passes with correct output. The event-timing workaround was separately stress-tested across isolated processes after reproducing the negative-timing behavior in direct HIP. With the optional cuSOLVER proxy staged for the linear-algebra probes, the **last fully re-run patch matrix before the newer driver launch/function-attribute diagnostics were added** recorded **32/34 clean passes (94.1%) plus 2 safe refusals** with zero incorrect results, timeouts, hangs, post-result crashes or errors. That is a historical validated snapshot; the current probe list is larger and should not inherit the old percentage until the rebuilt patched runtime is re-run. Flash SDPA and memory-efficient SDPA are the two deliberate refusals on PyTorch 2.0.1+cu118; the math SDPA backend remains numerically correct.
+A clean-checkout rebuild passes a combined strict **NVML + `torch.sparse.mm` + FFT + CUDA Graph + streams/events** regression with zero numerical errors, zero hangs and zero post-result process crashes on the tested `gfx1200` stack. A real PyTorch `torch.cuda.CUDAGraph` capture → replay → synchronization probe also passes with correct output. The event-timing workaround was separately stress-tested across isolated processes after reproducing the negative-timing behavior in direct HIP. With the optional cuSOLVER proxy staged for the linear-algebra probes, the **last fully re-run patch matrix before the newer driver launch/function-attribute diagnostics were added** recorded **32/34 clean passes (94.1%) plus 2 safe refusals** with zero incorrect results, timeouts, hangs, post-result crashes or errors. That is a historical validated snapshot; the current probe list is larger and should not inherit the old percentage until the rebuilt patched runtime is re-run. Flash SDPA and memory-efficient SDPA are deliberate safe refusals on the validated PyTorch 2.0.1 path. A separate PyTorch 2.3.0+cu118 regression on 2026-09-18 reproduced the newer `fmha_cutlassF_*` vprintf-only fallback and now also fails closed: math SDPA passes while Flash and memory-efficient SDPA return unsupported with zero incorrect results.
 
 Advanced cuFFT/cuSPARSE/NVML/Graph entry points not covered by the patch still fall back to normal ZLUDA unsupported behavior.
 
@@ -41,7 +41,7 @@ It contains one minimal `cuLaunchKernelEx` compatibility change:
 
 This is narrower than mapping cooperative launch to HIP and avoids pretending that CUDA programmatic stream serialization exists on the AMD backend. CI checks that the candidate applies cleanly on top of the pinned upstream source plus the main compatibility patch.
 
-The candidate is **not counted as validated support yet**. It moves into `windows-amd-compat.patch` only after a rebuilt `nvcuda.dll` passes `driver_launch_ex` on the reference GPU and the real recent llama.cpp path is re-tested.
+The rebuilt candidate now passes `driver_launch_ex` on the gfx1200 reference GPU, and b10978 completes an end-to-end GPU smoke with all layers offloaded. It remains separate until the original gfx1150 report is re-tested; the reference result is not treated as automatic RDNA 3.5 validation.
 
 ## PTX function-metadata candidate patch
 
@@ -68,7 +68,7 @@ The repository's `driver_function_metadata` probe validates this directly with a
 NVIDIA's CUDA Driver API documents the PTX-version encoding here:
 https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
 
-Like the launch-attribute candidate, this patch is **compile-tested but not counted as runtime-validated support** until the rebuilt driver passes the direct metadata probe and workload regressions on the reference GPU.
+The rebuilt patch now passes the direct metadata probe on gfx1200 (`PTX_VERSION=84` for the b10978 PTX 8.4 / sm_90 case) and the same b10978 end-to-end GPU smoke. It remains separate pending gfx1150 confirmation rather than being generalized across architectures.
 
 ## Apply
 

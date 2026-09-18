@@ -146,8 +146,12 @@ $explicitNone = [bool]($combined -match '(?im)Available devices:\s*(?:\r?\n)?\s*
 $cpuFallbackOnly = [bool](-not $zludaDevice -and $combined -match '(?i)CPU')
 $registrationOk = [bool](-not $timedOut -and $exitCode -eq 0 -and $zludaDevice -and -not $explicitNone)
 $driverOk = $null
-if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 'correctness_ok') {
-    $driverOk = [bool]$driverPreflight.correctness_ok
+if ($driverPreflight) {
+    if ($driverPreflight.PSObject.Properties.Name -contains 'correctness_ok') {
+        $driverOk = [bool]$driverPreflight.correctness_ok
+    } elseif ($driverPreflight.PSObject.Properties.Name -contains 'all_tested_capabilities_pass') {
+        $driverOk = [bool]$driverPreflight.all_tested_capabilities_pass
+    }
 }
 
 $ptxMetadata = $null
@@ -155,8 +159,16 @@ $ptxVersion = $null
 $ptxVersionExpected = $null
 $ptxMetadataOk = $null
 $pdlGateRisk = $null
-if ($driverPreflight -and $driverPreflight.PSObject.Properties.Name -contains 'tests') {
-    $metadataEntry = @($driverPreflight.tests | Where-Object { $_.test -eq 'driver_function_metadata' } | Select-Object -First 1)
+$driverResults = @()
+if ($driverPreflight) {
+    if ($driverPreflight.PSObject.Properties.Name -contains 'results') {
+        $driverResults = @($driverPreflight.results)
+    } elseif ($driverPreflight.PSObject.Properties.Name -contains 'tests') {
+        $driverResults = @($driverPreflight.tests)
+    }
+}
+if ($driverResults.Count -gt 0) {
+    $metadataEntry = @($driverResults | Where-Object { $_.test -eq 'driver_function_metadata' } | Select-Object -First 1)
     if ($metadataEntry.Count -gt 0 -and $metadataEntry[0].result) {
         $ptxMetadata = $metadataEntry[0].result
         if ($ptxMetadata.ptx_version) {
