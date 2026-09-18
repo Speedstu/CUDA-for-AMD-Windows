@@ -3,12 +3,15 @@ param(
     [string]$RuntimeRoot,
     [string]$PythonExe,
     [int]$TimeoutSeconds = 25,
+    [int]$RetryTimeoutSeconds = 180,
     [string[]]$Tests,
     [string]$ReportPath,
     [switch]$Strict
 )
 
 $ErrorActionPreference = 'Stop'
+if ($TimeoutSeconds -lt 1) { throw 'TimeoutSeconds must be at least 1.' }
+if ($RetryTimeoutSeconds -lt 0) { throw 'RetryTimeoutSeconds cannot be negative.' }
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not $RuntimeRoot) { $RuntimeRoot = Join-Path $repo '.runtime' }
 $RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
@@ -56,7 +59,7 @@ function Stop-Tree([System.Diagnostics.Process]$Process) {
     } catch { try { $Process.Kill() } catch {} }
 }
 
-function Invoke-Probe([string]$Name) {
+function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $launcher
     $psi.Arguments = '-- ' + (Quote-Arg $PythonExe) + ' ' + (Quote-Arg $probePath) + ' --test ' + $Name
@@ -88,7 +91,7 @@ function Invoke-Probe([string]$Name) {
     $stdoutTask = $p.StandardOutput.ReadToEndAsync()
     $stderrTask = $p.StandardError.ReadToEndAsync()
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) { Start-Sleep -Milliseconds 100 }
+    while (-not $p.HasExited -and $sw.Elapsed.TotalSeconds -lt $ProbeTimeoutSeconds) { Start-Sleep -Milliseconds 100 }
     $timedOut = -not $p.HasExited
     if ($timedOut) { Stop-Tree $p; try { $p.WaitForExit() } catch {} }
     try { $stdout = $stdoutTask.GetAwaiter().GetResult() } catch { $stdout = '' }
@@ -168,13 +171,28 @@ Write-Host "ZLUDA   : $zluda"
 Write-Host "HIP     : $hip"
 Write-Host "Python  : $PythonExe"
 Write-Host "PyTorch : $(($torchCheck | Out-String).Trim())"
-Write-Host "Timeout : ${TimeoutSeconds}s per capability"
+Write-Host "Timeout : ${TimeoutSeconds}s initial / ${RetryTimeoutSeconds}s retry-on-timeout"
 Write-Host ''
 
 $results = @()
 foreach ($name in $Tests) {
     Write-Host ("{0,-24}" -f $name) -NoNewline
-    $entry = Invoke-Probe $name
+    $entry = Invoke-Probe $name $TimeoutSeconds
+    if ($entry.status -eq 'timeout' -and $RetryTimeoutSeconds -gt $TimeoutSeconds) {
+        $initialAttempt = [ordered]@{
+            status = $entry.status
+            elapsed_ms = $entry.elapsed_ms
+            timed_out = $entry.timed_out
+            process_exit = $entry.process_exit
+        }
+        Write-Host " retry(${RetryTimeoutSeconds}s)" -NoNewline -ForegroundColor DarkYellow
+        $entry = Invoke-Probe $name $RetryTimeoutSeconds
+        $entry | Add-Member -NotePropertyName retried_after_timeout -NotePropertyValue $true
+        $entry | Add-Member -NotePropertyName initial_attempt -NotePropertyValue $initialAttempt
+    } else {
+        $entry | Add-Member -NotePropertyName retried_after_timeout -NotePropertyValue $false
+        $entry | Add-Member -NotePropertyName initial_attempt -NotePropertyValue $null
+    }
     $results += $entry
     switch ($entry.status) {
         'pass'        { Write-Host ' PASS' -ForegroundColor Green }
@@ -195,6 +213,7 @@ $timeouts = @($results | Where-Object status -eq 'timeout')
 $processHangs = @($results | Where-Object { $_.timed_out })
 $processCrashes = @($results | Where-Object { $_.process_crashed_after_result })
 $errors = @($results | Where-Object { $_.status -in @('error','hang_after_result','crash_after_result') })
+$retried = @($results | Where-Object { $_.retried_after_timeout })
 $total = $results.Count
 $score = if ($total) { [math]::Round(100.0 * $passed.Count / $total, 1) } else { 0.0 }
 
@@ -208,6 +227,9 @@ $report = [ordered]@{
     python = $PythonExe
     pytorch = ($torchCheck | Out-String).Trim()
     gpu = if ($config.gpu) { $config.gpu } else { $null }
+    initial_timeout_seconds = $TimeoutSeconds
+    retry_timeout_seconds = $RetryTimeoutSeconds
+    timeout_retries = $retried.Count
     tested_capabilities = $total
     passed = $passed.Count
     safe_refusals = $unsupported.Count
@@ -234,6 +256,7 @@ Write-Host "Timeouts    : $($timeouts.Count)"
 Write-Host "Proc hangs  : $($processHangs.Count)"
 Write-Host "Proc crashes: $($processCrashes.Count)"
 Write-Host "Errors      : $($errors.Count)"
+Write-Host "Retried     : $($retried.Count)"
 Write-Host "Tested capability score: ${score}%"
 Write-Host "Report: $ReportPath"
 if ($incorrect.Count -gt 0) { Write-Warning 'At least one tested capability returned numerically incorrect output.' }

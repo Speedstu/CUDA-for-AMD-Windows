@@ -48,7 +48,7 @@ Recent llama.cpp builds require `cuDeviceGetPCIBusId`, which ZLUDA v6-preview.69
 .\scripts\install.ps1 -SkipLibTorch -ZludaChannel latest
 ```
 
-This selects the pinned upstream `v7-preview.10` archive and verifies its SHA-256. It does **not** imply that every v7 CUDA path is safe on `gfx1150`; keep the capability tests/fail-closed attention guidance below in place.
+This selects the pinned upstream `v7-preview.10` archive and verifies its SHA-256. It does **not** imply that every v7 CUDA path is safe on `gfx1150`. Because that upstream asset does not include this repository's fail-closed SDPA patch, `run-zluda.ps1` now automatically disables PyTorch Flash and memory-efficient SDPA when the runtime config uses the `latest` channel. Experimental reproductions can opt back into upstream fused behavior with `-AllowUnsafeFusedSDPA`.
 
 The memory-efficient SDPA corruption reported on `gfx1150` is **not treated as architecture-specific**: the same failure was reproduced during `gfx1200` bring-up. The experimental v7 patch now detects the affected cubin-only fallback and fails closed with `NO_BINARY_FOR_GPU` instead of allowing a numerically invalid tensor to escape. Compatibility is therefore reported per capability/workload rather than as a blanket GPU verdict.
 
@@ -177,7 +177,7 @@ Maintainers with a local VelocityRL checkout can validate the same runtime with 
 ```
 
 This runs VelocityRL through the ZLUDA/HIP runtime produced by this repository, performs rollout + forward + PPO backward/optimizer work, writes its temporary run under `.runtime\velocityrl-smoke\`, and records `.runtime\velocityrl-smoke.json`. VelocityRL is an optional external integration workload and is not downloaded by the installer.
-For PyTorch applications that use `torch.nn.functional.scaled_dot_product_attention()` without explicitly selecting a backend, the experimental v7 stack can opt into the validated math fallback at process startup:
+For PyTorch applications that use `torch.nn.functional.scaled_dot_product_attention()` without explicitly selecting a backend, the launcher enables the validated math fallback automatically for the unpatched upstream `latest` channel. `-PyTorchSafeSDPA` remains available to force the same policy explicitly:
 
 ```powershell
 .\scripts\run-zluda.ps1 `
@@ -187,7 +187,7 @@ For PyTorch applications that use `torch.nn.functional.scaled_dot_product_attent
   -PyTorchSafeSDPA
 ```
 
-`-PyTorchSafeSDPA` does **not** fake a lower compute capability. It only disables PyTorch Flash and memory-efficient SDPA inside that Python process, leaving the math backend enabled. This avoids the NVIDIA-cubin-only fused paths while preserving the normal `ZLUDA_CC` value for the rest of the application.
+`-PyTorchSafeSDPA` does **not** fake a lower compute capability. It only disables PyTorch Flash and memory-efficient SDPA inside that Python process, leaving the math backend enabled. This avoids the NVIDIA-cubin-only fused paths while preserving the normal `ZLUDA_CC` value for the rest of the application. On `latest`, this safe policy is the default; pass `-AllowUnsafeFusedSDPA` only when intentionally reproducing upstream fused-kernel behavior.
 
 ZLUDA compiles some PyTorch device kernels on first use. For training-heavy workloads, the optional warmup helper performs both static `torch_cuda.dll` precompilation and a small dynamic backward/optimizer warmup so first-use compilation does not get mistaken for a hang. Use `-Extended` to additionally prewarm sort/topk, determinant, BatchNorm/GroupNorm backward, dropout, grid-sample and transpose-convolution paths that can otherwise have very large first-use latency:
 

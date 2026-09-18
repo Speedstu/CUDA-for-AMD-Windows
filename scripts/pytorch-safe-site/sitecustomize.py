@@ -1,9 +1,10 @@
-"""Opt-in PyTorch compatibility hook for CUDA-on-AMD/ZLUDA.
+"""PyTorch compatibility hook for CUDA-on-AMD/ZLUDA.
 
-Loaded only when scripts/run-zluda.ps1 is invoked with -PyTorchSafeSDPA.
-It disables fused SDPA backends that require NVIDIA-only cubins on the
-validated PyTorch 2.0.1+cu118 stack, leaving the numerically validated math
-backend enabled.
+Loaded when scripts/run-zluda.ps1 enables the PyTorch SDPA safety policy.
+That happens explicitly with -PyTorchSafeSDPA and automatically for the
+unpatched upstream "latest" channel unless -AllowUnsafeFusedSDPA is supplied.
+It disables fused SDPA backends that require NVIDIA-only cubins, leaving the
+numerically validated math backend enabled.
 """
 from __future__ import annotations
 

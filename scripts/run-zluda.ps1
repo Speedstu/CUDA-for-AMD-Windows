@@ -4,7 +4,8 @@ param(
     [string[]]$ProgramArgs = @(),
     [string]$RuntimeRoot,
     [switch]$NoStage,
-    [switch]$PyTorchSafeSDPA
+    [switch]$PyTorchSafeSDPA,
+    [switch]$AllowUnsafeFusedSDPA
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,19 @@ $hip = $config.hip_root
 $libtorch = $config.libtorch_root
 $env:ZLUDA_CC = if ($config.zluda_cc) { $config.zluda_cc } else { '8.6' }
 $env:TORCH_ALLOW_TF32_CUBLAS_OVERRIDE = '1'
-if ($PyTorchSafeSDPA) {
+
+# The pinned upstream "latest" asset is intentionally unpatched. On PyTorch,
+# its fused Flash / memory-efficient SDPA paths can return incorrect tensors
+# instead of safely refusing the unsupported NVIDIA-cubin path.
+$latestChannel = [bool](
+    $config.upstream -and
+    [string]$config.upstream.zluda_channel -eq 'latest'
+)
+$programLeaf = [System.IO.Path]::GetFileName($Program)
+$pythonProgram = [bool]($programLeaf -match '^python(?:w|[0-9.]*)?\.exe$')
+$autoSafeSDPA = [bool]($latestChannel -and $pythonProgram -and -not $AllowUnsafeFusedSDPA)
+$useSafeSDPA = [bool]($PyTorchSafeSDPA -or $autoSafeSDPA)
+if ($useSafeSDPA) {
     $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
     if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {
         throw "Missing PyTorch safe-site hook: $safeSite"
@@ -53,7 +66,10 @@ $env:PATH = (($parts | Where-Object { $_ -and (Test-Path $_) }) -join ';') + ';'
 $launcher = Join-Path $zluda 'zluda.exe'
 if (-not (Test-Path $launcher)) { throw "Missing ZLUDA launcher: $launcher" }
 Write-Host "[run] ZLUDA_CC=$env:ZLUDA_CC"
-if ($PyTorchSafeSDPA) { Write-Host '[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on' }
+if ($useSafeSDPA) {
+    $reason = if ($PyTorchSafeSDPA) { 'explicit' } else { 'automatic for unpatched latest channel' }
+    Write-Host "[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on ($reason)"
+}
 Write-Host "[run] $launcher -- $Program $($ProgramArgs -join ' ')"
 & $launcher '--' $Program @ProgramArgs
 exit $LASTEXITCODE
