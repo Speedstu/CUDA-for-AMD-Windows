@@ -71,7 +71,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
              mutable: Mutex::new(ModuleMutable {
                  functions: FxHashMap::default(),
              }),
-@@ -158,11 +162,17 @@ impl Module {
+@@ -158,4 +162,10 @@ impl Module {
          });
          mutable
 -            .get_function(self.base, self.sm_version, name.to_owned(), explicit_args)
@@ -83,10 +83,7 @@ diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
 +                explicit_args,
 +            )
              .map(|f| unsafe { (f as *const Function).as_ref().unwrap() })
-     }
- }
- 
- fn get_best_ptx_and_compile(
+@@ -165,4 +175,4 @@ fn get_best_ptx_and_compile(
      global_state: &GlobalState,
      image: CodeLibraryRef<'_>,
 -) -> Result<(hipModule_t, u32, Option<Metadata32Bit>), CUerror> {
