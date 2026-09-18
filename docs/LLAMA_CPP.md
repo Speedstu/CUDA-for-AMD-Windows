@@ -152,6 +152,15 @@ Trace output is written under:
 
 The useful evidence is the final `log.txt` region around the first failed launch plus any `module_*.ptx` / `module_*.log` generated for that run. A `cuModuleGetFunction` record can be correlated with the function handle later passed to `cuLaunchKernel`, which lets us identify the actual failing kernel rather than attributing everything to the high-level `ggml_cuda_compute_forward` call.
 
+The repository includes a trace summarizer for that correlation:
+
+```powershell
+python .\scripts\summarize-zluda-trace.py "$env:TEMP\zluda" `
+  --json .\.runtime\llama-zluda-trace-summary.json
+```
+
+It selects the newest `log.txt` under the supplied trace directory, maps function handles back to kernel names, lists launch calls/non-success statuses, and surfaces any `module_*.log` compiler diagnostics.
+
 Because gfx1150 has previously hard-locked during newer llama.cpp kernel experiments, trace mode does **not** make the test safe. Only collect this on a machine where a forced restart is acceptable, and prefer the smallest possible workload/output length.
 
 ## Stability warning
