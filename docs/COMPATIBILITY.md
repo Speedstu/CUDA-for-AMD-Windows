@@ -53,6 +53,26 @@ Smoke coverage includes the CUDA-facing driver plus cuBLAS, cuBLASLt, cuSPARSE a
 
 Dense/GEMM-heavy workloads can work without cuDNN. Convolution-heavy applications may need newer Windows ROCm components or additional compatibility work.
 
+### CUDA-facing DLL map
+
+This is a quick map of the main CUDA-facing Windows DLLs encountered by the project. A row marked experimental or partial is **not** a claim of complete library/API compatibility.
+
+| CUDA-facing DLL / library | Typical role | AMD-side path in this project | Current status |
+| --- | --- | --- | --- |
+| `nvcuda.dll` | CUDA Driver API | ZLUDA → HIP | ✅ validated core path |
+| `cudart64_12.dll` | CUDA Runtime API used by applications | Application-side NVIDIA CUDA Runtime; used alongside the compatibility stack when an application requires it | ⚠️ required by some apps; not an AMD reimplementation |
+| `cublas64_12.dll` | BLAS / GEMM | ZLUDA → rocBLAS | ✅ validated operations |
+| `cublasLt64_12.dll` | advanced GEMM / Lt API | ZLUDA → hipBLASLt / AMD backend path | 🟡 capability-specific |
+| `cufft64_11.dll` | FFT | ZLUDA → rocFFT | ✅ validated operations |
+| `cusparse64_12.dll` | sparse linear algebra | ZLUDA → rocSPARSE | ✅ validated operations |
+| `cusolver64_11.dll` | dense solver / decompositions | project proxy → hipSOLVER | 🧪 experimental |
+| `cudnn64_8.dll` | deep-learning primitives / convolution training | project cuDNN v8 bridge → MIOpen | 🧪 experimental; validated forward + dX + dW subset on gfx1200 |
+| `nvml.dll` / NVML-facing path | GPU discovery / telemetry compatibility | ZLUDA/project NVML compatibility layer | ✅ validated reference path |
+
+The exact DLL filenames depend on the CUDA major/minor version an application was built against. The table describes the **library role and tested compatibility route**, not a promise that every export in a given DLL is implemented.
+
+For the cuDNN bridge specifically, the generated top-level `cudnn64_8.dll` preserves the original cuDNN v8 export surface and overrides only the subset listed in [`../native/cudnn_bridge/bridge-manifest.json`](../native/cudnn_bridge/bridge-manifest.json). See [`CUDNN_BRIDGE.md`](CUDNN_BRIDGE.md) for the validated scope and limitations.
+
 ## Experimental ZLUDA v7 path
 
 The source patch set under [`../patches/zluda-v7-preview10/`](../patches/zluda-v7-preview10/) targets pinned upstream ZLUDA `v7-preview.10`.

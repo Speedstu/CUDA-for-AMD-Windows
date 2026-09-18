@@ -62,7 +62,7 @@ See [`scripts/README.md`](scripts/README.md) for the stable user-facing commands
 | Radeon 890M | `gfx1150` | 🟡 community partial | HIP/GEMM reported working; broader paths still under validation |
 | Other recognized AMD GPUs | architecture-dependent | ⚪ unverified candidate | Detection is not functional validation |
 
-Full details, version floors, evidence levels, and known limitations: [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
+Full details, version floors, evidence levels, known limitations, and the **CUDA DLL → AMD backend map**: [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md#cuda-facing-dll-map).
 
 ## What has been validated?
 
