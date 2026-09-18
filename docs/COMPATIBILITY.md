@@ -1,0 +1,116 @@
+# Compatibility
+
+Support in this project is reported per **hardware + software stack + capability/workload**. A GPU being detected does not mean every CUDA application is supported.
+
+## GPU status
+
+| GPU | Native target | Status | Evidence |
+| --- | --- | --- | --- |
+| Radeon RX 9060 XT | `gfx1200` | **validated reference** | Main development machine; stable public stack and experimental v7 validation |
+| Radeon RX 9070 XT | `gfx1201` | **validated external** | Separately tested Windows AMD/ZLUDA training setup; see [`RX9070XT_VALIDATION.md`](RX9070XT_VALIDATION.md) |
+| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM reported working; broader convolution/attention/application behavior remains under validation |
+| Other recognized AMD GPUs | architecture-dependent | **unverified candidate** | Scanner/runtime detection only until functional evidence is submitted |
+
+`gfx1150` / RDNA 3.5 currently requires HIP SDK **7.2 or newer** in the project profile. The historical `gfx1200` reference uses HIP SDK 6.4.
+
+The machine-readable architecture metadata lives in [`../manifests/windows-gpu-profiles.json`](../manifests/windows-gpu-profiles.json).
+
+## Evidence levels
+
+The repository uses the narrowest label supported by the evidence:
+
+| Level | Meaning |
+| --- | --- |
+| detected | GPU/runtime can be enumerated |
+| loadable | CUDA-facing DLL/API loads |
+| safe refusal | unsupported behavior fails explicitly without wrong output or process damage |
+| functional pass | operation completes and matches a CPU/native reference within tolerance |
+| integration validated | real application/workload completes end-to-end and exits cleanly |
+
+A higher level must not be inferred from a lower one.
+
+## Stable reference path
+
+The public stable reference is pinned around:
+
+- Radeon RX 9060 XT / `gfx1200`
+- ZLUDA `v6-preview.69`
+- AMD HIP SDK `6.4`
+- LibTorch `2.3.0 + cu118`
+
+Smoke coverage includes the CUDA-facing driver plus cuBLAS, cuBLASLt, cuSPARSE and cuFFT loading. Numerical validation and the real PPO integration test are documented in [`VALIDATION.md`](VALIDATION.md).
+
+### Runtime coverage on the validated stable reference
+
+| CUDA-facing component | Current reference result |
+| --- | --- |
+| CUDA driver / `nvcuda` | ✅ validated path |
+| cuBLAS | ✅ via rocBLAS |
+| cuBLASLt | ✅ via hipBLASLt |
+| cuSPARSE | ✅ via rocSPARSE |
+| cuFFT | ✅ validated path |
+| cuDNN | ⚠️ not available as a complete equivalent in the validated stable Windows HIP SDK path |
+
+Dense/GEMM-heavy workloads can work without cuDNN. Convolution-heavy applications may need newer Windows ROCm components or additional compatibility work.
+
+## Experimental ZLUDA v7 path
+
+The source patch set under [`../patches/zluda-v7-preview10/`](../patches/zluda-v7-preview10/) targets pinned upstream ZLUDA `v7-preview.10`.
+
+It exists to develop newer CUDA-facing behavior without silently changing the stable installer.
+
+Validated/reference-machine work includes:
+
+- newer driver API coverage such as PCI bus ID and function metadata;
+- launch-attribute probes with unsupported semantics kept fail-closed;
+- PTX metadata/version handling used by newer applications;
+- CUDA Graph stream-capture compatibility;
+- cuFFT and cuSPARSE paths;
+- NVML compatibility;
+- experimental cuSOLVER → hipSOLVER bridging;
+- SDPA guards for unsafe fallback kernels;
+- llama.cpp registration and end-to-end GPU smoke.
+
+A source patch compiling successfully is not proof that it is functionally correct on every AMD GPU.
+
+## Safe failure matters
+
+The project does **not** count any of the following as support:
+
+- device detection followed by CPU fallback;
+- a kernel returning a numerically incorrect tensor;
+- a timeout or GPU hang;
+- a process that returns a result and then crashes during teardown;
+- ignoring a CUDA launch attribute when that changes execution semantics;
+- pretending an unavailable NVIDIA-cubin-only implementation is AMD-native.
+
+For fused SDPA, a clean `UNSUPPORTED` result is preferred over silently accepting a fallback that does not contain the real compute path.
+
+## Known limitations
+
+- ZLUDA is not a complete CUDA implementation.
+- Windows exposes only a subset of the full ROCm ecosystem.
+- Some CUDA software depends on NVIDIA-specific cubins, PTX behavior, driver semantics or libraries.
+- NCCL, TensorRT, unsupported custom CUDA extensions and architecture-specific kernels may fail.
+- JIT compilation can make first-use latency look like a hang unless timeouts account for compilation.
+- `ZLUDA_CC` is an emulated CUDA-facing compute capability; it is not the AMD `gfxXXXX` architecture.
+- Hardware status can change as drivers, HIP SDKs, ZLUDA and applications evolve.
+
+## Reporting another GPU
+
+Run:
+
+```powershell
+.\scripts\gpu-scan.ps1 -OutputPath .\gpu-report.json
+.\scripts\doctor.ps1
+.\scripts\test-runtime.ps1
+.\scripts\test-functional.ps1 -PythonExe C:\path\to\cuda-facing-venv\Scripts\python.exe
+```
+
+For broader bring-up:
+
+```powershell
+.\scripts\test-capabilities.ps1 -PythonExe C:\path\to\cuda-facing-venv\Scripts\python.exe
+```
+
+Then use the repository's **GPU compatibility report** issue template and include the exact GPU, `gfx` target, driver, HIP version, ZLUDA version/channel, application version, command, first useful error, and proof of GPU execution.
