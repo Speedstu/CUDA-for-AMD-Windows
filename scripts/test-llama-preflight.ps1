@@ -133,7 +133,7 @@ $driverReportPath = Join-Path $RuntimeRoot 'llama-driver-preflight.json'
 $driverPreflight = $null
 if ($PythonExe) {
     try {
-        & (Join-Path $PSScriptRoot 'test-capabilities.ps1') -RuntimeRoot $RuntimeRoot -PythonExe $PythonExe -Tests @('driver_pci_bus_id','driver_launch_ex','driver_func_attributes') -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds 0 -ReportPath $driverReportPath
+        & (Join-Path $PSScriptRoot 'test-capabilities.ps1') -RuntimeRoot $RuntimeRoot -PythonExe $PythonExe -Tests @('driver_pci_bus_id','driver_launch_ex','driver_func_attributes','driver_function_metadata') -TimeoutSeconds $TimeoutSeconds -RetryTimeoutSeconds 0 -ReportPath $driverReportPath
         if (Test-Path $driverReportPath) {
             $driverPreflight = Get-Content $driverReportPath -Raw | ConvertFrom-Json
         }
