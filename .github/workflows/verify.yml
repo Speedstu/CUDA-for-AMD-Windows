@@ -52,6 +52,8 @@ jobs:
           }
           $profiles = Get-Content manifests/windows-gpu-profiles.json -Raw | ConvertFrom-Json
           if ($profiles.schema -lt 2) { throw 'GPU profile schema did not include functional compatibility metadata' }
+          if ($profiles.architectures.gfx1200.project_validation.status -ne 'validated-reference') { throw 'gfx1200 reference validation missing' }
+          if ($profiles.architectures.gfx1201.project_validation.status -ne 'validated-external') { throw 'gfx1201 external validation missing' }
           if ($profiles.architectures.gfx1150.minimum_hip_sdk -ne '7.2') { throw 'gfx1150 HIP floor missing' }
           if ($profiles.architectures.gfx1150.community_report.status -ne 'partial') { throw 'gfx1150 partial report missing' }
 
