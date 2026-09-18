@@ -28,7 +28,8 @@ jobs:
       - name: Validate Python probes
         shell: pwsh
         run: |
-          python -m py_compile scripts/functional_probe.py scripts/capability_probe.py scripts/gemm_benchmark.py scripts/training_warmup.py
+          python -m py_compile scripts/functional_probe.py scripts/capability_probe.py scripts/gemm_benchmark.py scripts/training_warmup.py scripts/summarize-zluda-trace.py
+          python scripts/summarize-zluda-trace.py --self-test
           $tests = @(python scripts/functional_probe.py --list-tests)
           $expected = @('matmul','conv2d','sdpa_math','sdpa_mem_efficient')
           foreach ($name in $expected) {
