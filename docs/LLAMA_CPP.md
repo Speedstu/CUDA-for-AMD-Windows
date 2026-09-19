@@ -114,8 +114,17 @@ Run the focused driver probes with:
 ```powershell
 .\scripts\test-capabilities.ps1 `
   -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
-  -Tests driver_pci_bus_id,driver_launch_ex,driver_pdl_semantics,driver_func_attributes,driver_function_metadata,driver_buffer_clear
+  -Tests driver_pci_bus_id,driver_launch_ex,driver_pdl_semantics,driver_func_attributes,driver_function_metadata,driver_ptx_selection,driver_buffer_clear
 ```
+
+
+### Multi-PTX target selection
+
+Inspection of the tested b10978 `ggml-cuda.dll` found 143 CUDA fatbins. Every observed fatbin contains PTX 8.4 variants for `sm_50`, `sm_61`, `sm_70`, `sm_75`, `sm_80`, and `sm_90`, plus NVIDIA cubins for `sm_86` and `sm_89`.
+
+The v7 loader previously reversed the PTX list and selected the first fully parsed entry, which makes these fatbins select `sm_90` regardless of `ZLUDA_CC`. A synthetic regression fatbin confirms the bug: with ZLUDA advertising compute capability 8.6, the old loader executes the `sm_90` kernel body instead of the highest compatible `sm_80` PTX.
+
+`ptx-target-selection-candidate.patch` changes selection to the highest PTX target at or below the advertised CUDA compute capability. This is a candidate until the gfx1200 reference workload and the gfx1150 issue reporter both re-test it.
 
 ## Focused buffer-clear / kernel-loading probe
 
@@ -357,8 +366,7 @@ For a modern llama.cpp build, this project will treat the path as validated only
 1. CUDA device registration succeeds without CPU fallback.
 2. Driver launch probes are clean.
 3. The selected kernels launch without GPU reset/hang.
-4. Prompt processing and token decode both complete.
-5. Output is compared against a known-good native/reference path where practical.
+4. Prompt processing and token decode both complete.5. Output is compared against a known-good native/reference path where practical.
 6. Repeated runs exit cleanly with no delayed driver crash.
 
-The gfx1200 reference satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. The gfx1150 reporter has now confirmed the registration/launch/PTX-metadata/SDPA fixes but still hits a later real-kernel failure, so issue #3 remains open for the RDNA 3.5 kernel-execution boundary and the still-hanging conv2d path.
+The gfx1200 reference satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. On gfx1150, the registration/launch/PTX-metadata/SDPA fixes are confirmed, while modern llama.cpp still has a separate application device-code/kernel-execution boundary. That application-specific work is tracked separately from the original issue #3 conv2d/SDPA report.

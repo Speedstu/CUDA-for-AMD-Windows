@@ -122,3 +122,13 @@ Use the repository helper after staging the experimental runtime:
 ```
 
 It invokes ZLUDA's source-build `zluda_precompile.exe` when available and then executes a small dynamic training warmup. Add `-Extended` to also prewarm especially cold sort/topk, determinant, BatchNorm/GroupNorm, dropout, grid-sample and transpose-convolution paths. The cache remains local to the user and is never committed.
+
+## PTX target-selection candidate
+
+`ptx-target-selection-candidate.patch` fixes a separate multi-PTX fatbin selection bug.
+
+Upstream v7 currently walks PTX entries in reverse and stops at the first fully parsed module. In a modern llama.cpp b10978 Windows CUDA build, each observed fatbin contains PTX 8.4 variants for `sm_50`, `sm_61`, `sm_70`, `sm_75`, `sm_80`, and `sm_90`, plus NVIDIA cubins for `sm_86` and `sm_89`. The reverse iteration therefore selects `sm_90` even when ZLUDA advertises CUDA compute capability 8.0 or 8.6.
+
+The candidate instead selects the highest parsable PTX target **at or below** `ZLUDA_CC`. If no compatible PTX target exists, it returns `CUDA_ERROR_NO_BINARY_FOR_GPU` rather than compiling code above the advertised compatibility boundary.
+
+The regression probe `driver_ptx_selection` builds an in-memory fatbin containing `sm_80` and `sm_90` versions of the same kernel. Under `ZLUDA_CC=8.6`, the current unpatched loader executes the `sm_90` body; the candidate must execute `sm_80`.

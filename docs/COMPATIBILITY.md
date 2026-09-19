@@ -8,7 +8,7 @@ Support in this project is reported per **hardware + software stack + capability
 | --- | --- | --- | --- |
 | Radeon RX 9060 XT | `gfx1200` | **validated reference** | Main development machine; stable public stack and experimental v7 validation |
 | Radeon RX 9070 XT | `gfx1201` | **validated external** | Separately tested Windows AMD/ZLUDA training setup; see [`RX9070XT_VALIDATION.md`](RX9070XT_VALIDATION.md) |
-| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM works; patched driver/PTX + SDPA safety fixes confirmed, while conv2d still hangs and modern llama.cpp still fails later in kernel execution |
+| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM works; patched driver/PTX + SDPA safety fixes confirmed. The known legacy cuDNN conv2d hang is guarded by an automatic no-cuDNN PyTorch fallback; modern llama.cpp remains a separate application-kernel compatibility issue |
 | Other recognized AMD GPUs | architecture-dependent | **unverified candidate** | Scanner/runtime detection only until functional evidence is submitted |
 
 `gfx1150` / RDNA 3.5 currently requires HIP SDK **7.2 or newer** in the project profile. The historical `gfx1200` reference uses HIP SDK 6.4.
@@ -115,6 +115,8 @@ The project does **not** count any of the following as support:
 - pretending an unavailable NVIDIA-cubin-only implementation is AMD-native.
 
 For fused SDPA, a clean `UNSUPPORTED` result is preferred over silently accepting a fallback that does not contain the real compute path. The patched v7 candidate has now been independently re-tested on gfx1150: the previously finite-but-wrong memory-efficient SDPA result becomes an explicit safe refusal there as well.
+
+For `gfx1150` PyTorch convolution, the legacy cuDNN/ZLUDA route is handled conservatively too: the launcher and `conv2d` capability probe avoid the known hanging path by disabling cuDNN unless a staged cuDNN→MIOpen bridge with an explicit MIOpen backend is detected. This is a safety fallback, not a claim that native cuDNN behavior is implemented. `-AllowUnsafeCudnnConv` exists only for deliberate A/B testing.
 
 ## Known limitations
 

@@ -12,6 +12,7 @@ import argparse
 import ctypes
 import json
 import math
+import struct
 import sys
 import time
 import traceback
@@ -25,6 +26,7 @@ TESTS = (
     "driver_pdl_semantics",
     "driver_func_attributes",
     "driver_function_metadata",
+    "driver_ptx_selection",
     "driver_buffer_clear",
     "nvml",
     "memory_copy",
@@ -636,6 +638,217 @@ L_pdl_spin:
 
 
 
+
+def run_driver_ptx_selection(torch):
+    """Check that multi-PTX fatbins honor the advertised CUDA capability."""
+    cuda = _load_win_dll("nvcuda.dll")
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cuda.cuDeviceGet.restype = ctypes.c_int
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    cuda.cuCtxCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_int]
+    cuda.cuCtxCreate_v2.restype = ctypes.c_int
+    cuda.cuCtxDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuCtxDestroy_v2.restype = ctypes.c_int
+    cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cuda.cuModuleLoadData.restype = ctypes.c_int
+    cuda.cuModuleGetFunction.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p
+    ]
+    cuda.cuModuleGetFunction.restype = ctypes.c_int
+    cuda.cuFuncGetAttribute.argtypes = [
+        ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_void_p
+    ]
+    cuda.cuFuncGetAttribute.restype = ctypes.c_int
+    cuda.cuModuleUnload.argtypes = [ctypes.c_void_p]
+    cuda.cuModuleUnload.restype = ctypes.c_int
+    cuda.cuMemAlloc_v2.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t]
+    cuda.cuMemAlloc_v2.restype = ctypes.c_int
+    cuda.cuMemFree_v2.argtypes = [ctypes.c_uint64]
+    cuda.cuMemFree_v2.restype = ctypes.c_int
+    cuda.cuMemcpyDtoH_v2.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t
+    ]
+    cuda.cuMemcpyDtoH_v2.restype = ctypes.c_int
+    cuda.cuLaunchKernel.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    cuda.cuLaunchKernel.restype = ctypes.c_int
+    cuda.cuCtxSynchronize.argtypes = []
+    cuda.cuCtxSynchronize.restype = ctypes.c_int
+
+    def ck(code: int, call: str):
+        if code != 0:
+            raise RuntimeError(f"{call} returned CUDA error {code}")
+
+    def ptx(target_sm: int) -> bytes:
+        return f""".version 8.4
+.target sm_{target_sm}
+.address_size 64
+.visible .entry ptx_select_probe(.param .u64 output_ptr)
+{{
+    .reg .b32 %r1;
+    .reg .b64 %rd1;
+    ld.param.u64 %rd1, [output_ptr];
+    mov.u32 %r1, {target_sm};
+    st.global.u32 [%rd1], %r1;
+    ret;
+}}
+\0""".encode("ascii")
+
+    def fatbin_file(target_sm: int) -> bytes:
+        payload = ptx(target_sm)
+        header = struct.pack(
+            "<HHIIIIIIIIIQQQ",
+            1, 0x101, 64, len(payload),
+            0, 0, 0, 0,
+            target_sm, 64, 0,
+            0, 0, len(payload),
+        )
+        if len(header) != 64:
+            raise RuntimeError(f"unexpected synthetic fatbin header size {len(header)}")
+        return header + payload
+
+    files = fatbin_file(80) + fatbin_file(90)
+    fatbin = struct.pack("<IHHQ", 0xBA55ED50, 1, 16, len(files)) + files
+    image = ctypes.create_string_buffer(fatbin, len(fatbin))
+
+    ck(cuda.cuInit(0), "cuInit")
+    dev = ctypes.c_int()
+    ck(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+    advertised = tuple(int(x) for x in torch.cuda.get_device_capability(0))
+    advertised_sm = advertised[0] * 10 + advertised[1]
+    available = (80, 90)
+    compatible = [sm for sm in available if sm <= advertised_sm]
+    if not compatible:
+        raise RuntimeError(
+            f"no synthetic PTX target <= advertised sm_{advertised_sm}"
+        )
+    expected = max(compatible)
+
+    ctx = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
+    created_ctx = False
+    if not ctx.value:
+        ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
+        created_ctx = True
+
+    module = ctypes.c_void_p()
+    device_out = ctypes.c_uint64()
+    try:
+        load_rc = int(
+            cuda.cuModuleLoadData(
+                ctypes.byref(module), ctypes.cast(image, ctypes.c_void_p)
+            )
+        )
+        if load_rc != 0:
+            return {
+                "ok": False,
+                "advertised_capability": list(advertised),
+                "advertised_sm": advertised_sm,
+                "available_targets": list(available),
+                "expected_target": expected,
+                "module_load": load_rc,
+            }
+
+        func = ctypes.c_void_p()
+        ck(
+            cuda.cuModuleGetFunction(
+                ctypes.byref(func), module, b"ptx_select_probe"
+            ),
+            "cuModuleGetFunction",
+        )
+
+        ptx_version = ctypes.c_int()
+        binary_version = ctypes.c_int()
+        ptx_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(ptx_version), 5, func))
+        binary_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(binary_version), 6, func))
+
+        ck(
+            cuda.cuMemAlloc_v2(
+                ctypes.byref(device_out), ctypes.sizeof(ctypes.c_uint32)
+            ),
+            "cuMemAlloc",
+        )
+        ptr_arg = ctypes.c_uint64(device_out.value)
+        params = (ctypes.c_void_p * 1)(
+            ctypes.cast(ctypes.byref(ptr_arg), ctypes.c_void_p)
+        )
+        launch_rc = int(
+            cuda.cuLaunchKernel(
+                func, 1, 1, 1, 1, 1, 1, 0, None,
+                ctypes.cast(params, ctypes.c_void_p), None
+            )
+        )
+        sync_rc = int(cuda.cuCtxSynchronize()) if launch_rc == 0 else None
+        host = ctypes.c_uint32(0)
+        copy_rc = None
+        if sync_rc == 0:
+            copy_rc = int(
+                cuda.cuMemcpyDtoH_v2(
+                    ctypes.byref(host),
+                    device_out.value,
+                    ctypes.sizeof(host),
+                )
+            )
+
+        selected = int(host.value) if copy_rc == 0 else None
+        ok = (
+            ptx_rc == 0
+            and int(ptx_version.value) == 84
+            and binary_rc == 0
+            and launch_rc == 0
+            and sync_rc == 0
+            and copy_rc == 0
+            and selected == expected
+        )
+        return {
+            "ok": ok,
+            "advertised_capability": list(advertised),
+            "advertised_sm": advertised_sm,
+            "available_targets": list(available),
+            "expected_target": expected,
+            "module_load": load_rc,
+            "ptx_version": {
+                "rc": ptx_rc,
+                "value": int(ptx_version.value),
+                "expected": 84,
+            },
+            "binary_version": {
+                "rc": binary_rc,
+                "value": int(binary_version.value),
+                "note": "diagnostic only; execution is the selection oracle",
+            },
+            "execution": {
+                "launch": launch_rc,
+                "sync": sync_rc,
+                "copy_back": copy_rc,
+                "selected_value": selected,
+                "expected": expected,
+            },
+        }
+    finally:
+        if device_out.value:
+            try:
+                cuda.cuMemFree_v2(device_out.value)
+            except Exception:
+                pass
+        if module.value:
+            try:
+                cuda.cuModuleUnload(module)
+            except Exception:
+                pass
+        if created_ctx and ctx.value:
+            try:
+                cuda.cuCtxDestroy_v2(ctx)
+            except Exception:
+                pass
 def run_driver_buffer_clear(torch):
     """Isolate the llama.cpp-style clear/synchronize path at the Driver API level.
 
@@ -731,12 +944,14 @@ def run_driver_buffer_clear(torch):
             "cuMemcpyHtoD(initial pattern)",
         )
 
+        advertised_capability = tuple(int(x) for x in torch.cuda.get_device_capability(0))
+        advertised_sm = advertised_capability[0] * 10 + advertised_capability[1]
         variants = (
-            ("ptx70_sm80", "7.0", "sm_80"),
-            ("ptx84_sm90", "8.4", "sm_90"),
+            ("ptx70_sm80", "7.0", "sm_80", 80),
+            ("ptx84_sm90", "8.4", "sm_90", 90),
         )
         results = {}
-        for name, ptx_version, target in variants:
+        for name, ptx_version, target, target_sm in variants:
             module = ctypes.c_void_p()
             try:
                 ptx = f""".version {ptx_version}
@@ -784,6 +999,7 @@ CLEAR_DONE:
                     "copy_back": None,
                     "all_zero": False,
                     "first_nonzero": None,
+                    "expected_compatible": target_sm <= advertised_sm,
                 }
                 if load_rc != 0:
                     results[name] = row
@@ -858,6 +1074,8 @@ CLEAR_DONE:
                         pass
 
         def row_ok(row):
+            if not row["expected_compatible"]:
+                return row["module_load"] == 209
             return (
                 row["module_load"] == 0
                 and row["function_get"] == 0
@@ -871,6 +1089,8 @@ CLEAR_DONE:
         return {
             "ok": ok,
             "buffer_elements": count,
+            "advertised_capability": list(advertised_capability),
+            "advertised_sm": advertised_sm,
             "stream": "non-default_non-blocking",
             "variants": results,
             "interpretation": (
@@ -1128,7 +1348,7 @@ def run_driver_function_metadata(torch):
 
     try:
         baseline = probe_case("7.0", 80, 70, "metadata_probe_70")
-        llama_gate = probe_case("8.4", 90, 84, "metadata_probe_84")
+        llama_gate = probe_case("8.4", 80, 84, "metadata_probe_84")
         false_pdl_gate = bool(
             llama_gate["ptx_version"]["value"] >= 90
             and llama_gate["ptx_version"]["expected"] < 90
@@ -1143,12 +1363,12 @@ def run_driver_function_metadata(torch):
             "binary_version": baseline["binary_version"],
             "cases": {
                 "baseline_ptx70_sm80": baseline,
-                "llama_b10978_ptx84_sm90": llama_gate,
+                "llama_b10978_ptx84_sm80": llama_gate,
             },
             "llama_b10978_false_pdl_gate": false_pdl_gate,
             "notes": {
                 "semantic_regression": "PTX_VERSION must describe PTX ISA version, not target SM",
-                "llama_b10978": "PTX 8.4 targeted at sm_90 must report 84; reporting 90 can falsely enable ptxVersion>=90 PDL dispatch",
+                "llama_b10978": "Selected PTX 8.4 must report 84 independently of target SM; reporting target SM can falsely enable ptxVersion>=90 PDL dispatch",
                 "binary_version": "recorded separately because applications may use it for architecture gating; mismatch is diagnostic until validated",
             },
         }
@@ -1874,6 +2094,7 @@ def run_amp(torch):
 def run_conv2d(torch):
     import torch.nn.functional as F
     torch.manual_seed(112)
+    cudnn_enabled = bool(torch.backends.cudnn.enabled)
     x = torch.randn(2, 8, 32, 32)
     w = torch.randn(16, 8, 3, 3)
     b = torch.randn(16)
@@ -1881,7 +2102,12 @@ def run_conv2d(torch):
     got = F.conv2d(x.cuda(), w.cuda(), b.cuda(), padding=1)
     sync(torch)
     check = tensor_metrics(torch, got, ref, 8e-3, 8e-4)
-    return {"ok": check["ok"], "numerics": check}
+    return {
+        "ok": check["ok"],
+        "numerics": check,
+        "cudnn_enabled": cudnn_enabled,
+        "path": "cudnn_or_bridge" if cudnn_enabled else "pytorch_no_cudnn_fallback",
+    }
 
 
 
@@ -1983,6 +2209,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_pdl_semantics": run_driver_pdl_semantics,
     "driver_func_attributes": run_driver_func_attributes,
     "driver_function_metadata": run_driver_function_metadata,
+    "driver_ptx_selection": run_driver_ptx_selection,
     "driver_buffer_clear": run_driver_buffer_clear,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,

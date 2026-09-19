@@ -7,6 +7,7 @@ on:
       - 'patches/zluda-v7-preview10/windows-amd-compat.patch'
       - 'patches/zluda-v7-preview10/launch-attributes-candidate.patch'
       - 'patches/zluda-v7-preview10/ptx-version-candidate.patch'
+      - 'patches/zluda-v7-preview10/ptx-target-selection-candidate.patch'
       - '.github/workflows/zluda-candidate-build.yml'
 
 jobs:
@@ -56,6 +57,8 @@ jobs:
           git apply ..\patches\zluda-v7-preview10\launch-attributes-candidate.patch
           git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
           git apply ..\patches\zluda-v7-preview10\ptx-version-candidate.patch
+          git apply --check --whitespace=error-all ..\patches\zluda-v7-preview10\ptx-target-selection-candidate.patch
+          git apply ..\patches\zluda-v7-preview10\ptx-target-selection-candidate.patch
           git diff --check
           git diff --stat
 

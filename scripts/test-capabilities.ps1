@@ -103,6 +103,20 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
     }
     if (Test-Path $hipblasltLib) { Set-Env $psi 'HIPBLASLT_TENSILE_LIBPATH' $hipblasltLib }
     Set-Env $psi 'PATH' "$hip\bin;$zluda;$env:PATH"
+
+    if (
+        $Name -eq 'conv2d' -and
+        $config.gpu -and
+        [string]$config.gpu.arch -eq 'gfx1150'
+    ) {
+        $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
+        if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {
+            throw "Missing PyTorch safe-site hook: $safeSite"
+        }
+        Set-Env $psi 'CUDAAMD_PYTORCH_SAFE_CONV2D' '1'
+        $probePythonPath = $safeSite + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })
+        Set-Env $psi 'PYTHONPATH' $probePythonPath
+    }
     if ($config.gpu -and $null -ne $config.gpu.index) {
         Set-Env $psi 'HIP_VISIBLE_DEVICES' ([string]$config.gpu.index)
         Set-Env $psi 'ROCR_VISIBLE_DEVICES' ([string]$config.gpu.index)

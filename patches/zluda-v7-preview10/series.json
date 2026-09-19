@@ -36,6 +36,15 @@
       "required_probes": [
         "driver_function_metadata"
       ]
+    },
+    {
+      "order": 40,
+      "file": "ptx-target-selection-candidate.patch",
+      "status": "candidate",
+      "purpose": "Select the highest compatible PTX target at or below the advertised ZLUDA compute capability",
+      "required_probes": [
+        "driver_ptx_selection"
+      ]
     }
   ]
 }

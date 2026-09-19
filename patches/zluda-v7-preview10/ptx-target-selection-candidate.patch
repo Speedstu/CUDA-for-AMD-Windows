@@ -1,0 +1,129 @@
+diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
+index 9144302..ae9d846 100644
+--- a/zluda/src/impl/module.rs
++++ b/zluda/src/impl/module.rs
+@@ -11,7 +11,6 @@ use std::{
+     borrow::Cow,
+     ffi::{CStr, CString},
+     fs, mem,
+-    ops::ControlFlow,
+ };
+ use zluda_common::{CodeLibraryRef, CodeModuleRef, ZludaObject};
+ 
+@@ -215,57 +214,68 @@ fn get_best_ptx_and_compile(
+     }) {
+         return Err(CUerror::NO_BINARY_FOR_GPU);
+     }
+-    let maybe_module = ptx_modules
+-        .iter()
+-        .rev() // TODO: actually sort by SM
+-        .try_fold(
+-            None,
+-            |acc: Option<(&Cow<'_, str>, ptx_parser::Module<'_>)>, src| {
+-                let maybe_ast = if cfg!(debug_assertions) {
+-                    ptx_parser::parse_module_checked(src)
+-                } else {
+-                    Ok(ptx_parser::parse_module_unchecked(src))
+-                };
+-                match maybe_ast {
+-                    Err(_) => ControlFlow::Continue(acc),
+-                    Ok(ast) => {
+-                        if ast.invalid_directives == 0 {
+-                            return ControlFlow::Break((src, ast));
+-                        } else {
+-                            ControlFlow::Continue(Some(match acc {
+-                                Some(best_known) => {
+-                                    if ast.invalid_directives < best_known.1.invalid_directives {
+-                                        (src, ast)
+-                                    } else {
+-                                        best_known
+-                                    }
+-                                }
+-                                None => (src, ast),
+-                            }))
+-                        }
+-                    }
+-                }
+-            },
+-        );
+-    let (text, module) = match maybe_module {
+-        ControlFlow::Break((ast, module)) | ControlFlow::Continue(Some((ast, module))) => {
+-            (Some(ast), module)
++    // CUDA PTX is forward-compatible only when the PTX target does not
++    // exceed the device compute capability exposed to the application.
++    // Previously ZLUDA simply reversed the fatbin entries and selected the
++    // first valid module, which made multi-PTX fatbins effectively choose the
++    // highest target (for example sm_90) even when ZLUDA_CC=8.0/8.6.
++    //
++    // This matters for modern applications such as llama.cpp, where every
++    // translation unit may contain several PTX variants. Respect the same
++    // compute-capability boundary that cuDeviceComputeCapability reports.
++    let (cc_major, cc_minor) = global_state.compute_capability;
++    let target_sm = u32::try_from(cc_major)
++        .ok()
++        .and_then(|major| {
++            u32::try_from(cc_minor)
++                .ok()
++                .and_then(|minor| major.checked_mul(10).and_then(|v| v.checked_add(minor)))
++        })
++        .ok_or(CUerror::INVALID_VALUE)?;
++
++    let mut best_valid: Option<(&Cow<'_, str>, ptx_parser::Module<'_>)> = None;
++    let mut best_partial: Option<(&Cow<'_, str>, ptx_parser::Module<'_>)> = None;
++
++    for src in &ptx_modules {
++        let ast = if cfg!(debug_assertions) {
++            match ptx_parser::parse_module_checked(src) {
++                Ok(ast) => ast,
++                Err(_) => continue,
++            }
++        } else {
++            ptx_parser::parse_module_unchecked(src)
++        };
++
++        if ast.sm_version > target_sm {
++            continue;
+         }
+-        ControlFlow::Continue(None) => {
+-            if cfg!(debug_assertions) {
+-                return Err(CUerror::NO_BINARY_FOR_GPU);
++
++        if ast.invalid_directives == 0 {
++            let replace = best_valid
++                .as_ref()
++                .map(|(_, best)| ast.sm_version > best.sm_version)
++                .unwrap_or(true);
++            if replace {
++                best_valid = Some((src, ast));
++            }
++        } else {
++            let replace = best_partial
++                .as_ref()
++                .map(|(_, best)| {
++                    ast.invalid_directives < best.invalid_directives
++                        || (ast.invalid_directives == best.invalid_directives
++                            && ast.sm_version > best.sm_version)
++                })
++                .unwrap_or(true);
++            if replace {
++                best_partial = Some((src, ast));
+             }
+-            (
+-                None,
+-                ptx_parser::Module {
+-                    ptx_version: (1, 0),
+-                    sm_version: 0,
+-                    directives: Vec::new(),
+-                    invalid_directives: usize::MAX,
+-                    address_size: 64,
+-                },
+-            )
+         }
++    }
++
++    let (text, module) = match best_valid.or(best_partial) {
++        Some((text, module)) => (Some(text), module),
++        None => return Err(CUerror::NO_BINARY_FOR_GPU),
+     };
+     let ptx_version =
+         u32::from(module.ptx_version.0) * 10 + u32::from(module.ptx_version.1);

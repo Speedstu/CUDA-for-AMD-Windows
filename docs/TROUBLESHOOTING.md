@@ -80,3 +80,21 @@ For applications that can use PyTorch's math SDPA backend, the launcher now enab
 This does not change `ZLUDA_CC` or claim that the fused backends are implemented. Use `-AllowUnsafeFusedSDPA` only for deliberate compatibility experiments against the raw upstream fused paths.
 
 `-AllowUnsafeFusedSDPA` also clears an inherited `CUDAAMD_PYTORCH_SAFE_SDPA` value and removes only this project's `pytorch-safe-site` entry from `PYTHONPATH`. Other `PYTHONPATH` entries are preserved. This matters when `run-zluda.ps1` is called repeatedly from the same PowerShell environment: an explicit unsafe run must not silently inherit a previous safe-mode launch.
+## gfx1150 PyTorch `conv2d` hangs
+
+Community testing on Radeon 890M / `gfx1150` showed that the legacy cuDNN/ZLUDA convolution path can hang indefinitely even though GEMM is healthy.
+
+For Python launched through `run-zluda.ps1`, the project now disables cuDNN automatically on `gfx1150` unless a staged cuDNN→MIOpen bridge with a concrete MIOpen backend is detected. PyTorch then uses its non-cuDNN convolution fallback instead of entering the known hanging path.
+
+The capability probe applies the same policy automatically for `-Tests conv2d` on `gfx1150` and records whether `torch.backends.cudnn.enabled` was true or false in the result JSON.
+
+To deliberately reproduce the raw legacy cuDNN path for A/B testing only:
+
+```powershell
+.\scripts\run-zluda.ps1 `
+  -Program C:\path\to\python.exe `
+  -ProgramArgs @('app.py') `
+  -AllowUnsafeCudnnConv
+```
+
+Do not use that override on a machine where a GPU/driver reset would be unacceptable. The default fallback is intentionally conservative.
