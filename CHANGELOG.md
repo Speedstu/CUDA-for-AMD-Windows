@@ -4,6 +4,13 @@ This file records user-visible project milestones. Detailed experimental evidenc
 
 ## Unreleased
 
+### gfx1150 follow-up
+
+- Fixed `project_revision` capture under PowerShell 7 in capability, functional, llama-registration, and trace reports.
+- Fixed `-AllowUnsafeFusedSDPA` so inherited safe-mode environment state cannot silently keep fused SDPA disabled; unrelated `PYTHONPATH` entries are preserved.
+- Added `driver_buffer_clear`, a focused PTX 7.0/8.4 non-default-stream clear/synchronize/readback probe for the remaining modern llama.cpp kernel-execution boundary.
+- Recorded the Radeon 890M / gfx1150 re-test: launch/PTX metadata and SDPA fail-safe fixes reproduce, while conv2d and modern llama.cpp kernel execution still need work.
+
 ### Experimental cuDNN / MIOpen bridge
 
 - Added a source-built cuDNN v8 compatibility proxy for a narrow 2D forward + backward-data + backward-filter subset on Windows.

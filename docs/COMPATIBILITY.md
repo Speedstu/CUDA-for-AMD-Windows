@@ -8,7 +8,7 @@ Support in this project is reported per **hardware + software stack + capability
 | --- | --- | --- | --- |
 | Radeon RX 9060 XT | `gfx1200` | **validated reference** | Main development machine; stable public stack and experimental v7 validation |
 | Radeon RX 9070 XT | `gfx1201` | **validated external** | Separately tested Windows AMD/ZLUDA training setup; see [`RX9070XT_VALIDATION.md`](RX9070XT_VALIDATION.md) |
-| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM reported working; broader convolution/attention/application behavior remains under validation |
+| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM works; patched driver/PTX + SDPA safety fixes confirmed, while conv2d still hangs and modern llama.cpp still fails later in kernel execution |
 | Other recognized AMD GPUs | architecture-dependent | **unverified candidate** | Scanner/runtime detection only until functional evidence is submitted |
 
 `gfx1150` / RDNA 3.5 currently requires HIP SDK **7.2 or newer** in the project profile. The historical `gfx1200` reference uses HIP SDK 6.4.
@@ -90,7 +90,8 @@ Validated/reference-machine work includes:
 - experimental cuSOLVER → hipSOLVER bridging;
 - experimental cuDNN v8 forward/backward convolution → MIOpen bridging on the gfx1200 reference system;
 - SDPA guards for unsafe fallback kernels;
-- llama.cpp registration and end-to-end GPU smoke.
+- llama.cpp registration and end-to-end GPU smoke on gfx1200;
+- a focused PTX buffer-clear/non-default-stream regression probe for separating generic launch/sync behavior from application-specific kernel failures.
 
 A source patch compiling successfully is not proof that it is functionally correct on every AMD GPU.
 
@@ -113,7 +114,7 @@ The project does **not** count any of the following as support:
 - ignoring a CUDA launch attribute when that changes execution semantics;
 - pretending an unavailable NVIDIA-cubin-only implementation is AMD-native.
 
-For fused SDPA, a clean `UNSUPPORTED` result is preferred over silently accepting a fallback that does not contain the real compute path.
+For fused SDPA, a clean `UNSUPPORTED` result is preferred over silently accepting a fallback that does not contain the real compute path. The patched v7 candidate has now been independently re-tested on gfx1150: the previously finite-but-wrong memory-efficient SDPA result becomes an explicit safe refusal there as well.
 
 ## Known limitations
 

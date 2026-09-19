@@ -25,6 +25,28 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      - name: Validate PowerShell 7 report metadata capture
+        shell: pwsh
+        run: |
+          $rev = ((git rev-parse HEAD 2>$null) | Out-String).Trim()
+          if ($rev -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "git revision capture failed under PowerShell 7: '$rev'"
+          }
+
+          $reportScripts = @(
+            'scripts/test-capabilities.ps1',
+            'scripts/test-functional.ps1',
+            'scripts/test-llama-registration.ps1',
+            'scripts/capture-zluda-trace.ps1'
+          )
+          foreach ($path in $reportScripts) {
+            $text = Get-Content $path -Raw
+            if ($text -match 'rev-parse HEAD[^\r\n]*Select-Object\s+-First\s+1') {
+              throw "PowerShell 7-unsafe project_revision pipeline reintroduced in $path"
+            }
+          }
+          Write-Host "PowerShell 7 revision capture: $rev"
+
       - name: Validate Python probes
         shell: pwsh
         run: |
@@ -38,7 +60,7 @@ jobs:
           Write-Host "Functional probe modes: $($tests -join ', ')"
 
           $capabilityTests = @(python scripts/capability_probe.py --list-tests)
-          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_pdl_semantics','driver_func_attributes','driver_function_metadata','linalg_svd','sdpa_mem_efficient')
+          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_pdl_semantics','driver_func_attributes','driver_function_metadata','driver_buffer_clear','linalg_svd','sdpa_mem_efficient')
           foreach ($name in $requiredCapabilityTests) {
             if ($capabilityTests -notcontains $name) { throw "Missing capability probe: $name" }
           }

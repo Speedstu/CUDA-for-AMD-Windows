@@ -29,8 +29,8 @@ try {
     $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $git) { $git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if ($git) {
-        $rev = (& $git.Source -C $repo rev-parse HEAD 2>$null | Select-Object -First 1)
-        if ($LASTEXITCODE -eq 0 -and $rev) { $projectRevision = ([string]$rev).Trim() }
+        $rev = ((& $git.Source -C $repo rev-parse HEAD 2>$null) | Out-String).Trim()
+        if ($rev -match '^[0-9a-fA-F]{40}$') { $projectRevision = $rev.ToLowerInvariant() }
     }
 } catch {}
 

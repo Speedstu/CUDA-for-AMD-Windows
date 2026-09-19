@@ -25,6 +25,7 @@ TESTS = (
     "driver_pdl_semantics",
     "driver_func_attributes",
     "driver_function_metadata",
+    "driver_buffer_clear",
     "nvml",
     "memory_copy",
     "streams_events",
@@ -625,6 +626,273 @@ L_pdl_spin:
         if module.value:
             try:
                 cuda.cuModuleUnload(module)
+            except Exception:
+                pass
+        if created_ctx and ctx.value:
+            try:
+                cuda.cuCtxDestroy_v2(ctx)
+            except Exception:
+                pass
+
+
+
+def run_driver_buffer_clear(torch):
+    """Isolate the llama.cpp-style clear/synchronize path at the Driver API level.
+
+    This deliberately avoids llama.cpp and vendor fatbins. It tests whether a
+    tiny PTX clear kernel can be loaded, resolved, launched on a non-default
+    stream, synchronized, and observed correctly. Running both PTX 7.0/sm_80
+    and PTX 8.4/sm_90 helps separate generic ZLUDA JIT/stream execution from
+    application-specific embedded device-code selection.
+    """
+    cuda = _load_win_dll("nvcuda.dll")
+
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cuda.cuDeviceGet.restype = ctypes.c_int
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    cuda.cuCtxCreate_v2.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.c_int]
+    cuda.cuCtxCreate_v2.restype = ctypes.c_int
+    cuda.cuCtxDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuCtxDestroy_v2.restype = ctypes.c_int
+    cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    cuda.cuModuleLoadData.restype = ctypes.c_int
+    cuda.cuModuleGetFunction.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+    ]
+    cuda.cuModuleGetFunction.restype = ctypes.c_int
+    cuda.cuModuleUnload.argtypes = [ctypes.c_void_p]
+    cuda.cuModuleUnload.restype = ctypes.c_int
+    cuda.cuStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint]
+    cuda.cuStreamCreate.restype = ctypes.c_int
+    cuda.cuStreamDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamDestroy_v2.restype = ctypes.c_int
+    cuda.cuStreamSynchronize.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamSynchronize.restype = ctypes.c_int
+    cuda.cuMemAlloc_v2.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t]
+    cuda.cuMemAlloc_v2.restype = ctypes.c_int
+    cuda.cuMemFree_v2.argtypes = [ctypes.c_uint64]
+    cuda.cuMemFree_v2.restype = ctypes.c_int
+    cuda.cuMemcpyHtoD_v2.argtypes = [ctypes.c_uint64, ctypes.c_void_p, ctypes.c_size_t]
+    cuda.cuMemcpyHtoD_v2.restype = ctypes.c_int
+    cuda.cuMemcpyDtoH_v2.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
+    cuda.cuMemcpyDtoH_v2.restype = ctypes.c_int
+    cuda.cuLaunchKernel.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    cuda.cuLaunchKernel.restype = ctypes.c_int
+
+    def ck(code: int, call: str):
+        if code != 0:
+            raise RuntimeError(f"{call} returned CUDA error {code}")
+
+    ck(cuda.cuInit(0), "cuInit")
+    dev = ctypes.c_int()
+    ck(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+
+    ctx = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(ctx)), "cuCtxGetCurrent")
+    created_ctx = False
+    if not ctx.value:
+        ck(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev.value), "cuCtxCreate_v2")
+        created_ctx = True
+
+    stream = ctypes.c_void_p()
+    device = ctypes.c_uint64()
+    count = 256
+    host_type = ctypes.c_uint32 * count
+    initial = host_type(*([0xA5A5A5A5] * count))
+    output = host_type()
+    try:
+        # CU_STREAM_NON_BLOCKING = 1. The gfx1150 llama failure was reported at
+        # cudaStreamSynchronize on a non-default stream, so keep this explicit.
+        ck(cuda.cuStreamCreate(ctypes.byref(stream), 1), "cuStreamCreate(non-default)")
+        ck(cuda.cuMemAlloc_v2(ctypes.byref(device), ctypes.sizeof(initial)), "cuMemAlloc")
+        ck(
+            cuda.cuMemcpyHtoD_v2(
+                device.value,
+                ctypes.cast(initial, ctypes.c_void_p),
+                ctypes.sizeof(initial),
+            ),
+            "cuMemcpyHtoD(initial pattern)",
+        )
+
+        variants = (
+            ("ptx70_sm80", "7.0", "sm_80"),
+            ("ptx84_sm90", "8.4", "sm_90"),
+        )
+        results = {}
+        for name, ptx_version, target in variants:
+            module = ctypes.c_void_p()
+            try:
+                ptx = f""".version {ptx_version}
+.target {target}
+.address_size 64
+
+.visible .entry buffer_clear(
+    .param .u64 buffer_ptr,
+    .param .u32 element_count
+)
+{{
+    .reg .pred %p;
+    .reg .b32 %r<5>;
+    .reg .b64 %rd<3>;
+
+    ld.param.u64 %rd1, [buffer_ptr];
+    ld.param.u32 %r1, [element_count];
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r2, %r3, %r4, %r2;
+    setp.ge.u32 %p, %r2, %r1;
+    @%p bra CLEAR_DONE;
+    mul.wide.u32 %rd2, %r2, 4;
+    add.s64 %rd2, %rd1, %rd2;
+    st.global.u32 [%rd2], 0;
+CLEAR_DONE:
+    ret;
+}}
+\0""".encode("ascii")
+
+                load_rc = int(
+                    cuda.cuModuleLoadData(
+                        ctypes.byref(module),
+                        ctypes.cast(ctypes.c_char_p(ptx), ctypes.c_void_p),
+                    )
+                )
+                row = {
+                    "ptx_version": ptx_version,
+                    "target": target,
+                    "module_load": load_rc,
+                    "function_get": None,
+                    "launch": None,
+                    "stream_sync": None,
+                    "copy_back": None,
+                    "all_zero": False,
+                    "first_nonzero": None,
+                }
+                if load_rc != 0:
+                    results[name] = row
+                    continue
+
+                func = ctypes.c_void_p()
+                row["function_get"] = int(
+                    cuda.cuModuleGetFunction(
+                        ctypes.byref(func), module, b"buffer_clear"
+                    )
+                )
+                if row["function_get"] != 0:
+                    results[name] = row
+                    continue
+
+                # Refill before each PTX variant so one successful run cannot
+                # make a later failed launch look numerically correct.
+                ck(
+                    cuda.cuMemcpyHtoD_v2(
+                        device.value,
+                        ctypes.cast(initial, ctypes.c_void_p),
+                        ctypes.sizeof(initial),
+                    ),
+                    f"cuMemcpyHtoD(refill {name})",
+                )
+                ptr_arg = ctypes.c_uint64(device.value)
+                count_arg = ctypes.c_uint32(count)
+                params = (ctypes.c_void_p * 2)(
+                    ctypes.cast(ctypes.byref(ptr_arg), ctypes.c_void_p),
+                    ctypes.cast(ctypes.byref(count_arg), ctypes.c_void_p),
+                )
+                block = 64
+                grid = (count + block - 1) // block
+                row["launch"] = int(
+                    cuda.cuLaunchKernel(
+                        func,
+                        grid,
+                        1,
+                        1,
+                        block,
+                        1,
+                        1,
+                        0,
+                        stream,
+                        ctypes.cast(params, ctypes.c_void_p),
+                        None,
+                    )
+                )
+                if row["launch"] == 0:
+                    row["stream_sync"] = int(cuda.cuStreamSynchronize(stream))
+                if row["stream_sync"] == 0:
+                    row["copy_back"] = int(
+                        cuda.cuMemcpyDtoH_v2(
+                            ctypes.cast(output, ctypes.c_void_p),
+                            device.value,
+                            ctypes.sizeof(output),
+                        )
+                    )
+                if row["copy_back"] == 0:
+                    first_nonzero = next(
+                        (i for i, value in enumerate(output) if int(value) != 0),
+                        None,
+                    )
+                    row["first_nonzero"] = first_nonzero
+                    row["all_zero"] = first_nonzero is None
+                results[name] = row
+            finally:
+                if module.value:
+                    try:
+                        cuda.cuModuleUnload(module)
+                    except Exception:
+                        pass
+
+        def row_ok(row):
+            return (
+                row["module_load"] == 0
+                and row["function_get"] == 0
+                and row["launch"] == 0
+                and row["stream_sync"] == 0
+                and row["copy_back"] == 0
+                and row["all_zero"]
+            )
+
+        ok = all(row_ok(row) for row in results.values())
+        return {
+            "ok": ok,
+            "buffer_elements": count,
+            "stream": "non-default_non-blocking",
+            "variants": results,
+            "interpretation": (
+                "If this passes while llama.cpp still fails in ggml_backend_cuda_buffer_clear, "
+                "the remaining boundary is application device-code/fatbin selection rather "
+                "than generic PTX clear-kernel launch or stream synchronization."
+            ),
+        }
+    finally:
+        if stream.value:
+            try:
+                cuda.cuStreamSynchronize(stream)
+            except Exception:
+                pass
+        if device.value:
+            try:
+                cuda.cuMemFree_v2(device.value)
+            except Exception:
+                pass
+        if stream.value:
+            try:
+                cuda.cuStreamDestroy_v2(stream)
             except Exception:
                 pass
         if created_ctx and ctx.value:
@@ -1715,6 +1983,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_pdl_semantics": run_driver_pdl_semantics,
     "driver_func_attributes": run_driver_func_attributes,
     "driver_function_metadata": run_driver_function_metadata,
+    "driver_buffer_clear": run_driver_buffer_clear,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,
     "streams_events": run_streams_events,

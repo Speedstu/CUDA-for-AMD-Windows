@@ -13,7 +13,7 @@ The most detailed community report is [issue #3](https://github.com/Speedstu/CUD
 | --- | --- |
 | b4500 | Runs end-to-end through ZLUDA; decode was reported near the native ROCm result |
 | b9009 | Device registration works, but compute reaches a kernel-level failure |
-| b10978 | gfx1150: registration works, but the reporter still needs to re-test the patched launch/PTX path; gfx1200: patched v7 completes an end-to-end GPU smoke with all layers offloaded |
+| b10978 | gfx1150: patched launch/PTX path is confirmed, SDPA silent corruption is fixed, but real kernel execution still fails later; gfx1200: patched v7 completes an end-to-end GPU smoke with all layers offloaded |
 
 For the b10978 investigation, the pinned upstream source commit is `1e7bcf3da4b2741868d152fa47976fb2501c85e3`. The official Windows CUDA 12.4 package used for reproduction is:
 
@@ -35,6 +35,22 @@ On the RX 9060 XT / `gfx1200` reference machine, a rebuilt v7-preview.10 runtime
 - the smoke was repeated and did not produce a delayed GPU reset on the reference machine.
 
 The same run still prints `no device code compatible` diagnostics from low-architecture fallback PTX embedded in the CUDA build. Those messages are not being hidden or counted as universal kernel support. The observed smoke proves that the previous registration/launch/metadata blockers are cleared on gfx1200; it does **not** prove every llama.cpp kernel shape or `gfx1150` is fixed.
+
+### 2026-09-19 gfx1150 re-test
+
+The issue #3 reporter re-tested the candidate `nvcuda.dll` from run `35398039575` on Radeon 890M / `gfx1150` with ROCm 7.2 and b10978.
+
+The driver-level fixes reproduce there:
+
+- `driver_pci_bus_id`: PASS;
+- `driver_launch_ex`: PASS, including `COOPERATIVE=0`, while `PDL=1` still fails closed with 801;
+- `driver_function_metadata`: PASS, including PTX 7.0 → 70 and PTX 8.4 → 84;
+- the false b10978 `ptxVersion >= 90` PDL gate is therefore closed on gfx1150 too;
+- memory-efficient SDPA changed from a finite but incorrect tensor to an explicit safe refusal, confirming the original silent-corruption bug is fixed on RDNA 3.5 as well.
+
+Recent llama.cpp still does **not** pass end-to-end on that GPU. The candidate now gets past the old launch-attribute failure, spends time loading/compiling kernels, then fails later during real kernel execution around `ggml_backend_cuda_buffer_clear` / stream synchronization (and, for another model, `ggml_cuda_kernel_can_use_pdl`). The reporter also tested `ZLUDA_CC=8.0`, `8.6`, and `9.0`; the failure remained, so changing the advertised CUDA compute capability is not being treated as a fix.
+
+That moves the remaining boundary from registration/launch metadata to application kernel loading/execution on gfx1150.
 
 The CUDA 12.4 llama package also needs its matching stock NVIDIA `cudart64_12.dll` available on the process path. If only the main llama CUDA archive is extracted without the companion cudart package, b10978 can report `Available devices: (none)` even when the ZLUDA driver probes pass.
 
@@ -98,8 +114,41 @@ Run the focused driver probes with:
 ```powershell
 .\scripts\test-capabilities.ps1 `
   -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
-  -Tests driver_pci_bus_id,driver_launch_ex,driver_pdl_semantics,driver_func_attributes,driver_function_metadata
+  -Tests driver_pci_bus_id,driver_launch_ex,driver_pdl_semantics,driver_func_attributes,driver_function_metadata,driver_buffer_clear
 ```
+
+## Focused buffer-clear / kernel-loading probe
+
+To isolate the new gfx1150 failure without requiring a model or llama.cpp fatbins, the capability matrix includes `driver_buffer_clear`.
+
+It runs two tiny PTX clear kernels:
+
+- PTX 7.0 targeting `sm_80`;
+- PTX 8.4 targeting `sm_90`.
+
+For each variant the probe checks:
+
+```text
+cuModuleLoadData
+  -> cuModuleGetFunction
+  -> non-default stream
+  -> cuLaunchKernel
+  -> cuStreamSynchronize
+  -> D2H readback
+  -> every element really became zero
+```
+
+Run it directly with:
+
+```powershell
+.\scripts\test-capabilities.ps1 `
+  -PythonExe C:\path\to\cuda-pytorch-venv\Scripts\python.exe `
+  -Tests driver_buffer_clear
+```
+
+On the RX 9060 XT / `gfx1200` reference runtime, both PTX 7.0/sm_80 and PTX 8.4/sm_90 variants pass all phases including non-default-stream synchronization and numerical readback.
+
+This probe intentionally does **not** reproduce llama.cpp's embedded fatbins or every kernel it ships. If it also passes on gfx1150 while b10978 still fails in `ggml_backend_cuda_buffer_clear`, that is strong evidence that the remaining problem is application-specific device-code/kernel compatibility rather than generic PTX clear-kernel launch or stream synchronization.
 
 ## PTX metadata: target SM is not PTX ISA version
 
@@ -136,7 +185,7 @@ The repository therefore includes:
 - `driver_function_metadata`, which loads a known `.version 7.0 / .target sm_80` module and requires `CU_FUNC_ATTRIBUTE_PTX_VERSION=70`;
 - diagnostic reporting for `BINARY_VERSION`, because frameworks such as PyTorch can also use that value for architecture gating. The binary-version behavior is **not changed yet** by this candidate.
 
-The rebuilt candidate now passes the direct metadata probe and the b10978 end-to-end GPU smoke on the gfx1200 reference machine. It remains a separate candidate patch until the original gfx1150 report is re-tested, so the project does not generalize this reference result to RDNA 3.5 yet.
+The rebuilt candidate passes the direct metadata probe on both the gfx1200 reference machine and the community-tested gfx1150 system. b10978 completes the end-to-end GPU smoke on gfx1200, while gfx1150 gets past the metadata/launch blockers and then fails later in real kernel execution. The metadata fix is therefore cross-checked on RDNA 3.5 without treating the full llama.cpp workload as supported there.
 
 ### Expected effect on b10978
 
@@ -144,7 +193,7 @@ The PTX metadata candidate does **not** implement PDL. For the official CUDA 12.
 
 That is separate from `launch-attributes-candidate.patch`, which fixes the benign `COOPERATIVE=0` driver case but deliberately keeps non-zero PDL unsupported.
 
-On gfx1200, the PTX metadata fix plus the launch-attribute candidate now advance b10978 through a real `-fa off` GPU smoke with all layers offloaded. The deeper kernel failure previously reported on gfx1150 still requires confirmation on that architecture before cross-GPU support is claimed.
+On gfx1200, the PTX metadata fix plus the launch-attribute candidate advance b10978 through a real `-fa off` GPU smoke with all layers offloaded. On gfx1150, those same driver-level fixes are confirmed, but b10978 still fails later during real kernel loading/execution. That later failure is the remaining architecture-specific boundary; it is not folded into the metadata claim.
 
 NVIDIA reference:
 https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
@@ -312,4 +361,4 @@ For a modern llama.cpp build, this project will treat the path as validated only
 5. Output is compared against a known-good native/reference path where practical.
 6. Repeated runs exit cleanly with no delayed driver crash.
 
-The gfx1200 reference now satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. Issue #3 should remain open only until the original gfx1150 reporter confirms or rejects the same patched path; a gfx1200 pass is not silently promoted to a gfx1150 result.
+The gfx1200 reference satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. The gfx1150 reporter has now confirmed the registration/launch/PTX-metadata/SDPA fixes but still hits a later real-kernel failure, so issue #3 remains open for the RDNA 3.5 kernel-execution boundary and the still-hanging conv2d path.

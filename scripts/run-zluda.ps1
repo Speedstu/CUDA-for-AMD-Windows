@@ -18,6 +18,12 @@ $configPath = Join-Path $RuntimeRoot 'runtime-config.json'
 if (-not (Test-Path $configPath)) { throw 'Missing runtime-config.json. Run scripts/setup.ps1 first.' }
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 
+function Normalize-PathEntry([string]$Value) {
+    if (-not $Value) { return $null }
+    try { return [System.IO.Path]::GetFullPath($Value).TrimEnd('\') }
+    catch { return $Value.Trim().TrimEnd('\') }
+}
+
 if (-not $NoStage) {
     & (Join-Path $PSScriptRoot 'stage-runtime.ps1') -TargetDir $targetDir -RuntimeRoot $RuntimeRoot
 }
@@ -39,13 +45,45 @@ $programLeaf = [System.IO.Path]::GetFileName($Program)
 $pythonProgram = [bool]($programLeaf -match '^python(?:w|[0-9.]*)?\.exe$')
 $autoSafeSDPA = [bool]($latestChannel -and $pythonProgram -and -not $AllowUnsafeFusedSDPA)
 $useSafeSDPA = [bool]($PyTorchSafeSDPA -or $autoSafeSDPA)
+$safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
+$safeSiteKey = Normalize-PathEntry $safeSite
+
+if ($AllowUnsafeFusedSDPA -and -not $PyTorchSafeSDPA) {
+    # run-zluda.ps1 may be invoked repeatedly from the same PowerShell
+    # process. Remove only this project's inherited safe-mode state so the
+    # explicit unsafe switch cannot silently inherit a previous safe launch.
+    Remove-Item Env:CUDAAMD_PYTORCH_SAFE_SDPA -ErrorAction SilentlyContinue
+    if ($env:PYTHONPATH) {
+        $keptPythonPath = @(
+            foreach ($part in ($env:PYTHONPATH -split ';')) {
+                if (-not $part) { continue }
+                $partKey = Normalize-PathEntry $part
+                if (-not [string]::Equals($partKey, $safeSiteKey, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $part
+                }
+            }
+        )
+        if ($keptPythonPath.Count -gt 0) { $env:PYTHONPATH = $keptPythonPath -join ';' }
+        else { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue }
+    }
+}
+
 if ($useSafeSDPA) {
-    $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
     if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {
         throw "Missing PyTorch safe-site hook: $safeSite"
     }
     $env:CUDAAMD_PYTORCH_SAFE_SDPA = '1'
-    $env:PYTHONPATH = $safeSite + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })
+    $pythonPathParts = @($env:PYTHONPATH -split ';' | Where-Object { $_ })
+    $alreadyPresent = [bool]($pythonPathParts | Where-Object {
+        [string]::Equals(
+            (Normalize-PathEntry $_),
+            $safeSiteKey,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    })
+    if (-not $alreadyPresent) {
+        $env:PYTHONPATH = $safeSite + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })
+    }
 }
 if ($hip) {
     $env:HIP_PATH = $hip

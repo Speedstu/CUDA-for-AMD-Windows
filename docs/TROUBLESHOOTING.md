@@ -78,3 +78,5 @@ For applications that can use PyTorch's math SDPA backend, the launcher now enab
 ```
 
 This does not change `ZLUDA_CC` or claim that the fused backends are implemented. Use `-AllowUnsafeFusedSDPA` only for deliberate compatibility experiments against the raw upstream fused paths.
+
+`-AllowUnsafeFusedSDPA` also clears an inherited `CUDAAMD_PYTORCH_SAFE_SDPA` value and removes only this project's `pytorch-safe-site` entry from `PYTHONPATH`. Other `PYTHONPATH` entries are preserved. This matters when `run-zluda.ps1` is called repeatedly from the same PowerShell environment: an explicit unsafe run must not silently inherit a previous safe-mode launch.
