@@ -8,7 +8,7 @@ Support in this project is reported per **hardware + software stack + capability
 | --- | --- | --- | --- |
 | Radeon RX 9060 XT | `gfx1200` | **validated reference** | Main development machine; stable public stack and experimental v7 validation |
 | Radeon RX 9070 XT | `gfx1201` | **validated external** | Separately tested Windows AMD/ZLUDA training setup; see [`RX9070XT_VALIDATION.md`](RX9070XT_VALIDATION.md) |
-| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM works; patched driver/PTX + SDPA safety fixes confirmed. The known legacy cuDNN conv2d hang is guarded by an automatic no-cuDNN PyTorch fallback; modern llama.cpp remains a separate application-kernel compatibility issue |
+| Radeon 890M | `gfx1150` | **community partial** | HIP 7.2/GEMM, 6/6 focused driver preflight, PTX target selection, and the guarded no-cuDNN conv2d fallback are confirmed on hardware. Memory-efficient SDPA fails closed. Generic b10978 llama.cpp CUDA inference is **not supported yet**: a GPU page fault and Windows `0x119` bugcheck were reproduced; use the launch-blocking probe and conservative profile only |
 | Other recognized AMD GPUs | architecture-dependent | **unverified candidate** | Scanner/runtime detection only until functional evidence is submitted |
 
 `gfx1150` / RDNA 3.5 currently requires HIP SDK **7.2 or newer** in the project profile. The historical `gfx1200` reference uses HIP SDK 6.4.

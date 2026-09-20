@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "checked": "2026-09-15",
+  "checked": "2026-09-20",
   "source": "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html",
   "architectures": {
     "gfx1200": {
@@ -36,7 +36,26 @@
         "status": "partial",
         "gpu": "Radeon 890M",
         "issue": "https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/3",
-        "notes": "HIP 7.2 runtime and GEMM work, but conv2d hung and memory-efficient SDPA returned incorrect values in the reported ZLUDA/PyTorch workload."
+        "notes": "HIP 7.2/GEMM, the 6/6 focused driver preflight, PTX target selection, and the guarded no-cuDNN conv2d fallback are community-confirmed on Radeon 890M. Memory-efficient SDPA fails closed. Generic b10978 llama.cpp CUDA inference remains unsafe/unvalidated due to a reproduced GPU page fault and Windows 0x119 bugcheck.",
+        "last_confirmed": "2026-09-20",
+        "confirmed": {
+          "hip_sdk": "7.2",
+          "gemm": "pass",
+          "driver_preflight": "6/6 pass",
+          "ptx_target_selection": "pass",
+          "conv2d_safe_fallback": {
+            "status": "pass",
+            "path": "pytorch_no_cudnn_fallback",
+            "max_abs": 1.14e-05
+          },
+          "sdpa_mem_efficient": "safe refusal / unsupported"
+        },
+        "known_unsafe": {
+          "workload": "llama.cpp b10978 generic CUDA build",
+          "status": "not supported",
+          "symptom": "GPU hardware-queue page fault; Windows VIDEO_SCHEDULER_INTERNAL_ERROR 0x119 observed during failed reset/recovery",
+          "note": "Do not use long or repeated inference as a compatibility probe. Use driver_launch_blocking and the conservative pinned b10978 profile first."
+        }
       }
     },
     "gfx1151": {

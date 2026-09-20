@@ -127,6 +127,46 @@ The patched cuDNN compatibility DLLs now route the standard PyTorch BatchNorm tr
 With the optional reversible cuSOLVER → hipSOLVER proxy staged, both `linalg_cholesky` and `linalg_qr` pass. The tested proxy preserves **940/940 exports** and routes **131 entry points** to hipSOLVER, including LU, legacy/generic-X Cholesky, legacy/generic-X QR, Jacobi SVD, symmetric/Hermitian eigensolvers, and generic-X `Xsyevd` paths. QR validation covers FP32, FP64, complex64 and complex128, single and batched tall/wide/square matrices, `torch.linalg.qr`, `torch.geqrf` + `orgqr`/`ungqr`, and `ormqr`/`unmqr`; a separate multi-stream regression also passes on two reused non-default streams. The ZLUDA BLAS bridge adds FP64/complex GEMM and strided-batched GEMM plus batched TRSM/GELS/LU/GEQRF bridges to AMD backends. A dedicated isolated linalg regression currently passes `solve`, Cholesky, QR, `inv`, `lstsq`, SVD, `pinv`, `eigh`, and `eigvalsh` (9/9) without hangs, crashes, or numerical failures. After the matrix run, the user's original `cusolver64_11.dll` was restored to SHA-256 `ECCA66A9100A514F586F7710F5B761265DFFAC615786C90C868A02A114EDE533`.
 
 The same clean-patch runtime completed a real VelocityRL `512 agents × rollout 16` three-update smoke. Warmed updates reached **72,306 SPS** and **70,333 SPS**, for a **71,319.5 SPS steady-state median**. A same-GPU direct-rocBLAS comparison kept paired median CUDA→ZLUDA overhead below the repository's 20% budget at 1024², 2048² and 4096²; the clean-run deltas were **+1.79%**, **+0.45%**, and **+2.20%** respectively.
+## 2026-09-20 external gfx1150 / Radeon 890M confirmation
+
+A community re-test on Radeon 890M / `gfx1150` with Windows HIP SDK 7.2 confirmed the focused fixes from issue #3 on real RDNA 3.5 hardware.
+
+Confirmed safe results:
+
+```text
+driver_pci_bus_id
+driver_launch_ex
+driver_func_attributes
+driver_function_metadata
+driver_ptx_selection
+driver_buffer_clear
+=> 6/6 PASS
+
+conv2d
+  path: pytorch_no_cudnn_fallback
+  cudnn_enabled: false
+  max_abs: 1.14e-05
+  => PASS
+
+sdpa_mem_efficient
+  candidate => UNSUPPORTED / safe refusal
+  stock     => numerically incorrect
+```
+
+The PTX-selection regression was A/B tested with execution as the oracle under advertised `sm_86` and available `sm_80` + `sm_90` variants:
+
+```text
+unpatched latest   -> selected sm90  INCORRECT
+candidate 0c2bee2  -> selected sm90  INCORRECT, PTX metadata already corrected
+candidate 07638a7  -> selected sm80  PASS
+```
+
+This independently confirms that the PTX metadata fix and PTX target-selection fix address separate bugs.
+
+The same reporter also reproduced the remaining generic llama.cpp b10978 failure with a full Windows kernel dump. The dump recorded `0x119 VIDEO_SCHEDULER_INTERNAL_ERROR` at `dxgmms2!VidSchiProcessIsrHwQueuePageFaulted`, consistent with a GPU hardware-queue page fault followed by a failed reset/recovery sequence. The previously observed errors at later buffer-clear/set/synchronize calls are therefore asynchronous surfacing points, not evidence that those helper calls are the original faulting kernel.
+
+Because the generic b10978 path can page-fault the GPU and has intermittently bugchecked Windows, it is **not** counted as supported on gfx1150. The next validation gate is the dedicated `driver_launch_blocking` probe followed, only if that passes, by the conservative pinned b10978 profile with minimal GPU layers/tokens and persistent per-kernel trace.
+
 ## Historical performance
 
 Older tuned runs of the same ZLUDA/LibTorch family retained approximately **70k-109k overall steps/s**. Those numbers are historical performance evidence and should not be confused with the short validation run above.
