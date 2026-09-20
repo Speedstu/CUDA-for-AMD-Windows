@@ -48,6 +48,7 @@ jobs:
             -DGGML_CUDA_NO_PEER_COPY=ON ^
             -DGGML_CUDA_FA=OFF ^
             -DGGML_CUDA_NCCL=OFF ^
+            -DLLAMA_OPENSSL=OFF ^
             "-DCMAKE_CUDA_ARCHITECTURES=75-virtual;80-virtual"
           cmake --build build --config Release -j 2 --target llama-cli
 
@@ -105,7 +106,8 @@ jobs:
             peer_copy = $false
             flash_attention_compiled = $false
             nccl = $false
-            note = 'No NVIDIA runtime DLLs are included. Stage the project ZLUDA runtime and a matching stock cudart64_12.dll separately.'
+            openssl = $false
+            note = 'No NVIDIA runtime DLLs or OpenSSL runtime DLLs are included. Stage the project ZLUDA runtime and a matching stock cudart64_12.dll separately.'
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $dst 'build-manifest.json')
 
           Get-ChildItem $dst -File | ForEach-Object {
