@@ -73,7 +73,10 @@ jobs:
           $dst = Join-Path $PWD 'artifact'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
 
-          $required = @('llama-cli.exe','llama.dll','ggml.dll','ggml-base.dll','ggml-cpu.dll','ggml-cuda.dll')
+          $required = @(
+            'llama-cli.exe','llama-cli-impl.dll','llama-server-impl.dll','llama-common.dll','mtmd.dll',
+            'llama.dll','ggml.dll','ggml-base.dll','ggml-cpu.dll','ggml-cuda.dll'
+          )
           foreach ($name in $required) {
             $path = Join-Path $src $name
             if (-not (Test-Path $path)) { throw "Missing expected build output: $name" }
@@ -112,6 +115,12 @@ jobs:
               SHA256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
             }
           } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $dst 'sha256.json')
+
+      - name: Smoke packaged llama host dependencies
+        shell: pwsh
+        run: |
+          & .\artifact\llama-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged llama-cli failed host dependency smoke: exit $LASTEXITCODE" }
 
       - name: Upload safe llama artifact
         uses: actions/upload-artifact@v4
