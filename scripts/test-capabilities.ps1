@@ -75,6 +75,11 @@ function Set-Env([System.Diagnostics.ProcessStartInfo]$Info, [string]$Name, [str
     else { $Info.EnvironmentVariables[$Name] = $Value }
 }
 
+function Remove-Env([System.Diagnostics.ProcessStartInfo]$Info, [string]$Name) {
+    if ($Info.PSObject.Properties.Name -contains 'Environment') { [void]$Info.Environment.Remove($Name) }
+    else { [void]$Info.EnvironmentVariables.Remove($Name) }
+}
+
 function Stop-Tree([System.Diagnostics.Process]$Process) {
     try {
         $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
@@ -123,8 +128,11 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
         Set-Env $psi 'PYTHONPATH' $probePythonPath
     }
     if ($config.gpu -and $null -ne $config.gpu.index) {
+        # Use one visibility mechanism only. Setting HIP_VISIBLE_DEVICES and
+        # ROCR_VISIBLE_DEVICES to the same physical index can remap twice and
+        # hide the intended GPU on mixed iGPU/dGPU systems.
         Set-Env $psi 'HIP_VISIBLE_DEVICES' ([string]$config.gpu.index)
-        Set-Env $psi 'ROCR_VISIBLE_DEVICES' ([string]$config.gpu.index)
+        Remove-Env $psi 'ROCR_VISIBLE_DEVICES'
     }
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi

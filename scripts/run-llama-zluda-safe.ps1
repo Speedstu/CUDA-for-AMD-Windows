@@ -54,6 +54,10 @@ $TraceFile = [IO.Path]::GetFullPath($TraceFile)
 Remove-Item $TraceFile -Force -ErrorAction SilentlyContinue
 
 $env:ZLUDA_CC = if ($config.zluda_cc) { [string]$config.zluda_cc } else { '8.6' }
+if ($config.gpu -and $null -ne $config.gpu.index) {
+    $env:HIP_VISIBLE_DEVICES = [string]$config.gpu.index
+    Remove-Item Env:ROCR_VISIBLE_DEVICES -ErrorAction SilentlyContinue
+}
 $env:CUDA_LAUNCH_BLOCKING = '1'
 $env:ZLUDA_LAUNCH_TRACE = '1'
 $env:ZLUDA_LAUNCH_TRACE_FILE = $TraceFile
@@ -67,6 +71,7 @@ if ($hip) {
 }
 
 Write-Host "[safe-llama] ZLUDA_CC=$env:ZLUDA_CC"
+if ($env:HIP_VISIBLE_DEVICES) { Write-Host "[safe-llama] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES" }
 Write-Host "[safe-llama] CUDA_LAUNCH_BLOCKING=1"
 Write-Host "[safe-llama] GGML_CUDA_DISABLE_GRAPHS=1"
 Write-Host "[safe-llama] gpu_layers=$GpuLayers predict=$Predict"

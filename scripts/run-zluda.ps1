@@ -34,6 +34,12 @@ $hip = $config.hip_root
 $libtorch = $config.libtorch_root
 $env:ZLUDA_CC = if ($config.zluda_cc) { $config.zluda_cc } else { '8.6' }
 $env:TORCH_ALLOW_TF32_CUBLAS_OVERRIDE = '1'
+if ($config.gpu -and $null -ne $config.gpu.index) {
+    # Avoid double-remapping the selected device through both HIP and ROCR
+    # visibility variables on mixed iGPU/dGPU systems.
+    $env:HIP_VISIBLE_DEVICES = [string]$config.gpu.index
+    Remove-Item Env:ROCR_VISIBLE_DEVICES -ErrorAction SilentlyContinue
+}
 
 $latestChannel = [bool](
     $config.upstream -and
@@ -130,6 +136,7 @@ $env:PATH = (($parts | Where-Object { $_ -and (Test-Path $_) }) -join ';') + ';'
 $launcher = Join-Path $zluda 'zluda.exe'
 if (-not (Test-Path $launcher)) { throw "Missing ZLUDA launcher: $launcher" }
 Write-Host "[run] ZLUDA_CC=$env:ZLUDA_CC"
+if ($env:HIP_VISIBLE_DEVICES) { Write-Host "[run] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES" }
 if ($useSafeSDPA) {
     $reason = if ($PyTorchSafeSDPA) { 'explicit' } else { 'automatic for unpatched latest channel' }
     Write-Host "[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on ($reason)"

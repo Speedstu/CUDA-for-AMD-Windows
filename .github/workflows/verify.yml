@@ -47,6 +47,26 @@ jobs:
           }
           Write-Host "PowerShell 7 revision capture: $rev"
 
+      - name: Validate GPU visibility policy
+        shell: pwsh
+        run: |
+          $cap = Get-Content scripts/test-capabilities.ps1 -Raw
+          $badSet = "Set-Env " + '$psi' + " 'ROCR_VISIBLE_DEVICES'"
+          $goodRemove = "Remove-Env " + '$psi' + " 'ROCR_VISIBLE_DEVICES'"
+          if ($cap.Contains($badSet)) {
+            throw 'Capability runner must not set HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES to the same index.'
+          }
+          if (-not $cap.Contains($goodRemove)) {
+            throw 'Capability runner must clear inherited ROCR_VISIBLE_DEVICES when selecting HIP_VISIBLE_DEVICES.'
+          }
+
+          foreach ($path in @('scripts/run-zluda.ps1','scripts/run-llama-zluda-safe.ps1')) {
+            $text = Get-Content $path -Raw
+            if (-not $text.Contains('Remove-Item Env:ROCR_VISIBLE_DEVICES')) {
+              throw "$path must clear inherited ROCR_VISIBLE_DEVICES when a configured HIP device is selected."
+            }
+          }
+
       - name: Validate Python probes
         shell: pwsh
         run: |
