@@ -32,6 +32,7 @@ The script filenames in this directory are part of the project's practical publi
 | `capability_probe.py` | Per-capability Python probe implementation |
 | `functional_probe.py` | Focused numerical functional probes |
 | `test-llama-registration.ps1` | llama.cpp device/registration and optional driver preflight |
+| `run-llama-zluda-safe.ps1` | Conservative gfx1150 llama.cpp smoke launcher with launch blocking, persistent kernel trace and guarded GPU-layer escalation |
 | `test-velocityrl.ps1` | Optional real PPO integration smoke |
 | `warmup-pytorch.ps1` | Prewarm expensive first-use PyTorch/ZLUDA compilation |
 | `training_warmup.py` | Python workload used by the warmup helper |

@@ -1,0 +1,121 @@
+name: llama-zluda-safe-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-safe-llama:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout pinned llama.cpp b10978
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama-src
+          git -C llama-src fetch --depth 1 origin 1e7bcf3da4b2741868d152fa47976fb2501c85e3
+          git -C llama-src checkout --detach FETCH_HEAD
+          if ((git -C llama-src rev-parse HEAD) -ne '1e7bcf3da4b2741868d152fa47976fb2501c85e3') {
+            throw 'llama.cpp revision drifted'
+          }
+
+      # Reuse llama.cpp's own Windows CUDA 12.4 setup action from the pinned tree.
+      - name: Install CUDA Toolkit 12.4
+        uses: ./llama-src/.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '12.4'
+          cuda_arch: x64
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
+      - name: Configure ZLUDA-safe CUDA build
+        shell: cmd
+        working-directory: llama-src
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON ^
+            -DGGML_CUDA_FORCE_CUBLAS=ON ^
+            -DGGML_CUDA_FORCE_MMQ=OFF ^
+            -DGGML_CUDA_GRAPHS=OFF ^
+            -DGGML_CUDA_NO_VMM=ON ^
+            -DGGML_CUDA_NO_PEER_COPY=ON ^
+            -DGGML_CUDA_FA=OFF ^
+            -DGGML_CUDA_NCCL=OFF ^
+            "-DCMAKE_CUDA_ARCHITECTURES=75-virtual;80-virtual"
+          cmake --build build --config Release -j 2 --target llama-cli
+
+      - name: Inspect CUDA feature surface
+        shell: pwsh
+        run: |
+          $bin = Resolve-Path 'llama-src\build\bin\Release'
+          Get-ChildItem $bin -File | Select-Object Name,Length | Format-Table -AutoSize
+          $cudaDll = Join-Path $bin 'ggml-cuda.dll'
+          if (-not (Test-Path $cudaDll)) { throw 'ggml-cuda.dll missing from safe build' }
+          $strings = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($cudaDll))
+          if ($strings -notmatch 'sm_75' -and $strings -notmatch 'compute_75') {
+            Write-Warning 'sm_75 marker not found in raw binary strings; CMake log remains the architecture source of truth.'
+          }
+          if ($strings -notmatch 'sm_80' -and $strings -notmatch 'compute_80') {
+            Write-Warning 'sm_80 marker not found in raw binary strings; CMake log remains the architecture source of truth.'
+          }
+
+      - name: Package only project-built files
+        shell: pwsh
+        run: |
+          $src = Resolve-Path 'llama-src\build\bin\Release'
+          $dst = Join-Path $PWD 'artifact'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          $required = @('llama-cli.exe','llama.dll','ggml.dll','ggml-base.dll','ggml-cpu.dll','ggml-cuda.dll')
+          foreach ($name in $required) {
+            $path = Join-Path $src $name
+            if (-not (Test-Path $path)) { throw "Missing expected build output: $name" }
+            Copy-Item $path $dst
+          }
+
+          $forbidden = @('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll','nvcuda.dll','nvrtc64_*.dll')
+          foreach ($pattern in $forbidden) {
+            if (Get-ChildItem $dst -File -Filter $pattern -ErrorAction SilentlyContinue) {
+              throw "Vendor CUDA DLL unexpectedly entered artifact: $pattern"
+            }
+          }
+
+          Copy-Item 'scripts\run-llama-zluda-safe.ps1' $dst
+          [ordered]@{
+            schema = 1
+            llama_revision = '1e7bcf3da4b2741868d152fa47976fb2501c85e3'
+            llama_build = 'b10978'
+            cuda_toolkit = '12.4'
+            cuda_architectures = @('75-virtual','80-virtual')
+            force_cublas = $true
+            force_mmq = $false
+            cuda_graphs = $false
+            cuda_vmm = $false
+            peer_copy = $false
+            flash_attention_compiled = $false
+            nccl = $false
+            note = 'No NVIDIA runtime DLLs are included. Stage the project ZLUDA runtime and a matching stock cudart64_12.dll separately.'
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $dst 'build-manifest.json')
+
+          Get-ChildItem $dst -File | ForEach-Object {
+            [pscustomobject]@{
+              Name = $_.Name
+              Bytes = $_.Length
+              SHA256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $dst 'sha256.json')
+
+      - name: Upload safe llama artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-b10978-zluda-safe-gfx1150
+          path: artifact
+          retention-days: 7
+          if-no-files-found: error

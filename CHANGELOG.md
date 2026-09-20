@@ -7,6 +7,7 @@ This file records user-visible project milestones. Detailed experimental evidenc
 ### gfx1150 follow-up
 
 - Added a ZLUDA `CUDA_LAUNCH_BLOCKING` / per-kernel trace candidate plus `driver_launch_blocking` to attribute asynchronous GPU faults to the launch that triggered them.
+- Added a conservative pinned b10978 GitHub build + `run-llama-zluda-safe.ps1` profile for gfx1150: cuBLAS-forced, graphs/VMM/peer-copy/FA disabled, PTX-only sm75/sm80, one-layer/one-token guarded first smoke.
 - Added a PTX target-selection candidate plus `driver_ptx_selection`: multi-PTX fatbins now have a testable path to select the highest target compatible with the advertised `ZLUDA_CC`, instead of silently choosing the highest PTX entry.
 - Added a `gfx1150` PyTorch conv2d safety fallback: the launcher and capability probe disable the known hanging legacy cuDNN route by default, with an explicit `-AllowUnsafeCudnnConv` A/B override and bridge-aware detection.
 - Fixed `project_revision` capture under PowerShell 7 in capability, functional, llama-registration, and trace reports.

@@ -370,3 +370,23 @@ For a modern llama.cpp build, this project will treat the path as validated only
 6. Repeated runs exit cleanly with no delayed driver crash.
 
 The gfx1200 reference satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. On gfx1150, the registration/launch/PTX-metadata/SDPA fixes are confirmed, while modern llama.cpp still has a separate application device-code/kernel-execution boundary. That application-specific work is tracked separately from the original issue #3 conv2d/SDPA report.
+
+## gfx1150 conservative b10978 build
+
+For the remaining gfx1150 page-fault investigation, the repository provides a separate GitHub Actions build of pinned llama.cpp b10978 (`1e7bcf3da4b2741868d152fa47976fb2501c85e3`) intended to reduce the amount of custom CUDA device code exercised before a kernel is proven safe.
+
+The build uses:
+
+- `GGML_CUDA_FORCE_CUBLAS=ON`;
+- CUDA Graphs disabled;
+- CUDA VMM disabled;
+- peer-copy disabled;
+- Flash Attention CUDA kernels not compiled;
+- NCCL disabled;
+- PTX-only CUDA targets `sm_75` and `sm_80`.
+
+This does not make an unknown page-faulting kernel intrinsically safe. It reduces optional CUDA surfaces and routes supported matrix multiplication through the already-tested cuBLAS -> AMD backend path.
+
+Use `scripts/run-llama-zluda-safe.ps1` for the first application smoke. Its defaults are intentionally small: one GPU layer and one generated token, no KV offload, no generic op offload, FA off, split mode `none`, CUDA Graphs disabled, `CUDA_LAUNCH_BLOCKING=1`, and a persistent numbered ZLUDA kernel trace.
+
+The launcher refuses more than four GPU layers unless `-AllowMoreThanFourGpuLayers` is supplied. Escalate only after the smaller smoke exits cleanly. A matching stock CUDA 12.4 `cudart64_12.dll` is still required beside llama.cpp; the project artifact does not redistribute NVIDIA runtime DLLs.
