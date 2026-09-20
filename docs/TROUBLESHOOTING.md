@@ -121,3 +121,11 @@ That probe uses a tiny known-safe PTX kernel and verifies that `CUDA_LAUNCH_BLOC
 For application tracing, `CUDA_LAUNCH_BLOCKING=1` synchronizes after each kernel launch and automatically enables `[zluda-launch]` tracing. `ZLUDA_LAUNCH_TRACE=1` can enable the names without blocking. Set `ZLUDA_LAUNCH_TRACE_FILE=C:\path\to\zluda-kernels.log` to append the same numbered records directly to disk; each record is flushed and synced so the last unmatched `#N begin` has the best chance of surviving a system crash.
 
 Important: launch blocking improves attribution; it does **not** make a page-faulting kernel harmless. If the workload is already known to page-fault the GPU, avoid repeated or long inference runs on a machine where a TDR/bugcheck is unacceptable.
+
+After a crash or controlled run, analyze the persistent launch trace with:
+
+```powershell
+python .\scripts\summarize-zluda-trace.py C:\path\to\zluda-kernels.log --json .\launch-summary.json
+```
+
+For numbered `[zluda-launch]` records, the report includes completed launches, explicit launch/sync errors, and the last `#N begin` that has no matching terminal record. That unmatched launch is the first kernel to investigate after a crash; it is evidence of the last in-flight launch, not by itself proof that the kernel source is defective.

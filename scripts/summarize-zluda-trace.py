@@ -20,6 +20,11 @@ LAUNCH_RE = re.compile(
 HANDLE_RE = re.compile(r'(?:^|[,\s])f:\s*(0x[0-9A-Fa-f]+)')
 RESULT_RE = re.compile(r'\)\s*->\s*([A-Z][A-Z0-9_]+)\s*$')
 TRACE_PREFIX_RE = re.compile(r'^\[ZLUDA_TRACE\]\s*')
+LAUNCH_BLOCKING_RE = re.compile(
+    r'^\[zluda-launch\]\s+#(?P<id>\d+)\s+'
+    r'(?P<event>begin|done|launch-error|sync-error)\s+'
+    r'kernel=(?P<kernel>\S+)(?:\s+(?P<detail>.*))?$'
+)
 
 
 def find_log(path: Path) -> Path:
@@ -41,11 +46,34 @@ def summarize_lines(lines: list[str], tail: int = 30) -> dict[str, Any]:
     functions: dict[str, str] = {}
     launches: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    blocking_events: list[dict[str, Any]] = []
+    blocking_open: dict[int, dict[str, Any]] = {}
+    blocking_errors: list[dict[str, Any]] = []
 
     for index, raw in enumerate(lines, 1):
         line = clean_line(raw)
         if not line:
             continue
+
+        bm = LAUNCH_BLOCKING_RE.match(line)
+        if bm:
+            launch_id = int(bm.group("id"))
+            event = bm.group("event")
+            item = {
+                "line": index,
+                "launch_id": launch_id,
+                "event": event,
+                "kernel": bm.group("kernel"),
+                "detail": bm.group("detail") or "",
+                "text": line,
+            }
+            blocking_events.append(item)
+            if event == "begin":
+                blocking_open[launch_id] = item
+            else:
+                blocking_open.pop(launch_id, None)
+                if event in {"launch-error", "sync-error"}:
+                    blocking_errors.append(item)
 
         m = FUNC_RE.search(line)
         if m:
@@ -82,6 +110,17 @@ def summarize_lines(lines: list[str], tail: int = 30) -> dict[str, Any]:
             }:
                 failures.append({"line": index, "status": status, "text": line})
 
+    unmatched = sorted(blocking_open.values(), key=lambda item: item["launch_id"])
+    completed_ids = {
+        item["launch_id"]
+        for item in blocking_events
+        if item["event"] in {"done", "launch-error", "sync-error"}
+    }
+    begin_ids = {
+        item["launch_id"]
+        for item in blocking_events
+        if item["event"] == "begin"
+    }
     tail_lines = [clean_line(x) for x in lines[-tail:] if clean_line(x)]
     return {
         "schema": 1,
@@ -91,6 +130,18 @@ def summarize_lines(lines: list[str], tail: int = 30) -> dict[str, Any]:
         "non_success_count": len(failures),
         "non_success_calls": failures,
         "last_launch": launches[-1] if launches else None,
+        "launch_blocking": {
+            "event_count": len(blocking_events),
+            "begin_count": len(begin_ids),
+            "terminal_count": len(completed_ids),
+            "error_count": len(blocking_errors),
+            "events": blocking_events,
+            "errors": blocking_errors,
+            "unmatched_count": len(unmatched),
+            "unmatched": unmatched,
+            "last_unmatched": unmatched[-1] if unmatched else None,
+            "last_event": blocking_events[-1] if blocking_events else None,
+        },
         "tail": tail_lines,
     }
 
@@ -143,8 +194,11 @@ def self_test() -> None:
     sample = [
         '[ZLUDA_TRACE] cuModuleGetFunction(hfunc: 0x00000123, hmod: 0x9, name: "kernel_ok") -> CUDA_SUCCESS',
         '[ZLUDA_TRACE] cuLaunchKernel(f: 0x00000123, gridDimX: 1, sharedMemBytes: 0) -> CUDA_SUCCESS',
+        '[zluda-launch] #10 begin kernel=kernel_ok grid=1x1x1 block=1x1x1 shared=0 stream=0x1',
+        '[zluda-launch] #10 done kernel=kernel_ok',
         '[ZLUDA_TRACE] cuModuleGetFunction(hfunc: 0x00000456, hmod: 0x9, name: "kernel_bad") -> CUDA_SUCCESS',
         '[ZLUDA_TRACE] cuLaunchKernel(f: 0x00000456, gridDimX: 2, sharedMemBytes: 0) -> CUDA_ERROR_LAUNCH_FAILED',
+        '[zluda-launch] #11 begin kernel=kernel_bad grid=2x1x1 block=1x1x1 shared=0 stream=0x2',
     ]
     result = summarize_lines(sample, 4)
     assert result["launch_count"] == 2
@@ -152,6 +206,11 @@ def self_test() -> None:
     assert result["launches"][1]["function_name"] == "kernel_bad"
     assert result["launches"][1]["status"] == "CUDA_ERROR_LAUNCH_FAILED"
     assert result["non_success_count"] == 1
+    assert result["launch_blocking"]["begin_count"] == 2
+    assert result["launch_blocking"]["terminal_count"] == 1
+    assert result["launch_blocking"]["unmatched_count"] == 1
+    assert result["launch_blocking"]["last_unmatched"]["launch_id"] == 11
+    assert result["launch_blocking"]["last_unmatched"]["kernel"] == "kernel_bad"
 
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
@@ -206,6 +265,29 @@ def main() -> int:
     if last:
         name = last.get("function_name") or "<unresolved>"
         print(f"Last launch: line {last['line']} {last['api']} {name} -> {last['status']}")
+    blocking = result.get("launch_blocking") or {}
+    if blocking.get("event_count"):
+        print(
+            "Launch-blocking trace: "
+            f"{blocking['begin_count']} begins, "
+            f"{blocking['terminal_count']} terminals, "
+            f"{blocking['error_count']} errors, "
+            f"{blocking['unmatched_count']} unmatched"
+        )
+        suspect = blocking.get("last_unmatched")
+        if suspect:
+            print(
+                "Crash suspect: "
+                f"#{suspect['launch_id']} {suspect['kernel']} "
+                f"(begin at line {suspect['line']}, no terminal record)"
+            )
+        elif blocking.get("last_event"):
+            event = blocking["last_event"]
+            print(
+                "Last blocking event: "
+                f"#{event['launch_id']} {event['event']} {event['kernel']} "
+                f"(line {event['line']})"
+            )
     if result["compiler_logs"]:
         print("Compiler logs:")
         for item in result["compiler_logs"]:
