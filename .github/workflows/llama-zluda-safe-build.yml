@@ -124,6 +124,19 @@ jobs:
           & .\artifact\llama-cli.exe --version
           if ($LASTEXITCODE -ne 0) { throw "Packaged llama-cli failed host dependency smoke: exit $LASTEXITCODE" }
 
+      - name: Assert artifact has no OpenSSL runtime dependency
+        shell: pwsh
+        run: |
+          $msvc = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC' -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $msvc.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin not found: $dumpbin" }
+          $deps = (& $dumpbin /dependents '.\artifact\llama-cli-impl.dll' | Out-String)
+          Write-Host $deps
+          if ($deps -match '(?i)libssl|libcrypto') {
+            throw 'Safe llama artifact still depends on OpenSSL runtime DLLs.'
+          }
+
       - name: Upload safe llama artifact
         uses: actions/upload-artifact@v4
         with:

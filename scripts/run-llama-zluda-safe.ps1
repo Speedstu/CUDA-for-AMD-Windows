@@ -25,10 +25,29 @@ $cli = Join-Path $LlamaDir 'llama-cli.exe'
 if (-not (Test-Path $cli)) { throw "Missing llama-cli.exe: $cli" }
 
 $manifest = Join-Path $LlamaDir 'build-manifest.json'
-if (Test-Path $manifest) {
-    $m = Get-Content $manifest -Raw | ConvertFrom-Json
-    if ([string]$m.llama_revision -ne '1e7bcf3da4b2741868d152fa47976fb2501c85e3') {
-        throw "Unexpected llama.cpp build revision: $($m.llama_revision)"
+if (-not (Test-Path $manifest)) {
+    throw 'Missing build-manifest.json. This launcher only accepts the repository safe llama artifact; do not point it at a generic b10978 CUDA build.'
+}
+$m = Get-Content $manifest -Raw | ConvertFrom-Json
+if ([string]$m.llama_revision -ne '1e7bcf3da4b2741868d152fa47976fb2501c85e3') {
+    throw "Unexpected llama.cpp build revision: $($m.llama_revision)"
+}
+if ([string]$m.cuda_toolkit -ne '12.4') {
+    throw "Unexpected CUDA toolkit in safe artifact: $($m.cuda_toolkit)"
+}
+$forceCublas = $m.PSObject.Properties['force_cublas']
+if (-not $forceCublas -or -not [bool]$forceCublas.Value) {
+    throw 'Safe artifact must be built with force_cublas=true.'
+}
+foreach ($name in @('force_mmq','cuda_graphs','cuda_vmm','peer_copy','flash_attention_compiled','nccl','openssl')) {
+    $prop = $m.PSObject.Properties[$name]
+    if (-not $prop) { throw "Safe artifact manifest is missing required field: $name" }
+    if ([bool]$prop.Value) { throw "Safe artifact requires $name=false." }
+}
+$arches = @($m.cuda_architectures | ForEach-Object { [string]$_ })
+foreach ($requiredArch in @('75-virtual','80-virtual')) {
+    if ($arches -notcontains $requiredArch) {
+        throw "Safe artifact is missing required PTX target: $requiredArch"
     }
 }
 
