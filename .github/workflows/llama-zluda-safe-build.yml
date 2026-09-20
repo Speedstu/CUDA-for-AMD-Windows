@@ -88,6 +88,7 @@ jobs:
           }
 
           Copy-Item 'scripts\run-llama-zluda-safe.ps1' $dst
+          Copy-Item 'scripts\stage-runtime.ps1' $dst
           [ordered]@{
             schema = 1
             llama_revision = '1e7bcf3da4b2741868d152fa47976fb2501c85e3'
