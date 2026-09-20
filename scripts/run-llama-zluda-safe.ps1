@@ -125,12 +125,55 @@ $p.StartInfo = $psi
 [void]$p.Start()
 $p.WaitForExit()
 
-Write-Host "[safe-llama] exit=$($p.ExitCode)"
+$exitCode = $p.ExitCode
+Write-Host "[safe-llama] exit=$exitCode"
+
+$traceBegin = 0
+$traceTerminal = 0
+$traceErrors = 0
+$openLaunches = @{}
+
 if (Test-Path $TraceFile) {
-    $tail = @(Get-Content $TraceFile -Tail 12)
+    $traceLines = @(Get-Content $TraceFile)
+    foreach ($line in $traceLines) {
+        if ($line -match '^\[zluda-launch\]\s+#(\d+)\s+(begin|done|launch-error|sync-error)\s+kernel=(\S+)') {
+            $id = [int64]$Matches[1]
+            $event = [string]$Matches[2]
+            $kernel = [string]$Matches[3]
+            if ($event -eq 'begin') {
+                $traceBegin++
+                $openLaunches[$id] = $kernel
+            } else {
+                $traceTerminal++
+                [void]$openLaunches.Remove($id)
+                if ($event -eq 'launch-error' -or $event -eq 'sync-error') { $traceErrors++ }
+            }
+        }
+    }
+
+    $tail = @($traceLines | Select-Object -Last 12)
     if ($tail.Count) {
         Write-Host '[safe-llama] trace tail:'
         $tail | ForEach-Object { Write-Host $_ }
     }
 }
-exit $p.ExitCode
+
+Write-Host "[safe-llama] trace summary: begins=$traceBegin terminals=$traceTerminal errors=$traceErrors unmatched=$($openLaunches.Count)"
+
+if ($exitCode -eq 0) {
+    if ($traceBegin -lt 1) {
+        throw 'Safe llama run exited 0 but no ZLUDA launch-blocking trace was recorded. Refusing to accept an old/non-instrumented nvcuda.dll.'
+    }
+    if ($traceErrors -ne 0) {
+        throw "Safe llama run exited 0 but the launch trace contains $traceErrors launch/sync error(s)."
+    }
+    if ($openLaunches.Count -ne 0) {
+        $last = $openLaunches.GetEnumerator() | Sort-Object Name | Select-Object -Last 1
+        throw "Safe llama run exited 0 with $($openLaunches.Count) unmatched launch(es); last open #$($last.Name) kernel=$($last.Value)"
+    }
+    if ($traceBegin -ne $traceTerminal) {
+        throw "Safe llama trace accounting mismatch: begins=$traceBegin terminals=$traceTerminal."
+    }
+}
+
+exit $exitCode
