@@ -6,12 +6,13 @@ This file records user-visible project milestones. Detailed experimental evidenc
 
 ### gfx1150 follow-up
 
+- Added a ZLUDA `CUDA_LAUNCH_BLOCKING` / per-kernel trace candidate plus `driver_launch_blocking` to attribute asynchronous GPU faults to the launch that triggered them.
 - Added a PTX target-selection candidate plus `driver_ptx_selection`: multi-PTX fatbins now have a testable path to select the highest target compatible with the advertised `ZLUDA_CC`, instead of silently choosing the highest PTX entry.
 - Added a `gfx1150` PyTorch conv2d safety fallback: the launcher and capability probe disable the known hanging legacy cuDNN route by default, with an explicit `-AllowUnsafeCudnnConv` A/B override and bridge-aware detection.
 - Fixed `project_revision` capture under PowerShell 7 in capability, functional, llama-registration, and trace reports.
 - Fixed `-AllowUnsafeFusedSDPA` so inherited safe-mode environment state cannot silently keep fused SDPA disabled; unrelated `PYTHONPATH` entries are preserved.
 - Added `driver_buffer_clear`, a focused PTX 7.0/8.4 non-default-stream clear/synchronize/readback probe for the remaining modern llama.cpp kernel-execution boundary.
-- Recorded the Radeon 890M / gfx1150 re-test: launch/PTX metadata and SDPA fail-safe fixes reproduce, while conv2d and modern llama.cpp kernel execution still need work.
+- Recorded the Radeon 890M / gfx1150 re-test: launch/PTX metadata and SDPA fail-safe fixes reproduce, while conv2d is now confirmed correct through the guarded no-cuDNN fallback; modern llama.cpp kernel execution remains under investigation.
 
 ### Experimental cuDNN / MIOpen bridge
 

@@ -45,6 +45,15 @@
       "required_probes": [
         "driver_ptx_selection"
       ]
+    },
+    {
+      "order": 50,
+      "file": "launch-blocking-candidate.patch",
+      "status": "candidate",
+      "purpose": "Honor CUDA_LAUNCH_BLOCKING at the ZLUDA driver launch layer and emit per-kernel launch traces",
+      "required_probes": [
+        "driver_launch_blocking"
+      ]
     }
   ]
 }

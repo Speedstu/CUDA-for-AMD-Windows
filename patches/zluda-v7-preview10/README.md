@@ -132,3 +132,22 @@ Upstream v7 currently walks PTX entries in reverse and stops at the first fully 
 The candidate instead selects the highest parsable PTX target **at or below** `ZLUDA_CC`. If no compatible PTX target exists, it returns `CUDA_ERROR_NO_BINARY_FOR_GPU` rather than compiling code above the advertised compatibility boundary.
 
 The regression probe `driver_ptx_selection` builds an in-memory fatbin containing `sm_80` and `sm_90` versions of the same kernel. Under `ZLUDA_CC=8.6`, the current unpatched loader executes the `sm_90` body; the candidate must execute `sm_80`.
+
+## Launch-blocking / kernel-trace candidate
+
+`launch-blocking-candidate.patch` adds driver-layer handling for `CUDA_LAUNCH_BLOCKING`.
+
+The gfx1150 reporter captured a Windows `0x119 VIDEO_SCHEDULER_INTERNAL_ERROR` kernel dump showing that the remaining modern llama.cpp failure is a GPU memory page fault reported asynchronously. The user-visible CUDA error therefore appears at whichever synchronization call happens next, not necessarily at the kernel that actually faulted.
+
+With this candidate and `CUDA_LAUNCH_BLOCKING=1`, every ZLUDA `cuLaunchKernel` / `cuLaunchKernelEx` launch is followed by a `hipStreamSynchronize` on the launch stream. The driver also emits per-kernel trace lines:
+
+```text
+[zluda-launch] #123 begin kernel=<CUDA symbol> ...
+[zluda-launch] #123 done kernel=<CUDA symbol>
+```
+
+A launch or synchronize error is reported against the same kernel name. `ZLUDA_LAUNCH_TRACE=1` enables the trace independently of blocking.
+
+The focused `driver_launch_blocking` probe sets both variables and uses only the tiny `buffer_clear` PTX regression kernel. It requires the normal correctness result plus the expected `begin` / `done` trace markers. This probe is the safe first check; it does **not** require running llama.cpp.
+
+This is diagnostic support, not a guarantee that a page-faulting application kernel becomes safe. A GPU page fault can still trigger Windows TDR/reset behavior before ZLUDA gets an error back. On gfx1150, do not use a long llama.cpp inference run merely to validate this patch.

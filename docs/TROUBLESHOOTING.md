@@ -98,3 +98,26 @@ To deliberately reproduce the raw legacy cuDNN path for A/B testing only:
 ```
 
 Do not use that override on a machine where a GPU/driver reset would be unacceptable. The default fallback is intentionally conservative.
+
+## gfx1150 llama.cpp can GPU-page-fault / bugcheck Windows
+
+A Radeon 890M / `gfx1150` reporter reproduced the remaining b10978 failure with a full Windows kernel dump. The dump identified `0x119 VIDEO_SCHEDULER_INTERNAL_ERROR` in `dxgmms2!VidSchiProcessIsrHwQueuePageFaulted`, consistent with a GPU hardware-queue page fault followed by a failed reset/recovery sequence.
+
+This means later errors reported at `ggml_backend_cuda_buffer_clear`, `buffer_set_tensor`, or a generic synchronize call can be asynchronous messengers rather than the kernel that actually faulted.
+
+Do **not** chase those synchronization line numbers as if they were the root kernel.
+
+The launch-blocking candidate adds a safer first diagnostic:
+
+```powershell
+.\scripts\test-capabilities.ps1 `
+  -RuntimeRoot C:\path\to\candidate-runtime `
+  -PythonExe C:\path\to\venv\Scripts\python.exe `
+  -Tests driver_launch_blocking
+```
+
+That probe uses a tiny known-safe PTX kernel and verifies that `CUDA_LAUNCH_BLOCKING=1` is actually honored by the ZLUDA driver path and that per-kernel trace markers are emitted.
+
+For application tracing, `CUDA_LAUNCH_BLOCKING=1` synchronizes after each kernel launch and automatically enables `[zluda-launch]` tracing. `ZLUDA_LAUNCH_TRACE=1` can enable the names without blocking. Set `ZLUDA_LAUNCH_TRACE_FILE=C:\path\to\zluda-kernels.log` to append the same numbered records directly to disk; each record is flushed and synced so the last unmatched `#N begin` has the best chance of surviving a system crash.
+
+Important: launch blocking improves attribution; it does **not** make a page-faulting kernel harmless. If the workload is already known to page-fault the GPU, avoid repeated or long inference runs on a machine where a TDR/bugcheck is unacceptable.

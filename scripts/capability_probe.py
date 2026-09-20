@@ -27,6 +27,7 @@ TESTS = (
     "driver_func_attributes",
     "driver_function_metadata",
     "driver_ptx_selection",
+    "driver_launch_blocking",
     "driver_buffer_clear",
     "nvml",
     "memory_copy",
@@ -849,6 +850,12 @@ def run_driver_ptx_selection(torch):
                 cuda.cuCtxDestroy_v2(ctx)
             except Exception:
                 pass
+
+def run_driver_launch_blocking(torch):
+    result = run_driver_buffer_clear(torch)
+    result["launch_blocking_requested"] = True
+    return result
+
 def run_driver_buffer_clear(torch):
     """Isolate the llama.cpp-style clear/synchronize path at the Driver API level.
 
@@ -2210,6 +2217,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_func_attributes": run_driver_func_attributes,
     "driver_function_metadata": run_driver_function_metadata,
     "driver_ptx_selection": run_driver_ptx_selection,
+    "driver_launch_blocking": run_driver_launch_blocking,
     "driver_buffer_clear": run_driver_buffer_clear,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,

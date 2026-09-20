@@ -1,0 +1,153 @@
+diff --git a/zluda/src/impl/function.rs b/zluda/src/impl/function.rs
+index 595bc25c..2f7c45ce 100644
+--- a/zluda/src/impl/function.rs
++++ b/zluda/src/impl/function.rs
+@@ -1,10 +1,20 @@
+ use cuda_types::cuda::{CUfunction, CUfunction_attribute, CUkernel};
+ use dark_api::FunctionArgInfo;
+ use hip_runtime_sys::*;
+-use std::mem;
++use std::{
++    ffi::CString,
++    fs::OpenOptions,
++    io::Write,
++    mem,
++    sync::{
++        atomic::{AtomicU64, Ordering},
++        OnceLock,
++    },
++};
+ 
+ pub(crate) struct Function {
+     pub(crate) base: hipFunction_t,
++    pub(crate) name: CString,
+     pub(crate) sm_version: u32,
+     pub(crate) ptx_version: u32,
+     pub(crate) explicit_args_size_align: Option<Vec<FunctionArgInfo>>,
+@@ -74,6 +84,48 @@ pub(crate) fn get_attribute(
+     Ok(())
+ }
+ 
++fn env_flag(name: &str) -> bool {
++    std::env::var(name)
++        .map(|value| {
++            let value = value.trim();
++            !value.is_empty()
++                && value != "0"
++                && !value.eq_ignore_ascii_case("false")
++                && !value.eq_ignore_ascii_case("no")
++                && !value.eq_ignore_ascii_case("off")
++        })
++        .unwrap_or(false)
++}
++
++fn launch_blocking_enabled() -> bool {
++    static ENABLED: OnceLock<bool> = OnceLock::new();
++    *ENABLED.get_or_init(|| env_flag("CUDA_LAUNCH_BLOCKING"))
++}
++
++fn launch_trace_enabled() -> bool {
++    static ENABLED: OnceLock<bool> = OnceLock::new();
++    *ENABLED.get_or_init(|| env_flag("ZLUDA_LAUNCH_TRACE") || launch_blocking_enabled())
++}
++
++fn next_launch_id() -> u64 {
++    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
++    NEXT_ID.fetch_add(1, Ordering::Relaxed)
++}
++
++fn trace_launch(message: &str) {
++    eprintln!("{message}");
++    if let Ok(path) = std::env::var("ZLUDA_LAUNCH_TRACE_FILE") {
++        let path = path.trim();
++        if !path.is_empty() {
++            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
++                let _ = writeln!(file, "{message}");
++                let _ = file.flush();
++                let _ = file.sync_data();
++            }
++        }
++    }
++}
++
+ pub(crate) fn launch_kernel(
+     f: &Function,
+     grid_dim_x: ::core::ffi::c_uint,
+@@ -91,7 +143,24 @@ pub(crate) fn launch_kernel(
+     if !extra.is_null() {
+         return hipError_t::ErrorNotSupported;
+     }
+-    unsafe {
++    let trace = launch_trace_enabled();
++    let launch_id = if trace { next_launch_id() } else { 0 };
++    if trace {
++        trace_launch(&format!(
++            "[zluda-launch] #{launch_id} begin kernel={} grid={}x{}x{} block={}x{}x{} shared={} stream={:?}",
++            f.name.to_string_lossy(),
++            grid_dim_x,
++            grid_dim_y,
++            grid_dim_z,
++            block_dim_x,
++            block_dim_y,
++            block_dim_z,
++            shared_mem_bytes,
++            stream
++        ));
++    }
++
++    let launch_result = unsafe {
+         hipModuleLaunchKernel(
+             f.base,
+             grid_dim_x,
+@@ -105,7 +174,39 @@ pub(crate) fn launch_kernel(
+             kernel_params,
+             extra,
+         )
++    };
++    if let Err(error) = launch_result {
++        if trace {
++            trace_launch(&format!(
++                "[zluda-launch] #{launch_id} launch-error kernel={} error={:?}",
++                f.name.to_string_lossy(),
++                error
++            ));
++        }
++        return Err(error);
++    }
++
++    if launch_blocking_enabled() {
++        let sync_result = unsafe { hipStreamSynchronize(stream) };
++        if let Err(error) = sync_result {
++            if trace {
++                trace_launch(&format!(
++                    "[zluda-launch] #{launch_id} sync-error kernel={} error={:?}",
++                    f.name.to_string_lossy(),
++                    error
++                ));
++            }
++            return Err(error);
++        }
+     }
++
++    if trace {
++        trace_launch(&format!(
++            "[zluda-launch] #{launch_id} done kernel={}",
++            f.name.to_string_lossy()
++        ));
++    }
++    Ok(())
+ }
+ 
+ pub(crate) unsafe fn set_attribute(
+diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
+index ae9d8465..9121e71b 100644
+--- a/zluda/src/impl/module.rs
++++ b/zluda/src/impl/module.rs
+@@ -42,6 +42,7 @@ impl ModuleMutable {
+                 unsafe { hipModuleGetFunction(&mut func_handle, module, entry.key().as_ptr()) }?;
+                 let func = Box::new(Function {
+                     base: func_handle,
++                    name: entry.key().clone(),
+                     sm_version,
+                     ptx_version,
+                     explicit_args_size_align,

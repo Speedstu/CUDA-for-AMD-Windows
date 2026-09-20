@@ -104,6 +104,11 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
     if (Test-Path $hipblasltLib) { Set-Env $psi 'HIPBLASLT_TENSILE_LIBPATH' $hipblasltLib }
     Set-Env $psi 'PATH' "$hip\bin;$zluda;$env:PATH"
 
+    if ($Name -eq 'driver_launch_blocking') {
+        Set-Env $psi 'CUDA_LAUNCH_BLOCKING' '1'
+        Set-Env $psi 'ZLUDA_LAUNCH_TRACE' '1'
+    }
+
     if (
         $Name -eq 'conv2d' -and
         $config.gpu -and
@@ -165,6 +170,20 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
     # arbitrary non-zero exits remain errors.
     $combinedOutput = ($stdout + "`n" + $stderr).ToLowerInvariant()
     $inferredUnsupported = [bool](-not $timedOut -and -not $parsed -and $combinedOutput.Contains('no kernel image is available'))
+    $launchBlockingTraceOk = $true
+    if ($Name -eq 'driver_launch_blocking') {
+        $traceBegin = [bool]($stderr -match '\[zluda-launch\] #\d+ begin kernel=buffer_clear')
+        $traceDone = [bool]($stderr -match '\[zluda-launch\] #\d+ done kernel=buffer_clear')
+        $launchBlockingTraceOk = [bool]($traceBegin -and $traceDone)
+        if ($parsed) {
+            $parsed | Add-Member -NotePropertyName launch_trace_begin -NotePropertyValue $traceBegin -Force
+            $parsed | Add-Member -NotePropertyName launch_trace_done -NotePropertyValue $traceDone -Force
+            if ([string]$parsed.status -eq 'pass' -and -not $launchBlockingTraceOk) {
+                $parsed.status = 'error'
+                $parsed | Add-Member -NotePropertyName launch_trace_error -NotePropertyValue 'CUDA_LAUNCH_BLOCKING trace markers were not observed' -Force
+            }
+        }
+    }
     $parsedStatus = if ($parsed) { [string]$parsed.status } elseif ($inferredUnsupported) { 'unsupported' } else { $null }
     $expectedExit = switch ($parsedStatus) {
         'pass'        { 0 }
