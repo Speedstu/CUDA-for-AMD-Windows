@@ -2,7 +2,7 @@
 
 ## Timeline
 
-- Early experiments used a `zuluda_tmp\zluda` tree and multiple LibTorch CUDA releases.
+- Early experiments used a `zluda_tmp\zluda` tree and multiple LibTorch CUDA releases.
 - A later project-local stack used `hip-sdk`, `zluda`, LibTorch cu118 and manual CMake linkage.
 - The strongest surviving snapshot retained multiple ZLUDA variants and an explicit `amd-zluda-custom` overlay.
 
