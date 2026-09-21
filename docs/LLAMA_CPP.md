@@ -366,7 +366,8 @@ For a modern llama.cpp build, this project will treat the path as validated only
 1. CUDA device registration succeeds without CPU fallback.
 2. Driver launch probes are clean.
 3. The selected kernels launch without GPU reset/hang.
-4. Prompt processing and token decode both complete.5. Output is compared against a known-good native/reference path where practical.
+4. Prompt processing and token decode both complete.
+5. Output is compared against a known-good native/reference path where practical.
 6. Repeated runs exit cleanly with no delayed driver crash.
 
 The gfx1200 reference satisfies device registration, driver launch probes, GPU kernel execution, prompt processing, token decode, and repeated clean exit for the diagnostic b10978 smoke. On gfx1150, the registration/launch/PTX-metadata/SDPA fixes are confirmed, while modern llama.cpp still has a separate application device-code/kernel-execution boundary. That application-specific work is tracked separately from the original issue #3 conv2d/SDPA report.
