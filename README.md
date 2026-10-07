@@ -53,6 +53,13 @@ The original low-level setup path is intentionally kept compatible for existing 
 
 See [`scripts/README.md`](scripts/README.md) for the stable user-facing commands and maintainer tooling.
 
+### PyTorch attention safety (stable and latest)
+
+Launch CUDA-facing PyTorch through `scripts/run-zluda.ps1`. On both ZLUDA v6 stable and v7 latest, it now defaults to **math-only SDPA** (`flash=False`, `mem_efficient=False`, `math=True`). This avoids the finite-but-wrong fused-attention output reported on gfx1100/gfx1150. It is a safe workaround, **not proof that the fused kernels work**. Use `-AllowUnsafeFusedSDPA` only for isolated diagnostics.
+
+`test-functional.ps1` deliberately probes raw kernels separately and may still report them as `incorrect`. Running `zluda.exe` directly bypasses the Python safety hook.
+
+The current prebuilt `zluda.exe` also splits program arguments containing spaces. A v7 source patch candidate is included for this (#6), built and tested on gfx1200. Upstream prebuilt launchers still need rebuilding with the patch before the fix takes effect.
 ## Current compatibility
 
 | GPU | Target | Project status | Notes |

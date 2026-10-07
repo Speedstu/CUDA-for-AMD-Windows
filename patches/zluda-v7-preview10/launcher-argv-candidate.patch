@@ -1,0 +1,91 @@
+diff --git a/zluda_inject/src/args.rs b/zluda_inject/src/args.rs
+index f1e0cec..5c5d9d4 100644
+--- a/zluda_inject/src/args.rs
++++ b/zluda_inject/src/args.rs
+@@ -19,17 +19,50 @@ pub struct Arguments {
+ 
+ impl Arguments {
+     pub fn command_line_zero_terminated(&self) -> Vec<u16> {
+-        let mut cmdline = Vec::with_capacity(1 + self.exe.len());
+-        cmdline.extend(self.exe.encode_wide());
+-        for arg in self.args.iter() {
+-            cmdline.push(' ' as u16);
+-            cmdline.extend(arg.encode_wide());
++        let mut cmdline = Vec::new();
++        append_windows_argument(&mut cmdline, &self.exe);
++        for arg in &self.args {
++            cmdline.push(b' ' as u16);
++            append_windows_argument(&mut cmdline, arg);
+         }
+         cmdline.push(0);
+         cmdline
+     }
+ }
+ 
++// Windows passes one command line, not an argv array. Apply MS CRT quoting.
++fn append_windows_argument(command_line: &mut Vec<u16>, arg: &std::ffi::OsStr) {
++    let units: Vec<u16> = arg.encode_wide().collect();
++    let quoted = units.is_empty()
++        || units
++            .iter()
++            .any(|&c| c == b' ' as u16 || c == b'\t' as u16 || c == b'"' as u16);
++    if quoted {
++        command_line.push(b'"' as u16);
++    }
++    let mut slashes = 0usize;
++    for &unit in &units {
++        if unit == b'\\' as u16 {
++            slashes += 1;
++        } else if unit == b'"' as u16 {
++            command_line.extend(std::iter::repeat(b'\\' as u16).take(slashes * 2 + 1));
++            command_line.push(unit);
++            slashes = 0;
++        } else {
++            command_line.extend(std::iter::repeat(b'\\' as u16).take(slashes));
++            slashes = 0;
++            command_line.push(unit);
++        }
++    }
++    command_line.extend(std::iter::repeat(b'\\' as u16).take(if quoted {
++        slashes * 2
++    } else {
++        slashes
++    }));
++    if quoted {
++        command_line.push(b'"' as u16);
++    }
++}
+ #[derive(Clone, Debug)]
+ pub enum ConfigSet {
+     Zluda,
+@@ -102,6 +135,30 @@ pub fn custom_args() -> impl Parser<Vec<LibraryWithPath>> {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn launcher_quotes_exe_path_and_spaced_argument() {
++        let args = Arguments {
++            paths: ConfigSet::Zluda,
++            exe: OsString::from(r"C:\Program Files\test.exe"),
++            args: vec![OsString::from("two words")],
++        };
++        let cmd = args.command_line_zero_terminated();
++        assert_eq!(*cmd.last().unwrap(), 0);
++        assert_eq!(
++            String::from_utf16(&cmd[..cmd.len() - 1]).unwrap(),
++            r#""C:\Program Files\test.exe" "two words""#
++        );
++    }
++
++    #[test]
++    fn launcher_escapes_quotes_and_keeps_empty_argument() {
++        let mut cmd = Vec::new();
++        append_windows_argument(&mut cmd, std::ffi::OsStr::new("hello\"world"));
++        assert_eq!(String::from_utf16(&cmd).unwrap(), r#""hello\"world""#);
++        cmd.clear();
++        append_windows_argument(&mut cmd, std::ffi::OsStr::new(""));
++        assert_eq!(String::from_utf16(&cmd).unwrap(), "\"\"");
++    }
+ 
+     #[test]
+     fn fail_on_duplicate_config_sets() {

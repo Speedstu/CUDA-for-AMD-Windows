@@ -60,3 +60,5 @@ A cleanup/refactor must preserve the behavior and parameters of existing public 
 If an entry point ever needs replacement, keep a wrapper for the old path for at least one documented transition period.
 
 Runtime behavior belongs in tests and source changes; repository organization should not silently alter compatibility semantics.
+
+PyTorch users should use `run-zluda.ps1`: it now defaults to math-only SDPA for **both** stable and latest channels, avoiding known finite-but-wrong fused outputs. `-AllowUnsafeFusedSDPA` is only for isolated diagnostics. `test-functional.ps1` intentionally exercises raw backends and may report them as `incorrect`.

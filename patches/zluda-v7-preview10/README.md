@@ -151,3 +151,7 @@ A launch or synchronize error is reported against the same kernel name. `ZLUDA_L
 The focused `driver_launch_blocking` probe sets both variables and uses only the tiny `buffer_clear` PTX regression kernel. It requires the normal correctness result plus the expected `begin` / `done` trace markers. This probe is the safe first check; it does **not** require running llama.cpp.
 
 This is diagnostic support, not a guarantee that a page-faulting application kernel becomes safe. A GPU page fault can still trigger Windows TDR/reset behavior before ZLUDA gets an error back. On gfx1150, do not use a long llama.cpp inference run merely to validate this patch.
+
+## Windows launcher argv candidate (#6)
+
+`launcher-argv-candidate.patch` fixes reconstruction of Windows process arguments in `zluda_inject/src/args.rs` (spaces, embedded quotes, trailing backslashes, and empty arguments). This is an **opt-in source candidate**, not a claim that the shipped prebuilt `zluda.exe` already contains the fix. Apply with `-IncludeCandidates` and rebuild the launcher. The patched `zluda.exe` was rebuilt and tested on RX 9060 XT / gfx1200: launcher argv round-trip PASS, executable path with spaces PASS, and ZLUDA/PyTorch math SDPA numerics PASS. gfx1150 and other architectures still require retesting.

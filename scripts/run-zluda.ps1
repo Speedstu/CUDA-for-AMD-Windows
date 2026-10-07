@@ -41,10 +41,6 @@ if ($config.gpu -and $null -ne $config.gpu.index) {
     Remove-Item Env:ROCR_VISIBLE_DEVICES -ErrorAction SilentlyContinue
 }
 
-$latestChannel = [bool](
-    $config.upstream -and
-    [string]$config.upstream.zluda_channel -eq 'latest'
-)
 $programLeaf = [System.IO.Path]::GetFileName($Program)
 $pythonProgram = [bool]($programLeaf -match '^python(?:w|[0-9.]*)?\.exe$')
 $gpuArch = if ($config.gpu -and $config.gpu.arch) { [string]$config.gpu.arch } else { '' }
@@ -70,8 +66,9 @@ foreach ($statePath in $bridgeStateCandidates) {
     } catch {}
 }
 
-# The unpatched upstream latest channel can enter unsafe fused SDPA paths.
-$autoSafeSDPA = [bool]($latestChannel -and $pythonProgram -and -not $AllowUnsafeFusedSDPA)
+# Both stable v6 and preview v7 have returned finite but wrong fused SDPA
+# tensors on AMD hardware. Keep math-only SDPA unless explicitly opted out.
+$autoSafeSDPA = [bool]($pythonProgram -and -not $AllowUnsafeFusedSDPA)
 $useSafeSDPA = [bool]($PyTorchSafeSDPA -or $autoSafeSDPA)
 
 # Community gfx1150 testing shows the legacy cuDNN/ZLUDA convolution path can
@@ -138,7 +135,7 @@ if (-not (Test-Path $launcher)) { throw "Missing ZLUDA launcher: $launcher" }
 Write-Host "[run] ZLUDA_CC=$env:ZLUDA_CC"
 if ($env:HIP_VISIBLE_DEVICES) { Write-Host "[run] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES" }
 if ($useSafeSDPA) {
-    $reason = if ($PyTorchSafeSDPA) { 'explicit' } else { 'automatic for unpatched latest channel' }
+    $reason = if ($PyTorchSafeSDPA) { 'explicit' } else { 'automatic for AMD ZLUDA (stable and latest)' }
     Write-Host "[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on ($reason)"
 }
 if ($useSafeConv2D) {

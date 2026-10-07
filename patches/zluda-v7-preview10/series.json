@@ -54,6 +54,15 @@
       "required_probes": [
         "driver_launch_blocking"
       ]
+    },
+    {
+      "order": 60,
+      "file": "launcher-argv-candidate.patch",
+      "status": "candidate",
+      "purpose": "Preserve Windows argv quoting, including spaced paths and embedded quotes, in the ZLUDA launcher",
+      "required_probes": [
+        "launcher_argv"
+      ]
     }
   ]
 }
