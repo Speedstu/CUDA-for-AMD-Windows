@@ -8,31 +8,11 @@ on:
     paths-ignore:
       - '.github/workflows/*-temp.yml'
 
-permissions:
-  contents: read
-  actions: write
-
 jobs:
   static-and-zluda-pin:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Delete completed one-time cleanup run
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $run = gh api repos/Speedstu/CUDA-for-AMD-Windows/actions/runs/37762706053 | ConvertFrom-Json
-          if ($run.head_sha -ne '302b0322a3e7f7dd13135143e37af3a8ed7d75b1' -or
-              $run.path -ne '.github/workflows/cleanup-irrelevant-actions-temp.yml' -or
-              $run.status -ne 'completed') {
-            throw 'Unexpected workflow run identity; refusing deletion'
-          }
-          gh api --method DELETE repos/Speedstu/CUDA-for-AMD-Windows/actions/runs/37762706053
-          if ($LASTEXITCODE -ne 0) { throw 'Could not delete maintenance workflow run' }
-          Write-Host 'Removed completed one-time cleanup history'
-
 
       - name: Parse PowerShell scripts
         shell: pwsh
