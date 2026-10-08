@@ -1,0 +1,57 @@
+name: One-time unrelated run cleanup
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-irrelevant-actions-temp.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  clean-unrelated-runs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify exact run identities and delete unrelated history
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected-ci-runs.txt <<'TARGETS'
+          36682128715 bfc7e640511820a715f681a9d548e7383961b09b .github/workflows/verify.yml
+          36682128669 bfc7e640511820a715f681a9d548e7383961b09b .github/workflows/username-enum-temp.yml
+          36682038091 e768e58dd42c8d299ecd0a7c93b5224c133cb768 .github/workflows/verify.yml
+          36682038131 e768e58dd42c8d299ecd0a7c93b5224c133cb768 .github/workflows/pincode-decode-temp.yml
+          36681714716 f74b1010743120cf850b1ca846ba01e86cd41aee .github/workflows/verify.yml
+          36681714766 f74b1010743120cf850b1ca846ba01e86cd41aee .github/workflows/pincode-decode-temp.yml
+          36681568401 f196c9cd5010e4d45c66e18e59abf9541b4f05c9 .github/workflows/verify.yml
+          36681568363 f196c9cd5010e4d45c66e18e59abf9541b4f05c9 .github/workflows/pinterest-profile-probe-temp.yml
+          36681400738 56f0ef387d19dd637592092a09cc857a71318bf3 .github/workflows/verify.yml
+          36681400814 56f0ef387d19dd637592092a09cc857a71318bf3 .github/workflows/pincode-decode-temp.yml
+          36628862770 6b7db4824d75ae4d2f1a70d849ff3ed5ad4d59e1 .github/workflows/verify.yml
+          36628862742 6b7db4824d75ae4d2f1a70d849ff3ed5ad4d59e1 .github/workflows/osint-lens-temp.yml
+          36628583412 7957275fb25148bd2f7643c7fc6313c060999720 .github/workflows/verify.yml
+          36628583332 7957275fb25148bd2f7643c7fc6313c060999720 .github/workflows/osint-lens-temp.yml
+          36628479506 9d10bded630da5f5ba9b8e74487d400dff9dbdf0 .github/workflows/verify.yml
+          36628479625 9d10bded630da5f5ba9b8e74487d400dff9dbdf0 .github/workflows/osint-lens-temp.yml
+          TARGETS
+
+          echo "Checking all 16 known unrelated workflow runs before deleting anything"
+          while read -r id expected_sha expected_path; do
+            data="$(gh api "repos/Speedstu/CUDA-for-AMD-Windows/actions/runs/$id")"
+            actual_sha="$(jq -r '.head_sha' <<<"$data")"
+            actual_path="$(jq -r '.path' <<<"$data")"
+            actual_status="$(jq -r '.status' <<<"$data")"
+            if [[ "$actual_sha" != "$expected_sha" || "$actual_path" != "$expected_path" || "$actual_status" != "completed" ]]; then
+              echo "::error::Refusing to delete run $id: it does not match the recorded SHA/path/status"
+              exit 1
+            fi
+            echo "Validated $id"
+          done < /tmp/expected-ci-runs.txt
+
+          while read -r id expected_sha expected_path; do
+            gh api --method DELETE "repos/Speedstu/CUDA-for-AMD-Windows/actions/runs/$id"
+            echo "Deleted run $id"
+          done < /tmp/expected-ci-runs.txt
