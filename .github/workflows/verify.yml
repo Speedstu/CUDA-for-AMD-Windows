@@ -2,7 +2,11 @@ name: verify
 
 on:
   push:
+    paths-ignore:
+      - '.github/workflows/*-temp.yml'
   pull_request:
+    paths-ignore:
+      - '.github/workflows/*-temp.yml'
 
 jobs:
   static-and-zluda-pin:
