@@ -1,0 +1,73 @@
+name: zluda-launcher-candidate-build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'patches/zluda-v7-preview10/launcher-argv-candidate.patch'
+      - '.github/workflows/zluda-launcher-candidate-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-launcher:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          cargo +1.96.0 --version
+
+      - name: Checkout pinned upstream ZLUDA
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/vosen/ZLUDA.git zluda-upstream
+          git -C zluda-upstream checkout --detach 9c8b43f242985150f86a7f485218b7b82c3e96ca
+
+      - name: Apply argv candidate and run focused unit tests
+        shell: pwsh
+        run: |
+          $patch = Join-Path $PWD 'patches/zluda-v7-preview10/launcher-argv-candidate.patch'
+          git -C zluda-upstream apply --check --whitespace=error-all $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher patch does not apply' }
+          git -C zluda-upstream apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Applying launcher patch failed' }
+          Push-Location zluda-upstream
+          try {
+            cargo +1.96.0 test -p zluda_inject --bin zluda launcher_ -- --nocapture
+            if ($LASTEXITCODE -ne 0) { throw 'Launcher unit tests failed' }
+            cargo +1.96.0 build -p zluda_inject --release
+            if ($LASTEXITCODE -ne 0) { throw 'Launcher build failed' }
+          } finally { Pop-Location }
+
+      - name: Package launcher separately from released runtimes
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force launcher-artifact | Out-Null
+          $exe = 'zluda-upstream/target/release/zluda.exe'
+          if (-not (Test-Path $exe)) { throw 'Missing launcher build output' }
+          Copy-Item $exe 'launcher-artifact/zluda.exe'
+          $sha = (Get-FileHash 'launcher-artifact/zluda.exe' -Algorithm SHA256).Hash
+          $metadata = [ordered]@{
+            source = 'vosen/ZLUDA'
+            upstream_revision = '9c8b43f242985150f86a7f485218b7b82c3e96ca'
+            patch = 'patches/zluda-v7-preview10/launcher-argv-candidate.patch'
+            project_revision = '${{ github.sha }}'
+            sha256 = $sha
+            scope = 'launcher-only candidate; no nvcuda.dll, not an official runtime release'
+          }
+          $metadata | ConvertTo-Json | Set-Content 'launcher-artifact/build-info.json'
+          Write-Host "zluda.exe SHA256: $sha"
+
+      - name: Upload tested launcher candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: zluda-v7-launcher-argv-candidate
+          path: launcher-artifact/
+          retention-days: 30
+          if-no-files-found: error

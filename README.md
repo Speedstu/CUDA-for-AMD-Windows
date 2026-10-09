@@ -60,7 +60,10 @@ Launch CUDA-facing PyTorch through `scripts/run-zluda.ps1`. On both ZLUDA v6 sta
 `test-functional.ps1` deliberately probes raw kernels separately and may still report them as `incorrect`. Running `zluda.exe` directly bypasses the Python safety hook.
 
 The current prebuilt `zluda.exe` also splits program arguments containing spaces. A v7 source patch candidate is included for this (#6), built and tested on gfx1200. Upstream prebuilt launchers still need rebuilding with the patch before the fix takes effect.
-## Current compatibility
+
+The launcher argv patch was also independently rebuilt and checked on Radeon 890M / gfx1150 (three passing repeats for the argument round-trip and a multi-word llama.cpp prompt). The patch still needs to be applied to distributed binaries; the separate `zluda-launcher-candidate-build` workflow creates a **candidate-only** build, not an automatic replacement for stable/latest.
+
+The conservative llama.cpp smoke now limits its default context to 4096 tokens via `-c`, rather than inheriting a potentially huge model maximum. Pass `-ContextSize` to override for intentional larger tests. The other safety flags are unchanged.## Current compatibility
 
 | GPU | Target | Project status | Notes |
 | --- | --- | --- | --- |

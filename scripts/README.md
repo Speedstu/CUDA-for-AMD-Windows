@@ -62,3 +62,6 @@ If an entry point ever needs replacement, keep a wrapper for the old path for at
 Runtime behavior belongs in tests and source changes; repository organization should not silently alter compatibility semantics.
 
 PyTorch users should use `run-zluda.ps1`: it now defaults to math-only SDPA for **both** stable and latest channels, avoiding known finite-but-wrong fused outputs. `-AllowUnsafeFusedSDPA` is only for isolated diagnostics. `test-functional.ps1` intentionally exercises raw backends and may report them as `incorrect`.
+### Memory-safe llama.cpp smoke
+
+`run-llama-zluda-safe.ps1` now sets `-c 4096` by default instead of inheriting a GGUF's 128K/256K training context. With the conservative `-nkvo` setting, the default model context can put tens of gigabytes of KV-cache and compute buffers in system RAM even for a one-token smoke. To request a larger context deliberately, pass `-ContextSize 8192` (or your chosen value). The launcher warns above 16K. `-nkvo`, `--no-op-offload`, `-fa off`, CUDA launch blocking and the trace gate remain unchanged. This is not a performance/feature validation for relaxed GPU settings.

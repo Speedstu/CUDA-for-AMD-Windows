@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Model,
     [int]$GpuLayers = 1,
     [int]$Predict = 1,
+    [ValidateRange(128, 262144)][int]$ContextSize = 4096,
     [string]$Prompt = 'Hello',
     [string]$TraceFile,
     [switch]$AllowMoreThanFourGpuLayers
@@ -93,7 +94,10 @@ Write-Host "[safe-llama] ZLUDA_CC=$env:ZLUDA_CC"
 if ($env:HIP_VISIBLE_DEVICES) { Write-Host "[safe-llama] HIP_VISIBLE_DEVICES=$env:HIP_VISIBLE_DEVICES" }
 Write-Host "[safe-llama] CUDA_LAUNCH_BLOCKING=1"
 Write-Host "[safe-llama] GGML_CUDA_DISABLE_GRAPHS=1"
-Write-Host "[safe-llama] gpu_layers=$GpuLayers predict=$Predict"
+Write-Host "[safe-llama] gpu_layers=$GpuLayers predict=$Predict context=$ContextSize"
+if ($ContextSize -gt 16384) {
+    Write-Warning "Large context ($ContextSize tokens) with -nkvo can allocate substantial system RAM. Use -ContextSize 4096 for a quick smoke."
+}
 Write-Host "[safe-llama] kernel trace: $TraceFile"
 
 $args = @(
@@ -108,6 +112,7 @@ $args = @(
     '-fa', 'off',
     '-st',
     '-n', [string]$Predict,
+    '-c', [string]$ContextSize,
     '-p', $Prompt,
     '--no-perf'
 )
