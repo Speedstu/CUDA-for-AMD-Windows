@@ -155,3 +155,7 @@ This is diagnostic support, not a guarantee that a page-faulting application ker
 ## Windows launcher argv candidate (#6)
 
 `launcher-argv-candidate.patch` fixes reconstruction of Windows process arguments in `zluda_inject/src/args.rs` (spaces, embedded quotes, trailing backslashes, and empty arguments). This is an **opt-in source candidate**, not a claim that the shipped prebuilt `zluda.exe` already contains the fix. Apply with `-IncludeCandidates` and rebuild the launcher. The patched `zluda.exe` was rebuilt and tested on RX 9060 XT / gfx1200: launcher argv round-trip PASS, executable path with spaces PASS, and ZLUDA/PyTorch math SDPA numerics PASS. gfx1150 and other architectures still require retesting.
+
+## Missing CUDA kernel symbol diagnostics candidate (issue #6)
+
+The optional `missing-symbol-diagnostics-candidate.patch` only prints an error when `hipModuleGetFunction` fails **and** `ZLUDA_TRACE_MISSING_SYMBOLS` is set in the launched process. Example: `$env:ZLUDA_TRACE_MISSING_SYMBOLS='1'`. The stderr line begins with `[zluda-symbol]` and contains the failing HIP status, CUDA-facing SM/PTX versions and kernel symbol. It does **not** change kernel selection or make an unsupported model work; it distinguishes a failed HIP lookup from a failure somewhere else. If the `MUL_MAT` reproducer still crashes without this line, the failure did not cross this specific lookup path. Do not enable an unsafe generic llama.cpp build to collect it: use the proven gfx1150 safe build and the smallest model that already fails there.

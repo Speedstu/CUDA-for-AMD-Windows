@@ -56,6 +56,15 @@
       ]
     },
     {
+      "order": 55,
+      "file": "missing-symbol-diagnostics-candidate.patch",
+      "status": "candidate",
+      "purpose": "Opt-in symbol lookup diagnostics for hipModuleGetFunction errors without changing successful launches",
+      "required_probes": [
+        "driver_function_metadata"
+      ]
+    },
+    {
       "order": 60,
       "file": "launcher-argv-candidate.patch",
       "status": "candidate",

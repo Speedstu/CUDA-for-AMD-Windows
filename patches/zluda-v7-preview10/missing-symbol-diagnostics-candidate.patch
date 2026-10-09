@@ -1,0 +1,22 @@
+diff --git a/zluda/src/impl/module.rs b/zluda/src/impl/module.rs
+index 9121e71..4e16d8d 100644
+--- a/zluda/src/impl/module.rs
++++ b/zluda/src/impl/module.rs
+@@ -39,7 +39,16 @@ impl ModuleMutable {
+             hash_map::Entry::Occupied(entry) => &*entry.into_mut(),
+             hash_map::Entry::Vacant(entry) => {
+                 let mut func_handle = unsafe { std::mem::zeroed() };
+-                unsafe { hipModuleGetFunction(&mut func_handle, module, entry.key().as_ptr()) }?;
++                let lookup = unsafe { hipModuleGetFunction(&mut func_handle, module, entry.key().as_ptr()) };
++                if lookup != hipError_t::Success
++                    && std::env::var_os("ZLUDA_TRACE_MISSING_SYMBOLS").is_some()
++                {
++                    eprintln!(
++                        "[zluda-symbol] hipModuleGetFunction failed status={lookup:?} sm={sm_version} ptx={ptx_version} kernel={}",
++                        entry.key().to_string_lossy()
++                    );
++                }
++                lookup?;
+                 let func = Box::new(Function {
+                     base: func_handle,
+                     name: entry.key().clone(),
