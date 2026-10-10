@@ -1,0 +1,16 @@
+diff --git a/ggml/src/ggml-cuda/mmf.cu b/ggml/src/ggml-cuda/mmf.cu
+index 646a5899c..8997ea6d1 100644
+--- a/ggml/src/ggml-cuda/mmf.cu
++++ b/ggml/src/ggml-cuda/mmf.cu
+@@ -182,3 +182,11 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const
+         case GGML_TYPE_F32:
++#ifdef GGML_CUDA_ZLUDA_DISABLE_F32_MMF
++            // The pinned ZLUDA-safe PTX artifact is missing some F32 MMF kernel
++            // instantiations (e.g. mul_mat_f<float, 32, 4, 8, false>). Fall back
++            // to the ordinary cuBLAS path instead of launching a missing kernel.
++            // Keep F16/BF16 MMF and the F32 MMVF path unchanged.
++            return false;
++#else
+             return ampere_mma_available(cc) || amd_mfma_available(cc);
++#endif
+         case GGML_TYPE_F16:

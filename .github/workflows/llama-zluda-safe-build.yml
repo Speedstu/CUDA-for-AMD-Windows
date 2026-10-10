@@ -21,6 +21,30 @@ jobs:
             throw 'llama.cpp revision drifted'
           }
 
+      - name: Apply ZLUDA-safe F32 MMF fallback patch
+        shell: pwsh
+        run: |
+          $patch = Join-Path $PWD 'patches/llama-b10978/zluda-safe-f32-mmf-fallback.patch'
+          git -C llama-src apply --check --whitespace=error-all $patch
+          if ($LASTEXITCODE -ne 0) { throw 'F32 MMF fallback patch does not apply to the pinned llama.cpp revision' }
+          git -C llama-src apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to apply the F32 MMF fallback patch' }
+          git -C llama-src diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'F32 MMF fallback patch introduced whitespace errors' }
+      - name: Verify F32 dispatch without GPU (both build variants)
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          python tests\test_llama_f32_mmf_dispatch.py --source llama-src\ggml\src\ggml-cuda\mmf.cu --output f32-mmf-dispatch.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /DGGML_CUDA_ZLUDA_DISABLE_F32_MMF f32-mmf-dispatch.cpp /Fe:f32-mmf-guarded.exe
+          if errorlevel 1 exit /b 1
+          f32-mmf-guarded.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc f32-mmf-dispatch.cpp /Fe:f32-mmf-default.exe
+          if errorlevel 1 exit /b 1
+          f32-mmf-default.exe
+          if errorlevel 1 exit /b 1
       # Reuse llama.cpp's own Windows CUDA 12.4 setup action from the pinned tree.
       - name: Install CUDA Toolkit 12.4
         uses: ./llama-src/.github/actions/windows-setup-cuda
@@ -43,6 +67,7 @@ jobs:
             -DGGML_CUDA_CUB_3DOT2=ON ^
             -DGGML_CUDA_FORCE_CUBLAS=ON ^
             -DGGML_CUDA_FORCE_MMQ=OFF ^
+            -DCMAKE_CUDA_FLAGS="-DGGML_CUDA_ZLUDA_DISABLE_F32_MMF" ^
             -DGGML_CUDA_GRAPHS=OFF ^
             -DGGML_CUDA_NO_VMM=ON ^
             -DGGML_CUDA_NO_PEER_COPY=ON ^
@@ -101,13 +126,14 @@ jobs:
             cuda_architectures = @('75-virtual','80-virtual')
             force_cublas = $true
             force_mmq = $false
+            disable_f32_mmf = $true
             cuda_graphs = $false
             cuda_vmm = $false
             peer_copy = $false
             flash_attention_compiled = $false
             nccl = $false
             openssl = $false
-            note = 'No NVIDIA runtime DLLs or OpenSSL runtime DLLs are included. Stage the project ZLUDA runtime and a matching stock cudart64_12.dll separately.'
+            note = 'F32 MMF dispatch disabled; F32 fallback goes to cuBLAS. No NVIDIA runtime DLLs or OpenSSL runtime DLLs included. Stage ZLUDA and matching stock cudart64_12.dll separately.'
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $dst 'build-manifest.json')
 
           Get-ChildItem $dst -File | ForEach-Object {

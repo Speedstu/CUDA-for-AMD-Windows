@@ -147,3 +147,8 @@ For broader bring-up:
 ```
 
 Then use the repository's **GPU compatibility report** issue template and include the exact GPU, `gfx` target, driver, HIP version, ZLUDA version/channel, application version, command, first useful error, and proof of GPU execution.
+### Experimental llama.cpp F32 MMF compatibility (issue #6)
+
+The Radeon 890M / gfx1150 reporter traced `MUL_MAT` missing-symbol crashes across six GGUF files to a single missing CUDA kernel, `mul_mat_f<float, 32, 4, 8, false>` (`hipModuleGetFunction` error 500). Switching the virtual compute capability from 8.6 to 7.5 made all six files launch, but that workaround affects *all* CUDA dispatch decisions and its results have not been compared for correctness against native ROCm. Do **not** silently change the project-wide `ZLUDA_CC` default.
+
+A candidate patched pinned llama.cpp safe build now offers a narrower solution: `GGML_CUDA_ZLUDA_DISABLE_F32_MMF` disables only F32 MMF dispatch and uses the existing MMVF/cuBLAS fallbacks. It does not alter F16/BF16 MMF, graph/FA safety flags or other applications. See [`patches/llama-b10978/README.md`](../patches/llama-b10978/README.md). **The new build still needs real gfx1150 inference and numerical validation** before treating the model compatibility as resolved. Speculative `top_k_cub` and Nemotron copy faults are separate and remain open.

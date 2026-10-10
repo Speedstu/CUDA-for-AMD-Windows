@@ -229,3 +229,4 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing support claims or prom
 Project-owned scripts and documentation are MIT licensed.
 
 ZLUDA, AMD ROCm/HIP, NVIDIA CUDA components, PyTorch/LibTorch and other third-party projects retain their own licenses. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+**llama.cpp / gfx1150 issue #6:** a new pinned safe-build candidate avoids the missing F32 `mul_mat_f` specialization through existing MMVF/cuBLAS fallback. It leaves `ZLUDA_CC=8.6` and F16/BF16 MMF unchanged; hardware validation of the new artifact is still required. See [F32 MMF candidate](patches/llama-b10978/README.md). This does not address speculative top-k or Nemotron copy faults.
