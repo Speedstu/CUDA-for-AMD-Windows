@@ -1,0 +1,11 @@
+diff --git a/ggml/src/ggml-cuda/top-k.cu b/ggml/src/ggml-cuda/top-k.cu
+index c7a0c8317..f6b063e1d 100644
+--- a/ggml/src/ggml-cuda/top-k.cu
++++ b/ggml/src/ggml-cuda/top-k.cu
+@@ -5,3 +5,5 @@
+ #    include <cub/cub.cuh>
+-#    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
++#    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2) && !defined(GGML_CUDA_ZLUDA_DISABLE_CUB_TOPK)
++        // Optional ZLUDA-safe fallback: keep CCCL for other operations but
++        // route TOP_K via argsort+copy instead of CUB DeviceTopK::MaxPairs.
+ #        define CUB_TOP_K_AVAILABLE
