@@ -29,7 +29,7 @@ The project does **not** currently claim modern llama.cpp support on every AMD G
 On the RX 9060 XT / `gfx1200` reference machine, a rebuilt v7-preview.10 runtime with the launch-attribute and PTX-metadata candidates now passes the driver preflight and a real b10978 GPU smoke:
 
 - `driver_pci_bus_id`, `driver_launch_ex`, `driver_func_attributes`, and `driver_function_metadata`: **PASS**;
-- the b10978 `.version 8.4 / .target sm_90` regression reports `PTX_VERSION=84`, so the false `ptxVersion >= 90` PDL gate stays **false**;
+- the previous PTX_VERSION=84 expectation for PTX 8.4 targeting sm_90 was incorrect; the function attribute must report 90, and PDL compatibility needs an independent guard;
 - `llama-cli --list-devices` detects `CUDA0: AMD Radeon RX 9060 XT [ZLUDA]` with no CPU-only fallback;
 - a tiny GGUF smoke with `-ngl all -dev CUDA0 -fa off` and no `GGML_CUDA_PDL` override assigns **6/6 layers** to `CUDA0`, places the KV and compute buffers on CUDA0, completes CUDA Graph warmup, produces prompt/decode output, and exits cleanly;
 - the smoke was repeated and did not produce a delayed GPU reset on the reference machine.
@@ -44,8 +44,8 @@ The driver-level fixes reproduce there:
 
 - `driver_pci_bus_id`: PASS;
 - `driver_launch_ex`: PASS, including `COOPERATIVE=0`, while `PDL=1` still fails closed with 801;
-- `driver_function_metadata`: PASS, including PTX 7.0 → 70 and PTX 8.4 → 84;
-- the false b10978 `ptxVersion >= 90` PDL gate is therefore closed on gfx1150 too;
+- driver_function_metadata: earlier ISA-based 70/84 PASS results were incorrect; the updated test checks PTX target SM and requires numerical CUB checks;
+- the corrected function attribute is not a PDL safety guard. PDL must be explicitly disabled or independently supported, especially with stock drivers;
 - memory-efficient SDPA changed from a finite but incorrect tensor to an explicit safe refusal, confirming the original silent-corruption bug is fixed on RDNA 3.5 as well.
 
 Recent llama.cpp still does **not** pass end-to-end on that GPU. The candidate now gets past the old launch-attribute failure, spends time loading/compiling kernels, then fails later during real kernel execution around `ggml_backend_cuda_buffer_clear` / stream synchronization (and, for another model, `ggml_cuda_kernel_can_use_pdl`). The reporter also tested `ZLUDA_CC=8.0`, `8.6`, and `9.0`; the failure remained, so changing the advertised CUDA compute capability is not being treated as a fix.
