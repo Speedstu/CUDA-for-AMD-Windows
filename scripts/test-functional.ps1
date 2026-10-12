@@ -4,6 +4,7 @@ param(
     [string]$PythonExe,
     [int]$TimeoutSeconds = 30,
     [string]$ReportPath,
+    [string[]]$Tests,
     [switch]$Strict
 )
 
@@ -253,7 +254,16 @@ Write-Host "PyTorch: $(($torchCheck | Out-String).Trim())"
 Write-Host "Timeout: ${TimeoutSeconds}s per operation"
 Write-Host ''
 
-$testNames = @('matmul', 'conv2d', 'sdpa_math', 'sdpa_flash', 'sdpa_mem_efficient')
+$allowedTests = @('matmul', 'conv2d', 'sdpa_math', 'sdpa_flash', 'sdpa_mem_efficient')
+if ($Tests -and $Tests.Count -gt 0) {
+    foreach ($name in $Tests) {
+        if ($allowedTests -cnotcontains $name) { throw "Unknown functional probe: $name" }
+    }
+    if (@($Tests | Select-Object -Unique).Count -ne $Tests.Count) { throw 'Duplicate functional test names.' }
+    $testNames = @($Tests)
+} else {
+    $testNames = $allowedTests
+}
 $tests = @()
 foreach ($name in $testNames) {
     Write-Host ("Testing {0}..." -f $name) -NoNewline

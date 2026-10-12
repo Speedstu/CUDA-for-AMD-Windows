@@ -63,7 +63,13 @@ The current prebuilt `zluda.exe` also splits program arguments containing spaces
 
 The launcher argv patch was also independently rebuilt and checked on Radeon 890M / gfx1150 (three passing repeats for the argument round-trip and a multi-word llama.cpp prompt). The patch still needs to be applied to distributed binaries; the separate `zluda-launcher-candidate-build` workflow creates a **candidate-only** build, not an automatic replacement for stable/latest.
 
-The conservative llama.cpp smoke now limits its default context to 4096 tokens via `-c`, rather than inheriting a potentially huge model maximum. Pass `-ContextSize` to override for intentional larger tests. The other safety flags are unchanged.## Current compatibility
+The conservative llama.cpp smoke now limits its default context to 4096 tokens via `-c`, rather than inheriting a potentially huge model maximum. Pass `-ContextSize` to override for intentional larger tests. The other safety flags are unchanged.
+
+### Release quality and regression protection
+
+**A green build is not a hardware correctness certificate.** Before considering a ZLUDA driver candidate for general use, maintainers must verify the candidate DLL SHA-256 and run the CPU-vs-GPU numerical tests for sort, cumsum, matmul and math-only SDPA. The fail-closed, read-only [promotion gate](docs/PROMOTION_POLICY.md) rejects missing, stale or mismatched test evidence. Compilation-only artifacts remain experimental, and the known-good runtime is not replaced automatically.
+
+## Current compatibility
 
 | GPU | Target | Project status | Notes |
 | --- | --- | --- | --- |

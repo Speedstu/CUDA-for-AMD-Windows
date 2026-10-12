@@ -78,6 +78,7 @@ jobs:
           python scripts/summarize-zluda-trace.py --self-test
           python tests/test_safe_llama_context.py
           python tests/test_ptx_metadata_semantics.py
+          python tests/test_promotion_gate.py
           python -m py_compile tests/test_missing_symbol_trace.py
           python -m py_compile tests/test_llama_topk_fallback.py tests/test_llama_topk_radix_fallback.py
           $tests = @(python scripts/functional_probe.py --list-tests)
