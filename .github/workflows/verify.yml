@@ -79,7 +79,7 @@ jobs:
           python tests/test_safe_llama_context.py
           python tests/test_ptx_metadata_semantics.py
           python -m py_compile tests/test_missing_symbol_trace.py
-          python -m py_compile tests/test_llama_topk_fallback.py
+          python -m py_compile tests/test_llama_topk_fallback.py tests/test_llama_topk_radix_fallback.py
           $tests = @(python scripts/functional_probe.py --list-tests)
           $expected = @('matmul','conv2d','sdpa_math','sdpa_mem_efficient')
           foreach ($name in $expected) {

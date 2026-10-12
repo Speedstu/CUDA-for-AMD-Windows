@@ -1,0 +1,216 @@
+name: llama-zluda-topk-radix-candidate-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-safe-llama:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout pinned llama.cpp b10978
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git llama-src
+          git -C llama-src fetch --depth 1 origin 1e7bcf3da4b2741868d152fa47976fb2501c85e3
+          git -C llama-src checkout --detach FETCH_HEAD
+          if ((git -C llama-src rev-parse HEAD) -ne '1e7bcf3da4b2741868d152fa47976fb2501c85e3') {
+            throw 'llama.cpp revision drifted'
+          }
+
+      - name: Apply ZLUDA-safe F32 MMF fallback patch
+        shell: pwsh
+        run: |
+          $patch = Join-Path $PWD 'patches/llama-b10978/zluda-safe-f32-mmf-fallback.patch'
+          git -C llama-src apply --check --whitespace=error-all $patch
+          if ($LASTEXITCODE -ne 0) { throw 'F32 MMF fallback patch does not apply to the pinned llama.cpp revision' }
+          git -C llama-src apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to apply the F32 MMF fallback patch' }
+          git -C llama-src diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'F32 MMF fallback patch introduced whitespace errors' }
+      - name: Apply opt-in TOP_K argsort fallback candidate
+        shell: pwsh
+        run: |
+          $patch = Join-Path $PWD 'patches/llama-b10978/zluda-safe-topk-argsort-candidate.patch'
+          git -C llama-src apply --check --whitespace=error-all $patch
+          if ($LASTEXITCODE -ne 0) { throw 'TOP_K candidate patch cannot apply to pinned llama.cpp' }
+          git -C llama-src apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'TOP_K candidate patch apply failed' }
+          git -C llama-src diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'TOP_K candidate introduces whitespace errors' }
+
+      - name: Apply CUB-free radix TOP_K candidate patch
+        shell: pwsh
+        run: |
+          $patch = Join-Path $PWD 'patches/llama-b10978/zluda-safe-topk-radix-candidate.patch'
+          git -C llama-src apply --unidiff-zero --check --whitespace=error-all $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CUB-free TOP_K radix patch does not apply' }
+          git -C llama-src apply --unidiff-zero $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CUB-free TOP_K radix patch failed to apply' }
+          git -C llama-src diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'CUB-free radix patch contains whitespace errors' }
+
+      - name: Validate CUB-free radix branch without a GPU
+        shell: pwsh
+        run: |
+          python tests/test_llama_topk_radix_fallback.py --source llama-src/ggml/src/ggml-cuda/top-k.cu
+          if ($LASTEXITCODE -ne 0) { throw 'CUB-free radix branch source check failed' }
+      - name: Check TOP_K branch with and without candidate macro (no GPU)
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          python tests\test_llama_topk_fallback.py --source llama-src\ggml\src\ggml-cuda\top-k.cu --output topk-dispatch.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /DGGML_CUDA_ZLUDA_DISABLE_CUB_TOPK topk-dispatch.cpp /Fe:topk-fallback.exe
+          if errorlevel 1 exit /b 1
+          topk-fallback.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc topk-dispatch.cpp /Fe:topk-default.exe
+          if errorlevel 1 exit /b 1
+          topk-default.exe
+          if errorlevel 1 exit /b 1
+      - name: Verify F32 dispatch without GPU (both build variants)
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          python tests\test_llama_f32_mmf_dispatch.py --source llama-src\ggml\src\ggml-cuda\mmf.cu --output f32-mmf-dispatch.cpp
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /DGGML_CUDA_ZLUDA_DISABLE_F32_MMF f32-mmf-dispatch.cpp /Fe:f32-mmf-guarded.exe
+          if errorlevel 1 exit /b 1
+          f32-mmf-guarded.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc f32-mmf-dispatch.cpp /Fe:f32-mmf-default.exe
+          if errorlevel 1 exit /b 1
+          f32-mmf-default.exe
+          if errorlevel 1 exit /b 1
+      # Reuse llama.cpp's own Windows CUDA 12.4 setup action from the pinned tree.
+      - name: Install CUDA Toolkit 12.4
+        uses: ./llama-src/.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '12.4'
+          cuda_arch: x64
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
+      - name: Configure ZLUDA-safe CUDA build
+        shell: cmd
+        working-directory: llama-src
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON ^
+            -DGGML_CUDA_FORCE_CUBLAS=ON ^
+            -DGGML_CUDA_FORCE_MMQ=OFF ^
+            -DCMAKE_CUDA_FLAGS="-DGGML_CUDA_ZLUDA_DISABLE_F32_MMF -DGGML_CUDA_ZLUDA_DISABLE_CUB_TOPK -DGGML_CUDA_ZLUDA_TOPK_RADIX" ^
+            -DGGML_CUDA_GRAPHS=OFF ^
+            -DGGML_CUDA_NO_VMM=ON ^
+            -DGGML_CUDA_NO_PEER_COPY=ON ^
+            -DGGML_CUDA_FA=OFF ^
+            -DGGML_CUDA_NCCL=OFF ^
+            -DLLAMA_OPENSSL=OFF ^
+            "-DCMAKE_CUDA_ARCHITECTURES=75-virtual;80-virtual"
+          cmake --build build --config Release -j 2 --target llama-cli
+
+      - name: Inspect CUDA feature surface
+        shell: pwsh
+        run: |
+          $bin = Resolve-Path 'llama-src\build\bin\Release'
+          Get-ChildItem $bin -File | Select-Object Name,Length | Format-Table -AutoSize
+          $cudaDll = Join-Path $bin 'ggml-cuda.dll'
+          if (-not (Test-Path $cudaDll)) { throw 'ggml-cuda.dll missing from safe build' }
+          $strings = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($cudaDll))
+          if ($strings -notmatch 'sm_75' -and $strings -notmatch 'compute_75') {
+            Write-Warning 'sm_75 marker not found in raw binary strings; CMake log remains the architecture source of truth.'
+          }
+          if ($strings -notmatch 'sm_80' -and $strings -notmatch 'compute_80') {
+            Write-Warning 'sm_80 marker not found in raw binary strings; CMake log remains the architecture source of truth.'
+          }
+
+      - name: Package only project-built files
+        shell: pwsh
+        run: |
+          $src = Resolve-Path 'llama-src\build\bin\Release'
+          $dst = Join-Path $PWD 'artifact'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          $required = @(
+            'llama-cli.exe','llama-cli-impl.dll','llama-server-impl.dll','llama-common.dll','mtmd.dll',
+            'llama.dll','ggml.dll','ggml-base.dll','ggml-cpu.dll','ggml-cuda.dll'
+          )
+          foreach ($name in $required) {
+            $path = Join-Path $src $name
+            if (-not (Test-Path $path)) { throw "Missing expected build output: $name" }
+            Copy-Item $path $dst
+          }
+
+          $forbidden = @('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll','nvcuda.dll','nvrtc64_*.dll')
+          foreach ($pattern in $forbidden) {
+            if (Get-ChildItem $dst -File -Filter $pattern -ErrorAction SilentlyContinue) {
+              throw "Vendor CUDA DLL unexpectedly entered artifact: $pattern"
+            }
+          }
+
+          Copy-Item 'scripts\run-llama-zluda-safe.ps1' $dst
+          Copy-Item 'scripts\stage-runtime.ps1' $dst
+          [ordered]@{
+            schema = 1
+            llama_revision = '1e7bcf3da4b2741868d152fa47976fb2501c85e3'
+            llama_build = 'b10978'
+            cuda_toolkit = '12.4'
+            cuda_architectures = @('75-virtual','80-virtual')
+            force_cublas = $true
+            force_mmq = $false
+            disable_f32_mmf = $true
+            disable_cub_topk = $true
+            topk_implementation = 'cuda_radix_select'
+            candidate = $true
+            cuda_graphs = $false
+            cuda_vmm = $false
+            peer_copy = $false
+            flash_attention_compiled = $false
+            nccl = $false
+            openssl = $false
+            note = 'Experimental topk radix candidate: F32 MMF disabled and both DeviceTopK/DeviceRadixSort avoided using plain CUDA radix selection. GPU output correctness on gfx1150 unverified. No NVIDIA runtime DLLs or OpenSSL runtime DLLs included.'
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $dst 'build-manifest.json')
+
+          Get-ChildItem $dst -File | ForEach-Object {
+            [pscustomobject]@{
+              Name = $_.Name
+              Bytes = $_.Length
+              SHA256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $dst 'sha256.json')
+
+      - name: Smoke packaged llama host dependencies
+        shell: pwsh
+        run: |
+          & .\artifact\llama-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged llama-cli failed host dependency smoke: exit $LASTEXITCODE" }
+
+      - name: Assert artifact has no OpenSSL runtime dependency
+        shell: pwsh
+        run: |
+          $msvc = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC' -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $msvc.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin not found: $dumpbin" }
+          $deps = (& $dumpbin /dependents '.\artifact\llama-cli-impl.dll' | Out-String)
+          Write-Host $deps
+          if ($deps -match '(?i)libssl|libcrypto') {
+            throw 'Safe llama artifact still depends on OpenSSL runtime DLLs.'
+          }
+
+      - name: Upload safe llama artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-b10978-zluda-topk-radix-candidate
+          path: artifact
+          retention-days: 14
+          if-no-files-found: error

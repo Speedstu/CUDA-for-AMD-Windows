@@ -163,3 +163,10 @@ driver passed the reporter's corresponding tests.
 The corrected candidate preserves target SM and adds cub_sort_scan CPU-vs-GPU
 tests at 8192 and 65536 elements. Build success alone is insufficient:
 perform real GPU validation before replacing any existing runtime.
+### Experimental TOP_K radix candidate (issue #6)
+
+The previous experimental TOP_K argsort artifact failed at a subsequent CUB
+DeviceRadixSort call on gfx1150. A separate opt-in radix candidate now
+routes TOP_K through the existing plain-CUDA radix selection code. It is
+not yet hardware-validated and must not replace the known-good F32 MMF
+safe build. Nemotron copy errors are not addressed.

@@ -1,0 +1,16 @@
+diff --git a/ggml/src/ggml-cuda/top-k.cu b/ggml/src/ggml-cuda/top-k.cu
+index f6b063e1d..9dd5f35c6 100644
+--- a/ggml/src/ggml-cuda/top-k.cu
++++ b/ggml/src/ggml-cuda/top-k.cu
+@@ -53 +53 @@ static int next_power_of_2(int x) {
+-#if !defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP)
++#if (!defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP)) || defined(GGML_CUDA_ZLUDA_TOPK_RADIX)
+@@ -230 +230,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+-#ifdef CUB_TOP_K_AVAILABLE
++#if defined(GGML_CUDA_ZLUDA_TOPK_RADIX)
++    // Candidate-only, CUB-free path for ZLUDA: avoid both DeviceTopK and
++    // DeviceRadixSort kernels unsupported on gfx1150.
++    // This implementation is the existing HIP radix selection algorithm,
++    // compiled as plain CUDA for the opt-in candidate.
++    top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
++#elif defined(CUB_TOP_K_AVAILABLE)
