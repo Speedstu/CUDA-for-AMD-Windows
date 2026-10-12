@@ -26,6 +26,7 @@ TESTS = (
     "driver_pdl_semantics",
     "driver_func_attributes",
     "driver_function_metadata",
+    "cub_sort_scan",
     "driver_ptx_selection",
     "driver_launch_blocking",
     "driver_buffer_clear",
@@ -802,7 +803,7 @@ def run_driver_ptx_selection(torch):
         selected = int(host.value) if copy_rc == 0 else None
         ok = (
             ptx_rc == 0
-            and int(ptx_version.value) == 84
+            and int(ptx_version.value) == expected
             and binary_rc == 0
             and launch_rc == 0
             and sync_rc == 0
@@ -819,7 +820,7 @@ def run_driver_ptx_selection(torch):
             "ptx_version": {
                 "rc": ptx_rc,
                 "value": int(ptx_version.value),
-                "expected": 84,
+                "expected": expected,
             },
             "binary_version": {
                 "rc": binary_rc,
@@ -1253,10 +1254,9 @@ def run_driver_func_attributes(torch):
 def run_driver_function_metadata(torch):
     """Validate CUDA PTX/BINARY function metadata with known source modules.
 
-    CUDA defines CU_FUNC_ATTRIBUTE_PTX_VERSION as PTX ISA major/minor encoded
-    as major*10+minor.  It is not the module target SM.  The sm_90 / PTX 8.4
-    case mirrors the llama.cpp b10978 false-PDL gate: returning 90 instead of
-    84 can incorrectly satisfy ptxVersion >= 90.
+    CU_FUNC_ATTRIBUTE_PTX_VERSION reports the PTX target virtual architecture,
+    not its .version ISA. CUB chooses its host policies using this value,
+    which must agree with __CUDA_ARCH__ inside the compiled GPU code.
     """
     cuda = _load_win_dll("nvcuda.dll")
     cuda.cuInit.argtypes = [ctypes.c_uint]
@@ -1296,7 +1296,7 @@ def run_driver_function_metadata(torch):
     device_capability = tuple(int(x) for x in torch.cuda.get_device_capability(0))
     expected_binary_version = device_capability[0] * 10 + device_capability[1]
 
-    def probe_case(ptx_version_text: str, target_sm: int, expected_ptx_version: int, kernel_name: str):
+    def probe_case(ptx_version_text: str, target_sm: int, kernel_name: str):
         ptx = f""".version {ptx_version_text}
 .target sm_{target_sm}
 .address_size 64
@@ -1326,7 +1326,7 @@ def run_driver_function_metadata(torch):
             binary_version = ctypes.c_int()
             ptx_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(ptx_version), 5, func))
             binary_rc = int(cuda.cuFuncGetAttribute(ctypes.byref(binary_version), 6, func))
-            ptx_ok = ptx_rc == 0 and int(ptx_version.value) == expected_ptx_version
+            ptx_ok = ptx_rc == 0 and int(ptx_version.value) == target_sm
             return {
                 "ok": bool(ptx_ok and binary_rc == 0 and binary_version.value >= 0),
                 "ptx_source": {
@@ -1336,8 +1336,8 @@ def run_driver_function_metadata(torch):
                 "ptx_version": {
                     "rc": ptx_rc,
                     "value": int(ptx_version.value),
-                    "expected": expected_ptx_version,
-                    "matches_target_sm_by_accident": int(ptx_version.value) == target_sm,
+                    "expected": target_sm,
+                    "matches_target_sm": int(ptx_version.value) == target_sm,
                 },
                 "binary_version": {
                     "rc": binary_rc,
@@ -1354,14 +1354,10 @@ def run_driver_function_metadata(torch):
                     pass
 
     try:
-        baseline = probe_case("7.0", 80, 70, "metadata_probe_70")
-        llama_gate = probe_case("8.4", 80, 84, "metadata_probe_84")
-        false_pdl_gate = bool(
-            llama_gate["ptx_version"]["value"] >= 90
-            and llama_gate["ptx_version"]["expected"] < 90
-        )
+        baseline = probe_case("7.0", 80, "metadata_probe_70")
+        llama_gate = probe_case("8.4", 80, "metadata_probe_84")
         return {
-            "ok": bool(baseline["ok"] and llama_gate["ok"] and not false_pdl_gate),
+            "ok": bool(baseline["ok"] and llama_gate["ok"]),
             # Keep the original top-level fields for report consumers that
             # predate the multi-case regression.
             "ptx_source": baseline["ptx_source"],
@@ -1372,10 +1368,9 @@ def run_driver_function_metadata(torch):
                 "baseline_ptx70_sm80": baseline,
                 "llama_b10978_ptx84_sm80": llama_gate,
             },
-            "llama_b10978_false_pdl_gate": false_pdl_gate,
             "notes": {
-                "semantic_regression": "PTX_VERSION must describe PTX ISA version, not target SM",
-                "llama_b10978": "Selected PTX 8.4 must report 84 independently of target SM; reporting target SM can falsely enable ptxVersion>=90 PDL dispatch",
+                "semantic_regression": "PTX_VERSION must report the target virtual architecture, not PTX ISA .version",
+                "llama_b10978": "A .version 8.4 module targeting sm_80 must report 80; CUB host policy must agree with __CUDA_ARCH__=800",
                 "binary_version": "recorded separately because applications may use it for architecture gating; mismatch is diagnostic until validated",
             },
         }
@@ -2208,6 +2203,33 @@ def run_cuda_graph(torch):
     return {"ok": check["ok"], "numerics": check}
 
 
+
+def run_cub_sort_scan(torch):
+    """Detect incorrect CUB host/device dispatch on small CPU-checked arrays."""
+    rows = []
+    for n in (8192, 65536):
+        host = torch.arange(n - 1, -1, -1, dtype=torch.float32)
+        dev = host.to("cuda")
+        got_sort = torch.sort(dev).values
+        sync(torch)
+        got_sort = got_sort.cpu()
+        expected_sort = torch.sort(host).values
+        wrong_sort = (got_sort != expected_sort).nonzero().reshape(-1)
+
+        got_scan = torch.cumsum(torch.ones(n, device="cuda", dtype=torch.float32), dim=0)
+        sync(torch)
+        got_scan = got_scan.cpu()
+        expected_scan = torch.arange(1, n + 1, dtype=torch.float32)
+        wrong_scan = (got_scan != expected_scan).nonzero().reshape(-1)
+        rows.append({
+            "n": n,
+            "sort_ok": wrong_sort.numel() == 0,
+            "scan_ok": wrong_scan.numel() == 0,
+            "sort_first_wrong": int(wrong_sort[0].item()) if wrong_sort.numel() else None,
+            "scan_first_wrong": int(wrong_scan[0].item()) if wrong_scan.numel() else None,
+        })
+    return {"ok": all(r["sort_ok"] and r["scan_ok"] for r in rows), "cases": rows}
+
 RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "device_info": run_device_info,
     "driver_pci_bus_id": run_driver_pci_bus_id,
@@ -2216,6 +2238,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_pdl_semantics": run_driver_pdl_semantics,
     "driver_func_attributes": run_driver_func_attributes,
     "driver_function_metadata": run_driver_function_metadata,
+    "cub_sort_scan": run_cub_sort_scan,
     "driver_ptx_selection": run_driver_ptx_selection,
     "driver_launch_blocking": run_driver_launch_blocking,
     "driver_buffer_clear": run_driver_buffer_clear,

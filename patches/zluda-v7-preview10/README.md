@@ -44,33 +44,27 @@ This is narrower than mapping cooperative launch to HIP and avoids pretending th
 
 The rebuilt candidate now passes `driver_launch_ex` on the gfx1200 reference GPU, and b10978 completes an end-to-end GPU smoke with all layers offloaded. It remains separate until the original gfx1150 report is re-tested; the reference result is not treated as automatic RDNA 3.5 validation.
 
-## PTX function-metadata candidate patch
+## PTX function metadata and CUB correctness (issue #3)
 
-`ptx-version-candidate.patch` fixes a separate CUDA metadata bug and is also intentionally kept outside the validated patch set for now.
+**Warning:** Previous candidate drivers including 0c2bee2, 07638a7,
+c810f91, and a2ac6e6 can silently corrupt GPU sort and scan results.
+Do not use these artifacts for numerical workloads. Stock v7-preview.10
+passed the reporter's corresponding large-array tests on gfx1150.
 
-Upstream ZLUDA currently implements `CU_FUNC_ATTRIBUTE_PTX_VERSION` by returning the selected PTX module's **target SM** (`sm_version`). Those are different values. CUDA defines `PTX_VERSION` as the PTX ISA major/minor encoded as `major * 10 + minor`.
+CUDA CU_FUNC_ATTRIBUTE_PTX_VERSION reports the virtual target architecture
+(sm_37 -> 37), NOT PTX ISA (.version 7.8 -> 78). CUB uses this attribute
+to choose the host launch policy that must match __CUDA_ARCH__ device code.
+Returning 78 made the host launch five 1920-element blocks, but the compiled
+device kernel processed only 1536 elements per block, leaving the data after
+index 7680 unprocessed without an error.
 
-For example:
-
-```text
-.version 7.0
-.target sm_80
-
-correct CU_FUNC_ATTRIBUTE_PTX_VERSION : 70
-upstream ZLUDA value                  : 80
-```
-
-This matters to real applications. Recent llama.cpp checks `cudaFuncAttributes.ptxVersion >= 90` before enabling Programmatic Dependent Launch. Confusing `sm_90` with PTX ISA 9.0 can therefore select `cudaLaunchKernelEx` even when the PTX ISA itself does not provide that feature set.
-
-The candidate keeps the parsed PTX version alongside the existing SM target in ZLUDA's in-memory Module/Function objects and returns the actual PTX version from `cuFuncGetAttribute`. It does **not** change the on-disk ZLUDA cache format: the source PTX is already parsed on module load, so the PTX version can be propagated independently of the cached AMD binary.
-
-The repository's `driver_function_metadata` probe validates this directly with a known `.version 7.0 / .target sm_80` module and requires `PTX_VERSION=70`. It also records ZLUDA's reported `BINARY_VERSION` separately because that value is used by some CUDA frameworks for architecture gating; no binary-version behavior is changed by this candidate yet.
-
-NVIDIA's CUDA Driver API documents the PTX-version encoding here:
-https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
-
-The rebuilt patch now passes the direct metadata probe on gfx1200 (`PTX_VERSION=84` for the b10978 PTX 8.4 / sm_90 case) and the same b10978 end-to-end GPU smoke. It remains separate pending gfx1150 confirmation rather than being generalized across architectures.
-
+The old ptx-version-candidate.patch incorrectly replaced func.sm_version
+with func.ptx_version. The revised patch retains PTX ISA solely as internal
+diagnostic metadata and preserves the original CUDA attribute return value.
+The repaired probes require target SM, and cub_sort_scan CPU-checks GPU sort
+and scan at sizes 8192 and 65536. A compiled driver is NOT proven fixed until
+it passes hardware checks, with separate gfx1150 confirmation. BINARY_VERSION
+remains unchanged.
 ## Apply
 
 From a clean ZLUDA checkout at commit `9c8b43f`:

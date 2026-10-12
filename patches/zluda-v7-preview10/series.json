@@ -32,7 +32,7 @@
       "order": 30,
       "file": "ptx-version-candidate.patch",
       "status": "candidate",
-      "purpose": "Report PTX ISA version separately from target SM in CUDA function metadata",
+      "purpose": "Keep PTX ISA for internal diagnostics while preserving target SM in CU_FUNC_ATTRIBUTE_PTX_VERSION (CUB host/device policy correctness)",
       "required_probes": [
         "driver_function_metadata"
       ]

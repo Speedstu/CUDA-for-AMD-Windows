@@ -8,15 +8,7 @@ diff --git a/zluda/src/impl/function.rs b/zluda/src/impl/function.rs
      pub(crate) explicit_args_size_align: Option<Vec<FunctionArgInfo>>,
  }
  
-@@ -43,7 +44,7 @@ pub(crate) fn get_attribute(
- ) -> hipError_t {
-     match cu_attrib {
-         CUfunction_attribute::CU_FUNC_ATTRIBUTE_PTX_VERSION => {
--            *pi = func.sm_version as i32;
-+            *pi = func.ptx_version as i32;
-             return Ok(());
-         }
-         CUfunction_attribute::CU_FUNC_ATTRIBUTE_BINARY_VERSION => {
+
 diff --git a/zluda/src/impl/library.rs b/zluda/src/impl/library.rs
 --- a/zluda/src/impl/library.rs
 +++ b/zluda/src/impl/library.rs

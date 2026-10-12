@@ -159,57 +159,27 @@ On the RX 9060 XT / `gfx1200` reference runtime, both PTX 7.0/sm_80 and PTX 8.4/
 
 This probe intentionally does **not** reproduce llama.cpp's embedded fatbins or every kernel it ships. If it also passes on gfx1150 while b10978 still fails in `ggml_backend_cuda_buffer_clear`, that is strong evidence that the remaining problem is application-specific device-code/kernel compatibility rather than generic PTX clear-kernel launch or stream synchronization.
 
-## PTX metadata: target SM is not PTX ISA version
+## PTX metadata: critical CUB host/device mismatch (issue #3)
 
-There is a second driver-level problem behind the unexpected PDL path.
+The older patch reported PTX language ISA version instead of virtual target SM
+from CU_FUNC_ATTRIBUTE_PTX_VERSION. CUB uses this attribute to select host
+dispatch policies that MUST match __CUDA_ARCH__ inside compiled device code.
+This led to silent wrong answers for some CUB-backed operations, including
+PyTorch GPU sort and scan above 4096 elements.
 
-Upstream ZLUDA currently answers `CU_FUNC_ATTRIBUTE_PTX_VERSION` with the parsed module's `sm_version` (the `.target sm_XX` value). CUDA defines `PTX_VERSION` differently: it is the PTX ISA major/minor encoded as `major * 10 + minor`.
+For .version 7.8 / .target sm_37, the CUDA function attribute must be 37.
+Reporting 78 led the host to launch too few scan blocks, producing wrong values
+from element 7680 onward for an 8192-element input.
 
-That distinction matters directly to b10978. Its launcher only opts into PDL when:
+The October 12 source patch preserves target SM in the attribute and retains
+PTX ISA only for internal diagnostics. Revised driver_function_metadata and
+driver_ptx_selection probes now check target SM (e.g., 80 for .version 8.4 /
+.target sm_80). The new cub_sort_scan probe CPU-checks 8192 and 65536 values.
 
-```text
-cudaFuncAttributes.ptxVersion >= 90
-```
-
-For a known module:
-
-```text
-.version 7.0
-.target sm_80
-```
-
-the correct CUDA metadata is:
-
-```text
-PTX_VERSION = 70
-```
-
-not `80`.
-
-CUDA 12.4 corresponds to PTX ISA 8.4, so treating an `sm_90` target as `PTX_VERSION=90` can make a CUDA 12.4 application appear PDL-capable when its PTX ISA version does not meet that gate.
-
-The repository therefore includes:
-
-- `ptx-version-candidate.patch`, which preserves the real parsed PTX version separately from the target SM without changing the on-disk ZLUDA cache format;
-- `driver_function_metadata`, which loads a known `.version 7.0 / .target sm_80` module and requires `CU_FUNC_ATTRIBUTE_PTX_VERSION=70`;
-- diagnostic reporting for `BINARY_VERSION`, because frameworks such as PyTorch can also use that value for architecture gating. The binary-version behavior is **not changed yet** by this candidate.
-
-The rebuilt candidate passes the direct metadata probe on both the gfx1200 reference machine and the community-tested gfx1150 system. b10978 completes the end-to-end GPU smoke on gfx1200, while gfx1150 gets past the metadata/launch blockers and then fails later in real kernel execution. The metadata fix is therefore cross-checked on RDNA 3.5 without treating the full llama.cpp workload as supported there.
-
-### Expected effect on b10978
-
-The PTX metadata candidate does **not** implement PDL. For the official CUDA 12.4 b10978 package, the expected effect is that a PTX 8.4 kernel targeted at `sm_90` reports `ptxVersion=84`. The llama.cpp host check `ptxVersion >= 90` then stays false, so it should use the classic launch path without requiring `GGML_CUDA_PDL=0`.
-
-That is separate from `launch-attributes-candidate.patch`, which fixes the benign `COOPERATIVE=0` driver case but deliberately keeps non-zero PDL unsupported.
-
-On gfx1200, the PTX metadata fix plus the launch-attribute candidate advance b10978 through a real `-fa off` GPU smoke with all layers offloaded. On gfx1150, those same driver-level fixes are confirmed, but b10978 still fails later during real kernel loading/execution. That later failure is the remaining architecture-specific boundary; it is not folded into the metadata claim.
-
-NVIDIA reference:
-https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__EXEC.html
-
-CUDA 12.4 / PTX 8.4 release note:
-https://docs.nvidia.com/cuda/archive/12.4.0/cuda-toolkit-release-notes/
-
+Old candidate drivers 0c2bee2, 07638a7, c810f91 and a2ac6e6 must not be
+used for production CUB-backed workloads. A new build and separate gfx1150
+hardware validation are required. PTX metadata correctness does not imply
+support for Programmatic Dependent Launch.
 ## Dynamic shared-memory boundary
 
 Recent Flash Attention paths in llama.cpp opt in to larger per-kernel dynamic shared memory with `cudaFuncSetAttribute(..., cudaFuncAttributeMaxDynamicSharedMemorySize, ...)`.

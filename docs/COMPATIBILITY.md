@@ -152,3 +152,14 @@ Then use the repository's **GPU compatibility report** issue template and includ
 The Radeon 890M / gfx1150 reporter traced `MUL_MAT` missing-symbol crashes across six GGUF files to a single missing CUDA kernel, `mul_mat_f<float, 32, 4, 8, false>` (`hipModuleGetFunction` error 500). Switching the virtual compute capability from 8.6 to 7.5 made all six files launch, but that workaround affects *all* CUDA dispatch decisions and its results have not been compared for correctness against native ROCm. Do **not** silently change the project-wide `ZLUDA_CC` default.
 
 A candidate patched pinned llama.cpp safe build now offers a narrower solution: `GGML_CUDA_ZLUDA_DISABLE_F32_MMF` disables only F32 MMF dispatch and uses the existing MMVF/cuBLAS fallbacks. It does not alter F16/BF16 MMF, graph/FA safety flags or other applications. See [`patches/llama-b10978/README.md`](../patches/llama-b10978/README.md). The gfx1150 contributor **confirmed all six files now launch** with the patched safe artifact (3/3 runs each), retaining `ZLUDA_CC=8.6`. On the 4B MTP file, 9/10 final answers matched native ROCm; the other five have not undergone equivalent correctness grading. This resolves the reported missing-symbol route at the application level, not the underlying F32 kernel implementation. The experimental `TOP_K` argsort candidate is a **separate** build; `top_k_cub` and Nemotron copy faults remain open until independently verified.
+### Critical: older patched driver CUB corruption (issue #3)
+
+Candidate drivers 0c2bee2, 07638a7, c810f91 and a2ac6e6 returned
+PTX ISA version rather than target SM. This silently corrupted PyTorch sort,
+cumsum and other CUB-backed operations on gfx1150 for large inputs. These
+artifacts are not validated for numerical correctness. The stock v7-preview.10
+driver passed the reporter's corresponding tests.
+
+The corrected candidate preserves target SM and adds cub_sort_scan CPU-vs-GPU
+tests at 8192 and 65536 elements. Build success alone is insufficient:
+perform real GPU validation before replacing any existing runtime.
