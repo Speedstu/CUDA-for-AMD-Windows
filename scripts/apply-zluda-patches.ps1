@@ -45,7 +45,7 @@ foreach ($entry in $selected) {
     # Only the pinned async 2D patch is intentionally zero-context: its
     # insertion would otherwise include a blank context line rejected by
     # the repository whitespace gate. Keep normal context for other patches.
-    $applyOptions = if ([string]$entry.file -eq 'memcpy-2d-async-candidate.patch') { @('--unidiff-zero') } else { @() }
+    if ([string]$entry.file -eq 'memcpy-2d-async-candidate.patch') { $applyOptions = @('--unidiff-zero') } else { $applyOptions = @() }
     & $git.Source -C $ZludaSourceRoot apply @applyOptions --check --whitespace=error-all $file
     if ($LASTEXITCODE -ne 0) { throw "Patch check failed: $($entry.file)" }
 
