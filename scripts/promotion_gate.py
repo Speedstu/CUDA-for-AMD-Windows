@@ -19,6 +19,7 @@ DRIVER_REQUIRED = (
     "driver_ptx_selection",
     "cub_sort_scan",
     "driver_buffer_clear",
+    "driver_memcpy2d_async",
 )
 FUNCTIONAL_REQUIRED = ("matmul", "sdpa_math")
 BAD_STATUSES = {"incorrect", "error", "timeout", "hang_after_result",

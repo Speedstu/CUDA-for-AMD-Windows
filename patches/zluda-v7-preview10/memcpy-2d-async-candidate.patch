@@ -1,0 +1,19 @@
+diff --git a/zluda/src/impl/memory.rs b/zluda/src/impl/memory.rs
+index 800fad6..70b4e4c 100644
+--- a/zluda/src/impl/memory.rs
++++ b/zluda/src/impl/memory.rs
+@@ -286,0 +287,8 @@ pub(crate) unsafe fn copy_2d_v2(memcpy: hip_Memcpy2D) -> CUresult {
++// CUDA's cuMemcpy2DAsync_v2 accepts pitches independently for source and
++// destination and enqueues on the supplied stream. The HIP parameter-copy
++// API preserves those semantics without forcing a synchronous transfer.
++pub(crate) unsafe fn copy_2d_async_v2(memcpy: hip_Memcpy2D, stream: hipStream_t) -> CUresult {
++    hipMemcpyParam2DAsync(&memcpy, stream)?;
++    Ok(())
++}
++
+diff --git a/zluda/src/lib.rs b/zluda/src/lib.rs
+index 4422e4e..c5b8a64 100644
+--- a/zluda/src/lib.rs
++++ b/zluda/src/lib.rs
+@@ -147,0 +148 @@ cuda_macros::cuda_function_declarations!(
++            cuMemcpy2DAsync_v2,

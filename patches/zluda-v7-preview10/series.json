@@ -72,6 +72,15 @@
       "required_probes": [
         "launcher_argv"
       ]
+    },
+    {
+      "order": 70,
+      "file": "memcpy-2d-async-candidate.patch",
+      "status": "candidate",
+      "purpose": "Expose CUDA cuMemcpy2DAsync_v2 with HIP pitched non-default-stream async transfer for Nemotron strided copies",
+      "required_probes": [
+        "driver_memcpy2d_async"
+      ]
     }
   ]
 }

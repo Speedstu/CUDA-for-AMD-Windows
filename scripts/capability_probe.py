@@ -30,6 +30,7 @@ TESTS = (
     "driver_ptx_selection",
     "driver_launch_blocking",
     "driver_buffer_clear",
+    "driver_memcpy2d_async",
     "nvml",
     "memory_copy",
     "streams_events",
@@ -2230,6 +2231,110 @@ def run_cub_sort_scan(torch):
         })
     return {"ok": all(r["sort_ok"] and r["scan_ok"] for r in rows), "cases": rows}
 
+
+def run_driver_memcpy2d_async(torch):
+    """Verify async D2D 2D copy on a separate stream with unequal pitches.
+
+    Matches the Nemotron shape: 256 bytes by two rows, srcPitch=41216.
+    Padding remains unchanged.
+    """
+    class CUDA_MEMCPY2D(ctypes.Structure):
+        _fields_ = [
+            ("srcXInBytes", ctypes.c_size_t), ("srcY", ctypes.c_size_t),
+            ("srcMemoryType", ctypes.c_int), ("srcHost", ctypes.c_void_p),
+            ("srcDevice", ctypes.c_uint64), ("srcArray", ctypes.c_void_p),
+            ("srcPitch", ctypes.c_size_t), ("dstXInBytes", ctypes.c_size_t),
+            ("dstY", ctypes.c_size_t), ("dstMemoryType", ctypes.c_int),
+            ("dstHost", ctypes.c_void_p), ("dstDevice", ctypes.c_uint64),
+            ("dstArray", ctypes.c_void_p), ("dstPitch", ctypes.c_size_t),
+            ("WidthInBytes", ctypes.c_size_t), ("Height", ctypes.c_size_t),
+        ]
+
+    cuda = _load_win_dll("nvcuda.dll")
+    cuda.cuInit.argtypes = [ctypes.c_uint]
+    cuda.cuInit.restype = ctypes.c_int
+    cuda.cuMemAlloc_v2.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_size_t]
+    cuda.cuMemAlloc_v2.restype = ctypes.c_int
+    cuda.cuMemFree_v2.argtypes = [ctypes.c_uint64]
+    cuda.cuMemFree_v2.restype = ctypes.c_int
+    cuda.cuMemcpyHtoD_v2.argtypes = [ctypes.c_uint64, ctypes.c_void_p, ctypes.c_size_t]
+    cuda.cuMemcpyHtoD_v2.restype = ctypes.c_int
+    cuda.cuMemcpyDtoH_v2.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
+    cuda.cuMemcpyDtoH_v2.restype = ctypes.c_int
+    cuda.cuStreamCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint]
+    cuda.cuStreamCreate.restype = ctypes.c_int
+    cuda.cuStreamSynchronize.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamSynchronize.restype = ctypes.c_int
+    cuda.cuStreamDestroy_v2.argtypes = [ctypes.c_void_p]
+    cuda.cuStreamDestroy_v2.restype = ctypes.c_int
+    cuda.cuMemcpy2DAsync_v2.argtypes = [ctypes.POINTER(CUDA_MEMCPY2D), ctypes.c_void_p]
+    cuda.cuMemcpy2DAsync_v2.restype = ctypes.c_int
+
+    def ck(code, name):
+        if int(code) != 0:
+            raise RuntimeError(f"{name} returned CUDA error {code}")
+
+    ck(cuda.cuInit(0), "cuInit")
+    src_pitch = 41216
+    dst_pitch = 288
+    width = 256
+    height = 2
+    host_src = (ctypes.c_ubyte * (src_pitch * height))()
+    host_initial_dst = (ctypes.c_ubyte * (dst_pitch * height))()
+    for i in range(len(host_initial_dst)):
+        host_initial_dst[i] = 0xA5
+    for row in range(height):
+        for i in range(width):
+            host_src[row * src_pitch + i] = (row * 41 + i * 7) % 256
+    output = (ctypes.c_ubyte * (dst_pitch * height))()
+    src_device = ctypes.c_uint64()
+    dst_device = ctypes.c_uint64()
+    stream = ctypes.c_void_p()
+    try:
+        ck(cuda.cuMemAlloc_v2(ctypes.byref(src_device), len(host_src)), "cuMemAlloc(src)")
+        ck(cuda.cuMemAlloc_v2(ctypes.byref(dst_device), len(host_initial_dst)), "cuMemAlloc(dst)")
+        ck(cuda.cuMemcpyHtoD_v2(src_device.value, ctypes.byref(host_src), len(host_src)), "HtoD(src)")
+        ck(cuda.cuMemcpyHtoD_v2(dst_device.value, ctypes.byref(host_initial_dst), len(host_initial_dst)), "HtoD(dst)")
+        ck(cuda.cuStreamCreate(ctypes.byref(stream), 1), "cuStreamCreate")
+        copy = CUDA_MEMCPY2D()
+        copy.srcMemoryType = 2
+        copy.srcDevice = src_device.value
+        copy.srcPitch = src_pitch
+        copy.dstMemoryType = 2
+        copy.dstDevice = dst_device.value
+        copy.dstPitch = dst_pitch
+        copy.WidthInBytes = width
+        copy.Height = height
+        ck(cuda.cuMemcpy2DAsync_v2(ctypes.byref(copy), stream), "cuMemcpy2DAsync_v2")
+        ck(cuda.cuStreamSynchronize(stream), "cuStreamSynchronize")
+        ck(cuda.cuMemcpyDtoH_v2(ctypes.byref(output), dst_device.value, len(output)), "DtoH(dst)")
+        row_ok = [
+            bytes(output[row * dst_pitch:row * dst_pitch + width]) ==
+            bytes(host_src[row * src_pitch:row * src_pitch + width])
+            for row in range(height)
+        ]
+        padding_ok = all(
+            all(output[row * dst_pitch + i] == 0xA5 for i in range(width, dst_pitch))
+            for row in range(height)
+        )
+        return {"ok": all(row_ok) and padding_ok,
+                "rows": row_ok, "padding_unchanged": padding_ok,
+                "source_pitch": src_pitch, "destination_pitch": dst_pitch,
+                "width": width, "height": height, "stream": "non_default"}
+    finally:
+        if stream.value:
+            try:
+                cuda.cuStreamSynchronize(stream)
+                cuda.cuStreamDestroy_v2(stream)
+            except Exception:
+                pass
+        for ptr in (src_device, dst_device):
+            if ptr.value:
+                try:
+                    cuda.cuMemFree_v2(ptr.value)
+                except Exception:
+                    pass
+
 RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "device_info": run_device_info,
     "driver_pci_bus_id": run_driver_pci_bus_id,
@@ -2242,6 +2347,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_ptx_selection": run_driver_ptx_selection,
     "driver_launch_blocking": run_driver_launch_blocking,
     "driver_buffer_clear": run_driver_buffer_clear,
+    "driver_memcpy2d_async": run_driver_memcpy2d_async,
     "nvml": run_nvml,
     "memory_copy": run_memory_copy,
     "streams_events": run_streams_events,

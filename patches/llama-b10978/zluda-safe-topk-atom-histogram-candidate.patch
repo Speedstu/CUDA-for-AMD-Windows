@@ -1,0 +1,19 @@
+diff --git a/ggml/src/ggml-cuda/top-k.cu b/ggml/src/ggml-cuda/top-k.cu
+index 9dd5f35c6..b67be75e3 100644
+--- a/ggml/src/ggml-cuda/top-k.cu
++++ b/ggml/src/ggml-cuda/top-k.cu
+@@ -100,3 +100,14 @@ static __global__ void top_k_radix_histogram(
+         if ((key & state.prefix_mask) == state.prefix) {
++#ifdef GGML_CUDA_ZLUDA_ATOM_HISTOGRAM
++            // ZLUDA's pinned PTX parser accepts atom.shared but not red.shared.
++            // Inline volatile PTX stops nvcc from changing this into red.shared
++            // when the previous value is not otherwise used.
++            unsigned int old_value;
++            const unsigned int bin = (key >> shift) & (NBINS - 1);
++            const unsigned int shared_address = (unsigned int) __cvta_generic_to_shared(&histogram[bin]);
++            asm volatile("atom.shared.add.u32 %0, [%1], 1;"
++                         : "=r"(old_value) : "r"(shared_address) : "memory");
++#else
+             atomicAdd(&histogram[(key >> shift) & (NBINS - 1)], 1);
++#endif
+         }

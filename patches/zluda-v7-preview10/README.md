@@ -153,3 +153,22 @@ This is diagnostic support, not a guarantee that a page-faulting application ker
 ## Missing CUDA kernel symbol diagnostics candidate (issue #6)
 
 The optional `missing-symbol-diagnostics-candidate.patch` only prints an error when `hipModuleGetFunction` fails **and** `ZLUDA_TRACE_MISSING_SYMBOLS` is set in the launched process. Example: `$env:ZLUDA_TRACE_MISSING_SYMBOLS='1'`. The safe diagnostic reproducer is `tests/test_missing_symbol_trace.py` (loads a tiny PTX module, looks up one real and one intentionally missing function, **never launches a GPU kernel**). The stderr line begins with `[zluda-symbol]` and contains the failing HIP status, CUDA-facing SM/PTX versions and kernel symbol. It does **not** change kernel selection or make an unsupported model work; it distinguishes a failed HIP lookup from a failure somewhere else. If the `MUL_MAT` reproducer still crashes without this line, the failure did not cross this specific lookup path. Do not enable an unsafe generic llama.cpp build to collect it: use the proven gfx1150 safe build and the smallest model that already fails there.
+## Async pitched device copy candidate (issue #6 / Nemotron)
+
+Nemotron-3-Nano-30B-A3B hits the cudaMemcpy2DAsync D2D strided-rows
+branch in ggml_cuda_cpy, with source pitch 41216, destination pitch 256,
+WidthInBytes=256 and Height=2. On ZLUDA 9c8b43f the driver entry point
+cuMemcpy2DAsync_v2 is a generic stub returning CUDA_ERROR_NOT_SUPPORTED.
+The HIP bindings already export hipMemcpyParam2DAsync.
+
+The candidate memcpy-2d-async-candidate.patch registers cuMemcpy2DAsync_v2
+and forwards the CUDA descriptor converted to hip_Memcpy2D and the selected
+stream to hipMemcpyParam2DAsync. There is no synchronous fallback, no global
+DLL replacement and no change to the other CUDA copy functions.
+
+A dedicated Windows build creates a candidate-only nvcuda.dll. The GPU
+probe driver_memcpy2d_async verifies a two-row D2D transfer with
+independent srcPitch=41216 and dstPitch=288, using a non-default stream
+and checking destination row contents plus untouched padding. This is
+NOT a proof of correct operation until that probe passes on real hardware,
+followed by Nemotron plain inference and numerical output checks.

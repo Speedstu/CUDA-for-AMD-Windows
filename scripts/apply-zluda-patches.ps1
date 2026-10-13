@@ -42,11 +42,15 @@ foreach ($entry in $selected) {
     if (-not (Test-Path $file)) { throw "Missing patch file: $file" }
 
     Write-Host ("[{0}] {1} ({2})" -f $entry.order, $entry.file, $entry.status)
-    & $git.Source -C $ZludaSourceRoot apply --check --whitespace=error-all $file
+    # Only the pinned async 2D patch is intentionally zero-context: its
+    # insertion would otherwise include a blank context line rejected by
+    # the repository whitespace gate. Keep normal context for other patches.
+    $applyOptions = if ([string]$entry.file -eq 'memcpy-2d-async-candidate.patch') { @('--unidiff-zero') } else { @() }
+    & $git.Source -C $ZludaSourceRoot apply @applyOptions --check --whitespace=error-all $file
     if ($LASTEXITCODE -ne 0) { throw "Patch check failed: $($entry.file)" }
 
     if (-not $CheckOnly) {
-        & $git.Source -C $ZludaSourceRoot apply $file
+        & $git.Source -C $ZludaSourceRoot apply @applyOptions $file
         if ($LASTEXITCODE -ne 0) { throw "Patch apply failed: $($entry.file)" }
     }
 

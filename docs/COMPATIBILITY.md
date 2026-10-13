@@ -170,3 +170,13 @@ DeviceRadixSort call on gfx1150. A separate opt-in radix candidate now
 routes TOP_K through the existing plain-CUDA radix selection code. It is
 not yet hardware-validated and must not replace the known-good F32 MMF
 safe build. Nemotron copy errors are not addressed.
+### gfx1150 MTP histogram and Nemotron copy candidates (October 13)
+
+The last Radeon 890M trace identified independent, reproducible gaps:
+TOP_K radix histogram PTX emits unsupported red.shared.add.u32, while the
+Nemotron strided-copy path calls the missing cuMemcpy2DAsync_v2 driver entry.
+The new opt-in llama build forces a supported atom.shared.add.u32 for the
+histogram, and the independent driver candidate forwards async pitched
+copies to HIP. **Neither candidate has passed complete gfx1150 inference
+and numerical correctness testing yet.** The known-good F32 workaround,
+older stock driver and validated f60a9d4 CUB driver remain separate.

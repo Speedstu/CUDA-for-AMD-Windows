@@ -31,7 +31,7 @@ The gate verifies:
 - Full Git revision and target AMD architecture match **both** reports.
 - Measured SHA-256 matches the **actual supplied** driver DLL, for both reports.
 - Reports have valid UTC timestamps no older than 7 days.
-- Required capabilities are present, passed and exited cleanly: function metadata, fatbin target selection, **CUB sort/scan at 8192 and 65536 elements**, and driver buffer clear.
+- Required capabilities are present, passed and exited cleanly: function metadata, fatbin target selection, **CUB sort/scan at 8192 and 65536 elements**, driver buffer clear, and a pitched non-default-stream cuMemcpy2DAsync_v2 check.
 - The functional report has clean GPU numerical tests for at least **matmul** and **SDPA math**.
 - Any reported incorrect result, timeout, crash, hang or missing core result blocks promotion even if a summary field says PASS.
 

@@ -78,6 +78,8 @@ jobs:
           python scripts/summarize-zluda-trace.py --self-test
           python tests/test_safe_llama_context.py
           python tests/test_ptx_metadata_semantics.py
+          python tests/test_zluda_memcpy2d_patch.py
+          python -m py_compile tests/test_llama_topk_atom_histogram.py
           python tests/test_promotion_gate.py
           python -m py_compile tests/test_missing_symbol_trace.py
           python -m py_compile tests/test_llama_topk_fallback.py tests/test_llama_topk_radix_fallback.py
@@ -89,7 +91,7 @@ jobs:
           Write-Host "Functional probe modes: $($tests -join ', ')"
 
           $capabilityTests = @(python scripts/capability_probe.py --list-tests)
-          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_pdl_semantics','driver_func_attributes','driver_function_metadata','cub_sort_scan','driver_ptx_selection','driver_launch_blocking','driver_buffer_clear','linalg_svd','sdpa_mem_efficient')
+          $requiredCapabilityTests = @('driver_pci_bus_id','driver_launch_ex','driver_pdl_semantics','driver_func_attributes','driver_function_metadata','cub_sort_scan','driver_memcpy2d_async','driver_ptx_selection','driver_launch_blocking','driver_buffer_clear','linalg_svd','sdpa_mem_efficient')
           foreach ($name in $requiredCapabilityTests) {
             if ($capabilityTests -notcontains $name) { throw "Missing capability probe: $name" }
           }
