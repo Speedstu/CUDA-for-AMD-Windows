@@ -180,3 +180,35 @@ histogram, and the independent driver candidate forwards async pitched
 copies to HIP. **Neither candidate has passed complete gfx1150 inference
 and numerical correctness testing yet.** The known-good F32 workaround,
 older stock driver and validated f60a9d4 CUB driver remain separate.
+### gfx1150 evidence update: async 2D copy and Nemotron (October 14)
+
+Cary5031 confirmed the compile-only nvcuda-memcpy2d-async-candidate from
+Actions run 38450929271, with loaded candidate hash 94D3B56D..., resolves
+the Nemotron cpy.cu:478 CUDA 801 failure in the tested configuration.
+
+- Nemotron-3-Nano-30B-A3B plain inference: six successful bounded runs
+  (3 x 80 tokens, 3 x 200 tokens), plus a clean traced run with 230
+  successful cuMemcpy2DAsync_v2 calls.
+- At 80 tokens, output is byte-identical to native ROCm. At 200 tokens,
+  wording differs after a common prefix; do not claim exact long-output
+  numerical equivalence.
+- Independent async 2D tests passed for exact Nemotron pitches,
+  unequal pitches, offsets, 64-row copies, host copies and non-default
+  and default streams. Stock and f60a9d4 returned CUDA 801.
+- CUB sort/cumsum 24/24; wider PyTorch seven-op suite 35/35; three
+  llama regression models 9/9, matched f60a9d4 on the same runtime.
+  These are gfx1150-specific results reported by the contributor.
+
+Our original driver_memcpy2d_async probe falsely failed all drivers with
+CUDA_ERROR_INVALID_CONTEXT (201), because cuInit does not establish
+the current context. The revised test initializes and verifies a context
+before allocation. driver_pdl_semantics reports unsupported for compute
+capability below 9.0 instead of treating sm_90 PTX rejection (209) as
+a driver regression. This does not imply PDL support.
+
+The llama histogram candidate run 38450933377 compiled but did NOT upload
+an artifact: its PTX verifier was missing cuobjdump. Its replacement
+workflow downloads a pinned NVIDIA cuobjdump 12.4.127 ZIP and checks the
+official SHA-256 before inspecting compiled histogram PTX. TOP_K/MTP
+remains unvalidated on gfx1150 until the new artifact and MTP test pass.
+No known-good runtime is automatically replaced.

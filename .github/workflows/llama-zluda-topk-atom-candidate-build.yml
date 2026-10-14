@@ -149,6 +149,25 @@ jobs:
             Write-Warning 'sm_80 marker not found in raw binary strings; CMake log remains the architecture source of truth.'
           }
 
+      - name: Install pinned NVIDIA cuobjdump 12.4.127
+        shell: pwsh
+        run: |
+          # The pinned llama.cpp setup action installs nvcc, but not cuobjdump.
+          # Download exactly the toolkit-matched NVIDIA redistributable and
+          # fail closed if its SHA-256 differs from redistrib_12.4.1.json.
+          $url = 'https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/windows-x86_64/cuda_cuobjdump-windows-x86_64-12.4.127-archive.zip'
+          $expected = '8a8eacddc1c0b9e6530a149e60d33219a18d5be586a5c9dab0996ed1214ab602'
+          $archive = Join-Path $env:RUNNER_TEMP 'cuda_cuobjdump-12.4.127.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'cuda_cuobjdump-12.4.127'
+          Invoke-WebRequest -Uri $url -OutFile $archive -ErrorAction Stop
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          if ($actual -ine $expected) { throw "cuobjdump NVIDIA redistributable SHA-256 mismatch: $actual" }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+          $bin = Get-ChildItem -LiteralPath $destination -Filter cuobjdump.exe -Recurse -File | Select-Object -First 1
+          if (-not $bin) { throw 'Downloaded NVIDIA archive does not contain cuobjdump.exe' }
+          $bin.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $bin.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned NVIDIA cuobjdump.exe failed to start' }
       - name: Verify compiled histogram PTX uses supported atom instruction
         shell: pwsh
         run: |
@@ -159,7 +178,9 @@ jobs:
           }
           if (-not $cuobjdump) { throw 'cuobjdump.exe missing: cannot verify generated PTX' }
           $ptx = Join-Path $env:RUNNER_TEMP 'histogram.ptx.txt'
-          & $cuobjdump.FullName --dump-ptx 'llama-src/build/bin/Release/ggml-cuda.dll' | Out-File -FilePath $ptx -Encoding utf8
+          $cuobjdumpPath = if ($cuobjdump -is [System.IO.FileInfo]) { $cuobjdump.FullName } else { $cuobjdump.Source }
+          if (-not (Test-Path -LiteralPath $cuobjdumpPath)) { throw "cuobjdump path not found: $cuobjdumpPath" }
+          & $cuobjdumpPath --dump-ptx 'llama-src/build/bin/Release/ggml-cuda.dll' | Out-File -FilePath $ptx -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'cuobjdump failed' }
           python tests/test_llama_topk_atom_histogram.py --source llama-src/ggml/src/ggml-cuda/top-k.cu --ptx $ptx
           if ($LASTEXITCODE -ne 0) { throw 'Compiled histogram PTX is not supported by pinned ZLUDA' }

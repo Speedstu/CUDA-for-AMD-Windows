@@ -348,6 +348,13 @@ def run_driver_pdl_semantics(torch):
     A clean 801 is reported as unsupported.  If PDL launch is accepted, the
     dependent consumer must repeatedly observe the producer's completed write.
     """
+    # griddepcontrol PTX requires virtual sm_90. A target-selection driver
+    # correctly returns CUDA_ERROR_NO_BINARY_FOR_GPU (209) when a sub-9.0 GPU
+    # is asked to load it; do not misreport that expected capability limit as
+    # a driver error (or bypass the driver's target guard).
+    if tuple(torch.cuda.get_device_capability(0)) < (9, 0):
+        raise RuntimeError("PDL unsupported on compute capability below 9.0 (sm_90 PTX)")
+
     cuda = _load_win_dll("nvcuda.dll")
 
     class CUlaunchAttributeValue(ctypes.Union):
@@ -2275,6 +2282,16 @@ def run_driver_memcpy2d_async(torch):
             raise RuntimeError(f"{name} returned CUDA error {code}")
 
     ck(cuda.cuInit(0), "cuInit")
+    # cuInit does NOT create a current CUDA context. The missing precondition
+    # caused CUDA_ERROR_INVALID_CONTEXT (201) on every driver. Hold the tensor
+    # for the lifetime of the probe so PyTorch's primary context stays current.
+    context_guard = torch.empty(1, device="cuda")
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    active_context = ctypes.c_void_p()
+    ck(cuda.cuCtxGetCurrent(ctypes.byref(active_context)), "cuCtxGetCurrent")
+    if not active_context.value:
+        raise RuntimeError("driver_memcpy2d_async requires an active CUDA context")
     src_pitch = 41216
     dst_pitch = 288
     width = 256

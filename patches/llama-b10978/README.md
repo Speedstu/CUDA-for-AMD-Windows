@@ -67,3 +67,14 @@ Its output still needs real MTP correctness comparisons on gfx1150.
 Do NOT replace the known-good e9131ec ordinary-inference build automatically.
 The radix path also has tie/ordering subtleties; compare actual answers and MTP
 acceptance against the native ROCm reference before considering it supported.
+### October 14 CI follow-up
+
+The October 13 histogram candidate compiled, but PTX verification
+could not run because the pinned upstream llama.cpp Windows CUDA setup
+does not include cuobjdump.exe. The candidate workflow now downloads
+cuda_cuobjdump-windows-x86_64-12.4.127-archive.zip from NVIDIA's
+official redistributable endpoint and verifies SHA-256
+8a8eacddc1c0b9e6530a149e60d33219a18d5be586a5c9dab0996ed1214ab602
+before inspecting the compiled CUDA DLL. Separate offline tests verify
+that the PTX checker rejects missing histogram kernels and red.shared.add.
+This only fixes CI artifact verification, not MTP runtime correctness.
