@@ -212,3 +212,22 @@ workflow downloads a pinned NVIDIA cuobjdump 12.4.127 ZIP and checks the
 official SHA-256 before inspecting compiled histogram PTX. TOP_K/MTP
 remains unvalidated on gfx1150 until the new artifact and MTP test pass.
 No known-good runtime is automatically replaced.
+### October 16: reproducible gfx1150 MTP results and evidence gate
+
+Cary5031 verified that the histogram candidate from run 38634153056
+successfully runs draft-MTP on gfx1150 for Gemma-4-12B and
+Qwen3.5-35B-A3B (three bounded runs per driver and model).
+PTX verification reports two histogram variants with atom.shared.add
+and no red.shared.add. The output is deterministic on each backend but
+is not always byte-identical to native ROCm. Draft acceptance is near
+native; see [full results and the 10-question correctness
+protocol](GFX1150_MTP_CORRECTNESS.md). This is **hardware-tested candidate**
+evidence, not a universal stable CUDA compatibility claim.
+
+Candidate driver 94D3B56D... also passed the corrected async-copy and
+PDL probe classification on the reported gfx1150 setup. Release evidence
+now additionally requires a SHA-256 of the nvcuda.dll **actually loaded
+inside each probe process**, preventing launcher redirection from
+masking a different DLL than the staged one. The changes do not enable
+unsupported upstream red instructions or resolve the separate conv2d
+hangs and raw fused SDPA numerical errors.

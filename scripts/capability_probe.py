@@ -16,6 +16,7 @@ import struct
 import sys
 import time
 import traceback
+from loaded_driver_identity import loaded_module_identity
 from typing import Any, Callable
 
 TESTS = (
@@ -67,7 +68,8 @@ TESTS = (
 
 
 def emit(test: str, status: str, **extra: Any) -> None:
-    payload = json.dumps({"schema": 1, "test": test, "status": status, **extra}, sort_keys=True)
+    payload = json.dumps({"schema": 1, "test": test, "status": status, **extra,
+                          "loaded_nvcuda": loaded_module_identity()}, sort_keys=True)
     # Keep stdout for direct use, plus a marked copy on stderr so device-side
     # printf noise cannot corrupt the machine-readable result.
     print(payload, flush=True)

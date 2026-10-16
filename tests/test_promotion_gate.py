@@ -39,7 +39,7 @@ def evidence():
         "errors": 0,
         "timeout_retries": 0,
         "results": [
-            {"test": name, "status": "pass", "result": {"ok": True},
+            {"test": name, "status": "pass", "result": {"ok": True, "loaded_nvcuda": {"status": "loaded", "path": "C:\\ZLUDA\\nvcuda.dll", "sha256": SHA}},
              "process_exit": 0, "timed_out": False,
              "process_hung_after_result": False,
              "process_crashed_after_result": False}
@@ -49,7 +49,7 @@ def evidence():
     fun = {
         **base, "core_correctness_ok": True, "hard_failures": 0,
         "tests": [
-            {"test": name, "status": "pass", "result": {"ok": True},
+            {"test": name, "status": "pass", "result": {"ok": True, "loaded_nvcuda": {"status": "loaded", "path": "C:\\ZLUDA\\nvcuda.dll", "sha256": SHA}},
              "process_exit": 0, "timed_out": False,
              "process_crashed_after_result": False}
             for name in gate.FUNCTIONAL_REQUIRED
@@ -128,6 +128,22 @@ class TestPromotionGate(unittest.TestCase):
         cap["generated_utc"] = None
         self.assertTrue(any("timestamp" in x for x in failures(cap, fun)))
 
+
+    def test_loaded_module_hash_must_match_even_with_valid_staging(self):
+        cap, fun = evidence()
+        cap["results"][0]["result"]["loaded_nvcuda"]["sha256"] = "c" * 64
+        self.assertTrue(any("loaded nvcuda" in x for x in failures(cap, fun)))
+
+    def test_missing_loaded_module_identity_blocks_promotion(self):
+        cap, fun = evidence()
+        fun["tests"][0]["result"].pop("loaded_nvcuda")
+        self.assertTrue(any("functional: matmul loaded nvcuda" in x for x in failures(cap, fun)))
+
+    def test_wrong_loaded_module_name_blocks_promotion(self):
+        cap, fun = evidence()
+        cap["results"][1]["result"]["loaded_nvcuda"]["path"] = "C:\\ZLUDA\\cuda.dll"
+        self.assertTrue(any("loaded nvcuda" in x for x in failures(cap, fun)))
+
     def test_cli_ties_report_to_actual_driver_bytes(self):
         cap, fun = evidence()
         with tempfile.TemporaryDirectory() as d:
@@ -137,6 +153,8 @@ class TestPromotionGate(unittest.TestCase):
             digest = gate.sha256(driver)
             for report in (cap, fun):
                 report["runtime_hashes"]["nvcuda_sha256"] = digest
+                for row in (report.get("results") or report.get("tests") or []):
+                    row["result"]["loaded_nvcuda"]["sha256"] = digest
                 report["generated_utc"] = datetime.now(timezone.utc).isoformat()
             a = root / "cap.json"
             b = root / "fun.json"

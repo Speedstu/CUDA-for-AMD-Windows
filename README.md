@@ -67,7 +67,7 @@ The conservative llama.cpp smoke now limits its default context to 4096 tokens v
 
 ### Release quality and regression protection
 
-**A green build is not a hardware correctness certificate.** Before considering a ZLUDA driver candidate for general use, maintainers must verify the candidate DLL SHA-256 and run the CPU-vs-GPU numerical tests for sort, cumsum, matmul and math-only SDPA. The fail-closed, read-only [promotion gate](docs/PROMOTION_POLICY.md) rejects missing, stale or mismatched test evidence. Compilation-only artifacts remain experimental, and the known-good runtime is not replaced automatically.
+**A green build is not a hardware correctness certificate.** Before considering a ZLUDA driver candidate for general use, maintainers must verify the candidate DLL SHA-256 and run the CPU-vs-GPU numerical tests for sort, cumsum, matmul and math-only SDPA. The fail-closed, read-only [promotion gate](docs/PROMOTION_POLICY.md) (including SHA-256 of the DLL actually loaded by each probe process) rejects missing, stale or mismatched test evidence. Compilation-only artifacts remain experimental, and the known-good runtime is not replaced automatically.
 
 ## Current compatibility
 

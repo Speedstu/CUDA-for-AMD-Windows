@@ -34,6 +34,17 @@ def sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
+
+def loaded_driver_failure(entry: dict, expected_sha: str) -> bool:
+    """A passing probe must attest to the driver loaded inside its process."""
+    module = (entry.get("result") or {}).get("loaded_nvcuda") or {}
+    path = str(module.get("path") or "").replace("/", "\\").lower()
+    return not (
+        module.get("status") == "loaded"
+        and path.endswith("\\nvcuda.dll")
+        and str(module.get("sha256") or "").lower() == expected_sha.lower()
+    )
+
 def evaluate(cap: dict, fun: dict, *, driver_sha: str, arch: str,
              revision: str, now: datetime, max_age_hours: int = 168) -> list[str]:
     failures: list[str] = []
@@ -92,6 +103,8 @@ def evaluate(cap: dict, fun: dict, *, driver_sha: str, arch: str,
         by_name[name] = item
         if item.get("status") in BAD_STATUSES:
             failures.append(f"capability: {name} returned {item['status']}")
+        if item.get("status") == "pass" and loaded_driver_failure(item, driver_sha):
+            failures.append(f"capability: {name} loaded nvcuda SHA-256 mismatched or missing")
         if item.get("status") == "pass" and (
                 (item.get("result") or {}).get("ok") is not True or
                 item.get("process_exit") != 0 or
@@ -127,6 +140,8 @@ def evaluate(cap: dict, fun: dict, *, driver_sha: str, arch: str,
         by_test[item["test"]] = item
         if item.get("status") in BAD_STATUSES:
             failures.append(f"functional: {item['test']} returned {item['status']}")
+        if item.get("status") == "pass" and loaded_driver_failure(item, driver_sha):
+            failures.append(f"functional: {item['test']} loaded nvcuda SHA-256 mismatched or missing")
         if item.get("status") == "pass" and (
                 (item.get("result") or {}).get("ok") is not True or
                 item.get("process_exit") != 0 or

@@ -2,8 +2,10 @@
 import importlib.util
 import unittest
 from pathlib import Path
+import sys
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "capability_probe.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 spec = importlib.util.spec_from_file_location("zluda_capabilities_for_test", MODULE_PATH)
 cap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cap)

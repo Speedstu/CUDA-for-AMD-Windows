@@ -37,9 +37,25 @@ The gate verifies:
 
 Exit code **0** means *evidence is eligible for manual review*, **1** means failed tests or mismatched evidence, and **2** means invalid input.
 
-The gate checks the SHA-256 of the staged driver recorded by the test runner, not independently the module actually loaded by each child process. A future hardening step is to include GetModuleHandleW-derived loaded-driver SHA-256 for each probe; until then, launch only through the isolated configured runtime and check the process trace.
+The gate requires two independent forms of driver evidence for **every passing
+GPU probe**:
 
-Use a **new** report for every change in driver DLL, HIP SDK, GPU model/architecture, Python/PyTorch, ZLUDA version, compiler, or flags. An older passing report never validates a newer binary. Test other GPU architectures independently. For MTP, include dedicated token/output comparisons against native ROCm; a CUB pass alone cannot establish MTP correctness. For changes to GPU kernel compilation or policy, add regression tests on both sides of the failing threshold.
+- the SHA-256 of the staged driver recorded in the report, and
+- the SHA-256 and actual file path of the nvcuda.dll resolved with
+  GetModuleHandleW/GetModuleFileNameW from **inside the running probe**.
+  A correct staged driver with a different loaded DLL is a failed gate.
+
+A missing, unreadable or mismatching loaded module now **fails closed**,
+even if the probe's numerical result says PASS. This does not, by itself,
+validate a llama-cli process launched *outside* the probe runner: include
+the child process loaded-module path and hash separately for llama MTP
+tests, as shown in the issue #6 protocol.
+Older evidence reports without per-probe loaded-module hashes are
+**historical**, not automatically eligible for promotion under this
+updated policy. Re-run the required safe, bounded probes when reviewing
+a candidate; do not repeat previously crashing fused kernels.
+
+Use a **new** report for every change in driver DLL, HIP SDK, GPU model/architecture, Python/PyTorch, ZLUDA version, compiler, or flags. An older passing report never validates a newer binary. Test other GPU architectures independently. For MTP, follow [the gfx1150 reproducible correctness plan](GFX1150_MTP_CORRECTNESS.md) and include dedicated token/output comparisons against native ROCm; a CUB pass alone cannot establish MTP correctness. For changes to GPU kernel compilation or policy, add regression tests on both sides of the failing threshold.
 
 ## Current precautions
 

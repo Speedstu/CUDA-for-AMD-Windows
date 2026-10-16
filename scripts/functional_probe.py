@@ -13,13 +13,15 @@ import math
 import sys
 import time
 import traceback
+from loaded_driver_identity import loaded_module_identity
 from typing import Any
 
 TESTS = ("matmul", "conv2d", "sdpa_math", "sdpa_flash", "sdpa_mem_efficient")
 
 
 def emit(test: str, status: str, **extra: Any) -> None:
-    payload = {"schema": 1, "test": test, "status": status, **extra}
+    payload = {"schema": 1, "test": test, "status": status, **extra,
+               "loaded_nvcuda": loaded_module_identity()}
     encoded = json.dumps(payload, sort_keys=True)
     print(encoded, flush=True)
     print(f"CUDAAMD_RESULT:{encoded}", file=sys.stderr, flush=True)
