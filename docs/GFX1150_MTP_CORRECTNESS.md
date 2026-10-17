@@ -35,7 +35,47 @@ not exhibiting a GPU fault. The bounded 24-token trace run passed,
 and ordinary-speed 200-token runs completed. **Avoid repeating long
 per-kernel traced runs to estimate performance or stability.**
 
-## Requested final 10-question review
+## October 17: ten-question correctness set completed (reported 2026-10-16)
+
+Cary5031 ran the fixed independently graded ten-question set from the
+protocol below, on Gemma-4-12B and Qwen3.5-35B-A3B. Each model used four
+modes (native plain, native MTP, ZLUDA plain, ZLUDA MTP), with three
+repeats per question. The full question text, answer-key regexes and
+per-mode summary are in
+[issue #6](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/6#issuecomment-6226906104).
+The individual run output files remain with the reporter; the project
+maintainer has not independently rerun those 240 inferences.
+
+| Graded set | Native plain | Native MTP | ZLUDA plain | ZLUDA MTP |
+| --- | --- | --- | --- | --- |
+| Gemma-4-12B | 30/30 | 30/30 | 30/30 | **30/30** |
+| Qwen3.5-35B-A3B | 30/30 | 30/30 | 30/30 | **30/30** |
+
+Across the reported 240 inference runs, every process exited normally,
+was graded correct against its independent final-answer rubric, none
+stopped incomplete or crashed, and all three repeats in every
+question/model/mode cell returned identical bytes. Some wording
+differs between modes while final-answer grading remains the same.
+
+| Model | Native plain | Native MTP | ZLUDA plain | ZLUDA MTP |
+| --- | ---: | ---: | ---: | ---: |
+| Gemma-4-12B | 8.5 | 21.9 | 8.5 | 18.6 |
+| Qwen3.5-35B-A3B | 12.3 | 20.2 | 12.4 | 17.5 |
+
+Speeds are mean generated tokens/second on the gfx1150 test system.
+MTP speedup over that backend's own plain mode: ZLUDA Gemma 2.18x
+(native 2.59x), ZLUDA Qwen 1.41x (native 1.64x). Aggregated accepted
+draft fractions were 87.1% ZLUDA versus 87.4% native for Gemma,
+and 83.1% ZLUDA versus 85.1% native for Qwen. The reporter used
+greedy generation, the same quantized model/draft weights across
+backends, an upper limit of 400 generated tokens and logged actual
+loaded CUDA driver SHA-256 for each ZLUDA process.
+
+**Scope:** Strong correctness evidence for the 10 graded questions,
+these two GGUF models and the specific gfx1150 runtime, NOT a universal
+GPU/kernel correctness guarantee, numerical equivalence proof or
+upstream ZLUDA PTX reduction parser fix. Keep artifacts opt-in.
+## Completed ten-question evaluation protocol
 
 To make the next comparison reproducible:
 
@@ -81,8 +121,8 @@ Keep the artifacts opt-in and do not promote to global stable defaults.
 - Upstream ZLUDA's general `red.global.add`/`red.shared.add` PTX
   grammar is still missing. The llama-specific histogram rewrite is not
   a parser fix.
-- The separate gfx1150 conv2d hangs in issue #3 have not been
-  demonstrated fixed by these llama or async-copy changes. Use a
+- The original cuDNN-enabled gfx1150 conv2d timeouts in issue #3 have not been
+  demonstrated fixed by these llama or async-copy changes. The no-cuDNN fallback did pass the CPU reference on September 20. Use a
   bounded, isolated CPU-reference conv2d repro only after the
   contributor confirms their original case is safe to repeat.
 - On gfx1100 the safe math-only SDPA wrapper is tested, but the

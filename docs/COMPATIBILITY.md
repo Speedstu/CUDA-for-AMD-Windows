@@ -231,3 +231,29 @@ inside each probe process**, preventing launcher redirection from
 masking a different DLL than the staged one. The changes do not enable
 unsupported upstream red instructions or resolve the separate conv2d
 hangs and raw fused SDPA numerical errors.
+### October 17: ten-question MTP grading and false-negative report fix
+
+Cary5031 ran the fixed 10-question independent answer-key grading on
+gfx1150 with Gemma-4-12B and Qwen3.5-35B-A3B. Each mode (native plain,
+native MTP, ZLUDA plain and ZLUDA MTP) graded 30/30 for each model;
+240/240 total successful exits and correct final answers, zero
+incomplete. ZLUDA MTP gains over own plain mode averaged 2.18x Gemma
+and 1.41x Qwen on this system. Wording sometimes differs between
+backends; this is bounded correctness evidence, not complete numeric
+equivalence. The raw 240 run logs remain with the contributor; see
+[GFX1150_MTP_CORRECTNESS.md](GFX1150_MTP_CORRECTNESS.md).
+
+The same contributor found a bug in test-functional.ps1: case-insensitive
+PowerShell variable names caused the typed selection parameter $Tests
+to alias the local $tests result array. Thus both selected GPU probes
+printed PASS but the report serialized strings and falsely failed the
+release gate. The results collection is now $probeEntries, covered by
+a no-GPU execution test for both selected and default test sets. No
+CUDA kernel, driver DLL or installed runtime was changed.
+
+The original September gfx1150 conv2d failure was a bounded 25/180
+second child process timeout, not a hard GPU lock. It happened in the
+cuDNN/bridge path; the PyTorch no-cuDNN fallback passed the CPU
+reference on 2026-09-20 (max_abs ~1.14e-05). A single carefully
+bounded trace would be required to isolate the failing cuDNN path;
+keep the existing fallback available.

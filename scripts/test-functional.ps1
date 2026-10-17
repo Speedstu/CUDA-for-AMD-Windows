@@ -264,11 +264,11 @@ if ($Tests -and $Tests.Count -gt 0) {
 } else {
     $testNames = $allowedTests
 }
-$tests = @()
+$probeEntries = @()
 foreach ($name in $testNames) {
     Write-Host ("Testing {0}..." -f $name) -NoNewline
     $entry = Invoke-FunctionalProbe $name
-    $tests += $entry
+    $probeEntries += $entry
     switch ($entry.status) {
         'pass'        { Write-Host ' PASS' }
         'unsupported' { Write-Host ' UNSUPPORTED (safe refusal)' -ForegroundColor Yellow }
@@ -284,17 +284,17 @@ foreach ($name in $testNames) {
 }
 
 $hardFailureStatuses = @('incorrect', 'error', 'timeout', 'hang_after_result', 'crash_after_result', 'unavailable')
-$hardFailures = @($tests | Where-Object { $hardFailureStatuses -contains $_.status })
-$unsupported = @($tests | Where-Object { $_.status -eq 'unsupported' })
-$passed = @($tests | Where-Object { $_.status -eq 'pass' })
+$hardFailures = @($probeEntries | Where-Object { $hardFailureStatuses -contains $_.status })
+$unsupported = @($probeEntries | Where-Object { $_.status -eq 'unsupported' })
+$passed = @($probeEntries | Where-Object { $_.status -eq 'pass' })
 
 # Dense PPO validation only requires the GEMM path. Extended probes remain
 # visible and can fail independently without misrepresenting PPO support.
 $coreTestNames = @('matmul')
-$coreTests = @($tests | Where-Object { $coreTestNames -contains $_.test })
+$coreTests = @($probeEntries | Where-Object { $coreTestNames -contains $_.test })
 $coreCorrectnessOk = ($coreTests.Count -eq $coreTestNames.Count) -and -not ($coreTests | Where-Object { $_.status -ne 'pass' })
 $correctnessOk = ($hardFailures.Count -eq 0)
-$fullSupport = ($passed.Count -eq $tests.Count)
+$fullSupport = ($passed.Count -eq $probeEntries.Count)
 
 $result = [ordered]@{
     schema = 1
@@ -314,7 +314,7 @@ $result = [ordered]@{
     full_support = [bool]$fullSupport
     safe_refusals = $unsupported.Count
     hard_failures = $hardFailures.Count
-    tests = $tests
+    tests = $probeEntries
 }
 
 Write-Host ''

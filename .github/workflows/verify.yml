@@ -84,6 +84,7 @@ jobs:
           python -m py_compile tests/test_llama_topk_atom_histogram.py
           python tests/test_promotion_gate.py
           python tests/test_loaded_driver_identity.py
+          pwsh -NoProfile -NonInteractive -File tests/test_functional_report_ps.ps1
           python -m py_compile tests/test_missing_symbol_trace.py
           python -m py_compile tests/test_llama_topk_fallback.py tests/test_llama_topk_radix_fallback.py
           $tests = @(python scripts/functional_probe.py --list-tests)
