@@ -9,6 +9,7 @@ on:
       - 'scripts/stage-cudnn-bridge.ps1'
       - 'scripts/test-cudnn-bridge.ps1'
       - 'scripts/test-cudnn-bridge-pytorch.py'
+      - 'scripts/test-cudnn-transform-pytorch.py'
   pull_request:
     paths:
       - '.github/workflows/cudnn-bridge.yml'
@@ -17,6 +18,7 @@ on:
       - 'scripts/stage-cudnn-bridge.ps1'
       - 'scripts/test-cudnn-bridge.ps1'
       - 'scripts/test-cudnn-bridge-pytorch.py'
+      - 'scripts/test-cudnn-transform-pytorch.py'
 
 jobs:
   windows-abi-contract:
@@ -60,6 +62,7 @@ jobs:
         shell: pwsh
         run: |
           python -m py_compile scripts/test-cudnn-bridge-pytorch.py
+          python -m py_compile scripts/test-cudnn-transform-pytorch.py
 
       - name: Validate bridge manifest
         shell: pwsh
@@ -75,6 +78,7 @@ jobs:
             'cudnnGetConvolutionBackwardDataWorkspaceSize',
             'cudnnGetConvolutionBackwardDataAlgorithm_v7',
             'cudnnConvolutionBackwardFilter',
+            'cudnnTransformTensor',
             'cudnnGetConvolutionBackwardFilterWorkspaceSize',
             'cudnnGetConvolutionBackwardFilterAlgorithm_v7'
           )

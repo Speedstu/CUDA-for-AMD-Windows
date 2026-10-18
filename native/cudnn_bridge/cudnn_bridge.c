@@ -330,6 +330,9 @@ typedef miopenStatus_t (*PFN_miopenConvolutionBackwardWeightsImmediate)(
     miopenHandle_t, const miopenTensorDescriptor_t, const void *,
     const miopenTensorDescriptor_t, const void *, const miopenConvolutionDescriptor_t,
     const miopenTensorDescriptor_t, void *, void *, size_t, uint64_t);
+typedef miopenStatus_t (*PFN_miopenTransformTensor)(
+    miopenHandle_t, const void *, const miopenTensorDescriptor_t, const void *,
+    const void *, const miopenTensorDescriptor_t, void *);
 typedef miopenStatus_t (*PFN_miopenConvolutionForward)(
     miopenHandle_t, const void *, const miopenTensorDescriptor_t, const void *,
     const miopenTensorDescriptor_t, const void *, const miopenConvolutionDescriptor_t,
@@ -362,6 +365,7 @@ typedef struct MiopenApi {
     PFN_miopenConvolutionBackwardWeightsGetSolutionWorkspaceSize bwd_weights_solution_workspace;
     PFN_miopenConvolutionBackwardWeightsImmediate conv_bwd_weights_immediate;
     PFN_miopenConvolutionForward conv_fwd;
+    PFN_miopenTransformTensor transform_tensor; /* optional across MIOpen versions */
 } MiopenApi;
 
 static MiopenApi g_miopen;
@@ -382,11 +386,19 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
 
     memset(&g_miopen, 0, sizeof(g_miopen));
     n = GetEnvironmentVariableA("CUDA_AMD_MIOPEN_DLL", configured, (DWORD)sizeof(configured));
-    if (n > 0 && n < sizeof(configured)) {
+    if (n > 0) {
+        /*
+         * An explicit backend is a security/ABI contract: a wrong or
+         * truncated path must not silently fall through to an unrelated
+         * MIOpen.dll found on PATH. The caller can fix the path explicitly.
+         */
+        if (n >= sizeof(configured)) return TRUE;
         m = LoadLibraryA(configured);
+        if (!m) return TRUE;
+    } else {
+        m = LoadLibraryA("MIOpen.dll");
+        if (!m) m = LoadLibraryA("miopen.dll");
     }
-    if (!m) m = LoadLibraryA("MIOpen.dll");
-    if (!m) m = LoadLibraryA("miopen.dll");
     if (!m) return TRUE;
 
     g_miopen.module = m;
@@ -421,6 +433,14 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
     LOAD_REQ(conv_bwd_weights_immediate, miopenConvolutionBackwardWeightsImmediate);
     LOAD_REQ(conv_fwd, miopenConvolutionForward);
 #undef LOAD_REQ
+    /*
+     * MIOpen tensor transforms are available on some but not all backend
+     * versions. Missing optional symbols must not disable existing convs.
+     */
+    {
+        FARPROC proc = bridge_get_proc(m, "miopenTransformTensor");
+        if (proc) memcpy(&g_miopen.transform_tensor, &proc, sizeof(proc));
+    }
     g_miopen_ready = 1;
     return TRUE;
 }
@@ -1756,6 +1776,49 @@ done:
     bridge_destroy_miopen_tensor(mdy);
     bridge_destroy_miopen_tensor(mdw);
     bridge_destroy_miopen_conv(mc);
+    return cs;
+}
+
+/* ---- cuDNN tensor transforms ------------------------------------------- */
+
+/*
+ * cuDNN v8 transform: y = alpha*x + beta*y, including strided layout
+ * conversion. MIOpen exposes the equivalent operation for FP32/FP16.
+ * No custom CUDA stream reinterpretation or implicit CPU copy is used.
+ */
+cudnnStatus_t cudnnTransformTensor(
+    cudnnHandle_t handle, const void *alpha, const cudnnTensorDescriptor_t xDesc,
+    const void *x, const void *beta, const cudnnTensorDescriptor_t yDesc, void *y) {
+    miopenTensorDescriptor_t mx = NULL, my = NULL;
+    miopenStatus_t ms;
+    cudnnStatus_t cs;
+    int i;
+
+    if (!handle || handle->magic != BRIDGE_MAGIC_HANDLE || !alpha || !beta ||
+        !x || !y || !bridge_valid_tensor(xDesc) || !bridge_valid_tensor(yDesc))
+        return CUDNN_STATUS_BAD_PARAM;
+    if (handle->cuda_stream != NULL) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (xDesc->nb_dims != 4 || yDesc->nb_dims != 4)
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    if (xDesc->data_type != yDesc->data_type ||
+        (xDesc->data_type != CUDNN_DATA_FLOAT && xDesc->data_type != CUDNN_DATA_HALF))
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    for (i = 0; i < 4; ++i) {
+        if (xDesc->dims[i] <= 0 || yDesc->dims[i] != xDesc->dims[i])
+            return CUDNN_STATUS_BAD_PARAM;
+        if (xDesc->strides[i] <= 0 || yDesc->strides[i] <= 0)
+            return CUDNN_STATUS_BAD_PARAM;
+    }
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.transform_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+
+    cs = bridge_make_miopen_tensor(xDesc, &mx); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
+    ms = g_miopen.transform_tensor(handle->miopen, alpha, mx, x, beta, my, y);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(mx);
+    bridge_destroy_miopen_tensor(my);
     return cs;
 }
 

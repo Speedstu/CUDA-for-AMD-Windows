@@ -11,6 +11,8 @@ typedef int (*PF_set_stream)(void *, void *);
 typedef int (*PF_create_desc)(void **);
 typedef int (*PF_destroy_desc)(void *);
 typedef int (*PF_set_tensor4d)(void *, int, int, int, int, int, int);
+typedef int (*PF_set_tensor4d_ex)(void *, int, int, int, int, int, int, int, int, int);
+typedef int (*PF_transform)(void *, const void *, void *, const void *, const void *, void *, void *);
 typedef int (*PF_set_filter4d)(void *, int, int, int, int, int, int);
 typedef int (*PF_set_conv2d)(void *, int,int,int,int,int,int,int,int);
 typedef int (*PF_outdim)(void *, void *, void *, int *, int *, int *, int *);
@@ -53,6 +55,12 @@ int main(int argc, char **argv) {
     const float dx_expected[9]={1,1,0,1,0,-1,0,-1,-1};
     const float dw_expected[4]={12,16,24,28};
     float alpha=1.0f,beta=0.0f;
+    float x_transform[4]={1,2,3,4};
+    float y_transform[8]={10,10,10,10,10,10,10,10};
+    float transform_alpha=2.0f, transform_beta=0.5f;
+    void *transform_xdesc=NULL,*transform_ydesc=NULL;
+    int missing_transform=(argc>2 && strcmp(argv[2],"--without-transform")==0);
+    int invalid_backend=(argc>2 && strcmp(argv[2],"--bad-backend")==0);
     if(argc<2){fprintf(stderr,"usage: bridge_smoke <cudnn64_8.dll>\n");return 2;}
     m=LoadLibraryA(argv[1]);
     if(!m){fprintf(stderr,"LoadLibrary failed: %lu\n",GetLastError());return 2;}
@@ -62,6 +70,8 @@ int main(int argc, char **argv) {
     LOAD(cudnnCreateTensorDescriptor,PF_create_desc)
     LOAD(cudnnDestroyTensorDescriptor,PF_destroy_desc)
     LOAD(cudnnSetTensor4dDescriptor,PF_set_tensor4d)
+    LOAD(cudnnSetTensor4dDescriptorEx,PF_set_tensor4d_ex)
+    LOAD(cudnnTransformTensor,PF_transform)
     LOAD(cudnnCreateFilterDescriptor,PF_create_desc)
     LOAD(cudnnDestroyFilterDescriptor,PF_destroy_desc)
     LOAD(cudnnSetFilter4dDescriptor,PF_set_filter4d)
@@ -83,6 +93,16 @@ int main(int argc, char **argv) {
     LOAD(cudnnConvolutionBackwardFilter,PF_fwd)
     LOAD(cudnnGetErrorString,PF_error)
 
+    if(invalid_backend){
+        rc=cudnnCreate(&h);
+        if(rc!=1 || h!=NULL) {
+            fprintf(stderr,"explicit invalid backend must fail initialization, rc=%d\n",rc);
+            return 4;
+        }
+        puts("PASS: bad explicitly configured MIOpen path does not silently fall back");
+        FreeLibrary(m);
+        return 0;
+    }
     if((rc=cudnnCreate(&h))!=0){fprintf(stderr,"cudnnCreate: %s\n",cudnnGetErrorString(rc));return 4;}
     if((rc=cudnnSetStream(h,(void *)1))!=9){fprintf(stderr,"non-default stream must fail closed, got %d\n",rc);return 5;}
     if((rc=cudnnSetStream(h,NULL))!=0){fprintf(stderr,"default stream failed %d\n",rc);return 5;}
@@ -166,12 +186,43 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Transform: logical NCHW (1,2,1,2), output with an interleaved channel
+       dimension. alpha=2, beta=.5: outputs [7,11,9,13] in physical order. */
+    if(cudnnCreateTensorDescriptor(&transform_xdesc) ||
+       cudnnCreateTensorDescriptor(&transform_ydesc)) return 33;
+    if(cudnnSetTensor4dDescriptorEx(transform_xdesc,0,1,2,1,2,4,2,2,1) ||
+       cudnnSetTensor4dDescriptorEx(transform_ydesc,0,1,2,1,2,8,1,4,2)) return 34;
+    rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
+                            &transform_beta,transform_ydesc,y_transform);
+    if(missing_transform){
+        if(rc!=9) { fprintf(stderr,"missing MIOpen transform must refuse, got %d\n",rc); return 35; }
+    } else {
+        if(rc) { fprintf(stderr,"transform failed %d\n",rc); return 36; }
+        if(fabsf(y_transform[0]-7.f)>1e-6f || fabsf(y_transform[1]-11.f)>1e-6f ||
+           fabsf(y_transform[2]-9.f)>1e-6f || fabsf(y_transform[3]-13.f)>1e-6f ||
+           y_transform[4]!=10.f) {
+            fprintf(stderr,"strided transform numerical mismatch\n"); return 37;
+        }
+    }
+    /* Shape mismatch must return BAD_PARAM; dtype mismatch must fail closed.
+       Reconfigure the output without disturbing convolution descriptor tests. */
+    if(cudnnSetTensor4dDescriptor(transform_ydesc,0,0,1,1,1,2)) return 38;
+    rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
+                            &transform_beta,transform_ydesc,y_transform);
+    if(rc!=3) { fprintf(stderr,"bad transform shapes returned %d\n",rc);return 39; }
+    if(cudnnSetTensor4dDescriptor(transform_ydesc,0,2,1,2,1,2)) return 40;
+    rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
+                            &transform_beta,transform_ydesc,y_transform);
+    if(rc!=9) { fprintf(stderr,"unsupported transform dtype returned %d\n",rc);return 41; }
+    cudnnDestroyTensorDescriptor(transform_ydesc);
+    cudnnDestroyTensorDescriptor(transform_xdesc);
+
     cudnnDestroyConvolutionDescriptor(cd);
     cudnnDestroyFilterDescriptor(wd);
     cudnnDestroyTensorDescriptor(yd);
     cudnnDestroyTensorDescriptor(xd);
     cudnnDestroy(h);
     FreeLibrary(m);
-    puts("PASS: cuDNN bridge forward/backward ABI + v7 heuristics + numerical correctness + fail-closed stream/mode");
+    puts("PASS: cuDNN bridge convs + transform ABI/strides/scaling + fail-closed unsupported cases");
     return 0;
 }

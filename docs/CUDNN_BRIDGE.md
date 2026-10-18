@@ -48,9 +48,10 @@ A separate public `torch.nn.functional.conv2d(..., bias=...)` training check als
 
 ## Implemented surface
 
-The generated proxy currently overrides 44 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
+The generated proxy currently overrides 45 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
 
 - handle create/destroy
+- experimental cudnnTransformTensor (FP32/FP16, 4D, optional MIOpen backend symbol; default stream; real-GPU correctness test pending)
 - default-stream get/set
 - tensor descriptors
 - filter descriptors
@@ -83,6 +84,7 @@ Implemented translations reject semantics that have not been validated instead o
 Current intentional restrictions:
 
 - only 2D convolution descriptors are implemented
+- cudnnTransformTensor is limited to equal-shaped 4D FP32/FP16 tensors with positive strides; it returns NOT_SUPPORTED when miopenTransformTensor is absent, preserving existing convolution support
 - only cuDNN cross-correlation mode is implemented
 - non-default CUDA streams return `CUDNN_STATUS_NOT_SUPPORTED`
 - forward/backward translated execution requires cuDNN scaling `alpha=1`, `beta=0`
@@ -93,6 +95,41 @@ Current intentional restrictions:
 
 The forward and backward PyTorch validation therefore uses `torch.backends.cudnn.deterministic = False`.
 
+## Phase 1 extension: tensor transforms (2026-10-18)
+
+The cuDNN v8 bridge now implements a narrow, opt-in
+cudnnTransformTensor -> miopenTransformTensor translation. It supports
+4D float32 and float16 tensors with matching logical dimensions and
+arbitrary positive strides on the default stream. MIOpen performs
+Y = alpha * X + beta * Y. Invalid shapes are rejected, and
+unsupported data types, ranks and backend symbols return NOT_SUPPORTED.
+
+The ABI self-test uses a synthetic, CPU-side MIOpen implementation to
+exercise noncontiguous strides, alpha/beta scaling and output numerics.
+It also tests a backend with no miopenTransformTensor symbol, where
+older convolutions must still pass, and a deliberately wrong explicit
+CUDA_AMD_MIOPEN_DLL path, which must no longer fall back silently to
+an unrelated DLL on Windows PATH. The test verifies that staging and
+restoration preserve the original cuDNN DLL hash.
+
+Run the isolated tests without GPU:
+
+    pwsh scripts/test-cudnn-bridge.ps1
+
+For real GPU qualification, stage an intentionally selected matching
+ZLUDA/HIP/MIOpen runtime in a separate directory and run:
+
+    python scripts/test-cudnn-transform-pytorch.py --bridge-dll C:\path\to\staged\cudnn64_8.dll
+
+The latter compares FP32/FP16 strided GPU results against a CPU
+reference and fails on any nonzero cuDNN status. **That real GPU test
+has not yet passed on a compatible MIOpen installation**, so this
+new transform API remains experimental, not production support.
+
+The older cuDNN v8 convolution, backward-data and backward-filter
+reference results from September are preserved; none of these new
+operations is installed globally or silently promoted to the stable
+v6 path.
 ## Exact solver/workspace binding
 
 The bridge does not map a cuDNN algorithm family to an arbitrary MIOpen implementation.

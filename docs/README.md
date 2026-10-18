@@ -29,6 +29,8 @@ Real application checks are evidence for the exact versions and hardware recorde
 - [`BENCHMARKS.md`](BENCHMARKS.md) — benchmark methodology, same-GPU comparisons and workload notes.
 - [`../benchmarks/`](../benchmarks/) — raw checked-in benchmark data.
 
+- [Phase 1 deep-learning compatibility checklist](CUDNN_PHASE1_CHECKLIST.md) — current gaps, GPU test matrix and manual release criteria.
+
 ## Experimental development
 
 - [`../patches/zluda-v7-preview10/README.md`](../patches/zluda-v7-preview10/README.md) — pinned ZLUDA v7 source patch series.

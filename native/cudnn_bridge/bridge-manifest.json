@@ -53,6 +53,7 @@
     "cudnnGetConvolutionBackwardFilterAlgorithmMaxCount",
     "cudnnGetConvolutionBackwardFilterAlgorithm_v7",
     "cudnnGetConvolutionBackwardFilterWorkspaceSize",
-    "cudnnConvolutionBackwardFilter"
+    "cudnnConvolutionBackwardFilter",
+    "cudnnTransformTensor"
   ]
 }

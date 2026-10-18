@@ -330,3 +330,30 @@ __declspec(dllexport) int miopenConvolutionForward(
     beta=*(const float *)beta_ptr;
     return stub_conv_core(xDescV, xV, wDescV, wV, convDescV, yDescV, yV, alpha, beta);
 }
+
+#ifndef CUDAAMD_STUB_NO_TRANSFORM
+__declspec(dllexport) int miopenTransformTensor(
+    void *handle, const void *alpha_ptr, void *xDescV, const void *xV,
+    const void *beta_ptr, void *yDescV, void *yV) {
+    StubTensor *xD = (StubTensor *)xDescV, *yD = (StubTensor *)yDescV;
+    const float *x = (const float *)xV;
+    float *y = (float *)yV;
+    float alpha, beta;
+    int n,c,h,w,i;
+    (void)handle;
+    if (!alpha_ptr || !beta_ptr || !xD || !yD || !x || !y) return 3;
+    /* This synthetic backend verifies the FP32 ABI and strides only. */
+    if (xD->type != 1 || yD->type != 1 || xD->nb != 4 || yD->nb != 4) return 6;
+    for(i=0;i<4;++i) if(xD->dims[i] != yD->dims[i]) return 3;
+    alpha = *(const float *)alpha_ptr;
+    beta = *(const float *)beta_ptr;
+    for(n=0;n<xD->dims[0];++n)
+    for(c=0;c<xD->dims[1];++c)
+    for(h=0;h<xD->dims[2];++h)
+    for(w=0;w<xD->dims[3];++w) {
+        int ix = off4(xD,n,c,h,w), iy = off4(yD,n,c,h,w);
+        y[iy] = alpha*x[ix] + beta*y[iy];
+    }
+    return 0;
+}
+#endif

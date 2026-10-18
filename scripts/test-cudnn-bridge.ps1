@@ -84,6 +84,18 @@ try {
     $env:CUDA_AMD_MIOPEN_DLL = $miopenStub
     & $smokeExe $bridgeDll
     if ($LASTEXITCODE -ne 0) { throw "cuDNN bridge ABI/correctness smoke failed: exit $LASTEXITCODE" }
+    # Optional tensor transform must not be mandatory for other convolutions.
+    $stubNoTransform = Join-Path $bridgeOut 'MIOpen-without-transform.dll'
+    & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_TRANSFORM -s -o $stubNoTransform $stubSource
+    if ($LASTEXITCODE -ne 0) { throw 'Old-MIOpen backend stub build failed.' }
+    $env:CUDA_AMD_MIOPEN_DLL = $stubNoTransform
+    & $smokeExe $bridgeDll '--without-transform'
+    if ($LASTEXITCODE -ne 0) { throw 'Missing optional symbol regressed convolution support.' }
+
+    # A wrong explicitly configured backend must not silently load from PATH.
+    $env:CUDA_AMD_MIOPEN_DLL = Join-Path $bridgeOut 'intentionally-missing-miopen.dll'
+    & $smokeExe $bridgeDll '--bad-backend'
+    if ($LASTEXITCODE -ne 0) { throw 'Bad explicit MIOpen path did not fail closed.' }
 } finally {
     $env:CUDA_AMD_MIOPEN_DLL = $previousMiopen
 }
@@ -117,6 +129,9 @@ $report = [ordered]@{
     cpu_reference_forward_cross_correlation = 'pass'
     cpu_reference_backward_data = 'pass'
     cpu_reference_backward_filter = 'pass'
+    transform_tensor_strided_fp32 = 'pass'
+    transform_tensor_missing_backend_symbol = 'safe-refusal'
+    invalid_explicit_miopen_path = 'safe-refusal'
     v7_forward_algorithm_query = 'pass'
     v7_backward_data_algorithm_query = 'pass'
     v7_backward_filter_algorithm_query = 'pass'

@@ -224,6 +224,8 @@ Please include the GPU model, `gfxXXXX` target, driver, HIP version, ZLUDA chann
 
 More detail: [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
+Deep-learning compatibility work in progress: [Phase 1 release and correctness checklist](docs/CUDNN_PHASE1_CHECKLIST.md).
+
 ## Contributing
 
 The project is evidence-driven. New compatibility claims should include a focused reproducer, numerical validation where applicable, exact versions/hashes, and a real workload when possible.
