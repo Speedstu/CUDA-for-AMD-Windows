@@ -129,8 +129,9 @@ ZLUDA/HIP/MIOpen runtime in a separate directory and run:
 
 The latter compares FP32/FP16 strided transform, set and scale GPU results against a CPU
 reference and fails on any nonzero cuDNN status. **That real GPU test
-has not yet passed on a compatible MIOpen installation**, so this
-new tensor APIs remain experimental, not production support.
+has not yet been executed in a CUDA-enabled PyTorch environment**.
+The direct HIP/MIOpen FP32/FP16 hardware qualification below now passes;
+the tensor APIs remain experimental for general PyTorch apps.
 
 The older cuDNN v8 convolution, backward-data and backward-filter
 reference results from September are preserved; none of these new
@@ -158,8 +159,8 @@ sigmoid, ReLU, and tanh forward/backward, descriptor getters/setters,
 unsupported modes and omission of the optional activation symbols:
 \`pwsh scripts/test-cudnn-bridge.ps1\`.
 
-Real-GPU qualification is **still required** before claiming supported
-hardware. On a deliberately staged ZLUDA/HIP/MIOpen runtime with real
+Independent direct HIP/MIOpen real-GPU qualification **passed** on gfx1200 for
+FP32/FP16; full CUDA-targeted PyTorch end-to-end qualification remains pending. On a deliberately staged ZLUDA/HIP/MIOpen runtime with real
 MIOpen activation functions, run:
 
 \`python scripts/test-cudnn-activation-pytorch.py --bridge-dll C:\\path\\to\\cudnn64_8.dll\`
@@ -183,8 +184,9 @@ convolution or activation APIs.
 The CPU-backed MIOpen-stub smoke suite validates FP32 channel-wise
 softmax normalizers, forward and backward analytical gradients, and
 safe refusal when symbols or modes are missing.
-A separate, deliberately opt-in real GPU probe runs FP32 and FP16
-against a CPU PyTorch reference (not yet passed on real MIOpen):
+A separate PyTorch-based GPU probe remains opt-in and **has not yet
+been executed with a CUDA-enabled PyTorch installation**; the new
+independent direct HIP + real MIOpen GPU probe has passed FP32/FP16:
 
 \`python scripts/test-cudnn-softmax-pytorch.py --bridge-dll C:\\staged\\cudnn64_8.dll\`
 
@@ -194,7 +196,7 @@ No stable installer or NVIDIA DLL is replaced by this candidate.
 
 For an independent GPU check that does not require a CUDA-targeted PyTorch
 wheel, \`scripts/test-cudnn-direct-hip-gpu.py\` allocates genuinely
-device-resident FP32 tensors with \`hipMalloc\`, runs cuDNN activation
+device-resident FP32 and FP16 tensors with \`hipMalloc\`, runs cuDNN activation
 and accurate channel softmax forward/backward against a separately loaded
 actual MIOpen backend, copies the results to host with \`hipMemcpy\`, and
 compares against a CPU mathematical reference. It records actual
@@ -203,6 +205,19 @@ loaded cuDNN/HIP/MIOpen DLL module paths and SHA-256 values.
 Example for a correctly extracted, isolated ROCm TheRock distribution:
 
     python scripts/test-cudnn-direct-hip-gpu.py --bridge-dll H:\\isolated\\cudnn64_8.dll --hip-dll H:\\therock\\bin\\amdhip64_7.dll --miopen-dll H:\\therock\\bin\\MIOpen.dll --report H:\\isolated\\gpu-evidence.json
+
+For reproducible, timeout-bounded and hash-verified execution,
+use the provided PowerShell launcher (an explicit acknowledgement
+is required before touching the GPU):
+
+    pwsh scripts/test-cudnn-direct-hip.ps1 -TheRockRoot H:\\TheRock\\extract -BridgeDll H:\\isolated\\cudnn64_8.dll -PythonExe python.exe -Only all -TimeoutSeconds 180 -AllowGpuTest
+
+The launcher starts a separate process, enforces a hard time limit,
+verifies all sixteen independent GPU numerical results and compares
+the in-process loaded DLL identities against the actual selected
+HIP/MIOpen/bridge file hashes before reporting PASS. A timeout,
+unexpected DLL, nonzero child-process exit or missing proof is FAIL;
+it does not automatically retry.
 
 Run only under a separate short-lived process with a bounded timeout
 and no other active GPU workloads. It MUST NOT be executed against the
@@ -236,6 +251,43 @@ reversible DLL staging.
 The opt-in direct HIP/MIOpen GPU test now includes max-pooling FP32
 comparison against an exact CPU reference; it must run with real
 MIOpen and a device, not the synthetic test stub.
+
+## Real AMD gfx1200 GPU numerical evidence and FP16 scalar ABI fix
+
+**October 18, 2026 — real GPU pass: 16/16 bounded tests.**
+The locally built experimental 60-export cuDNN v8 bridge ran on a
+real AMD Radeon RX 9060 XT (gfx1200), with HIP and MIOpen from the
+official isolated TheRock Windows 7.14.0 gfx120X-all distribution.
+Eight independent FP32 checks and eight FP16 checks succeeded with
+strict numerical comparison against CPU mathematical references:
+sigmoid, ReLU and tanh forward/backward; accurate channel softmax
+forward/backward; restricted 2D max pooling; strided tensor transform;
+strided set and scale. Every process loaded the intended bridge,
+amdhip64_7.dll and MIOpen.dll; SHA-256 hashes were checked from the
+actual in-process module handles.
+
+See the check-in [hardware evidence](../benchmarks/cudnn-gfx1200-direct-hip-fp32-fp16-20261018.json)
+and its fail-closed CI snapshot tests. The maximum absolute FP32
+error was below 1.4e-7, and the maximum FP16 error was below 0.001,
+within the declared 0.02 bound.
+
+During real hardware qualification, an FP16 transform initially
+**silently returned SUCCESS and wrote zeros**. The cause was an ABI
+difference: CUDA cuDNN host scaling factors use float32 for HALF
+tensors, while the tested MIOpen tensor primitives interpret
+HALF scaling factors as binary16. The bridge now converts cuDNN
+host float32 scalars to IEEE binary16 for the three affected tensor
+operations. Coefficients that are NaN, infinite, or not exactly
+representable as binary16 return NOT_SUPPORTED *before launch*
+rather than being silently rounded or returning corrupt output.
+A synthetic binary16 MIOpen implementation and a regression smoke
+for exact values and fail-closed precision guard now execute in CI.
+
+**Scope:** direct device allocations via HIP and calls into a
+cuDNN-ABI compatibility library backed by real MIOpen; this does
+NOT prove CUDA-targeted PyTorch 2.3, NVIDIA nvcc extensions, full
+cuDNN v8/v9 compatibility, arbitrary CUDA streams or all AMD GPU
+architectures. The public v6 stable installer remains unchanged.
 
 ## Exact solver/workspace binding
 

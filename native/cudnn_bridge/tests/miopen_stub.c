@@ -343,17 +343,23 @@ __declspec(dllexport) int miopenTransformTensor(
     int n,c,h,w,i;
     (void)handle;
     if (!alpha_ptr || !beta_ptr || !xD || !yD || !x || !y) return 3;
-    /* This synthetic backend verifies the FP32 ABI and strides only. */
-    if (xD->type != 1 || yD->type != 1 || xD->nb != 4 || yD->nb != 4) return 6;
+    if (xD->type != yD->type || (xD->type != 0 && xD->type != 1) ||
+        xD->nb != 4 || yD->nb != 4) return 6;
     for(i=0;i<4;++i) if(xD->dims[i] != yD->dims[i]) return 3;
-    alpha = *(const float *)alpha_ptr;
-    beta = *(const float *)beta_ptr;
+    alpha = xD->type == 0 ? (float)*(const _Float16 *)alpha_ptr : *(const float *)alpha_ptr;
+    beta = xD->type == 0 ? (float)*(const _Float16 *)beta_ptr : *(const float *)beta_ptr;
     for(n=0;n<xD->dims[0];++n)
     for(c=0;c<xD->dims[1];++c)
     for(h=0;h<xD->dims[2];++h)
     for(w=0;w<xD->dims[3];++w) {
         int ix = off4(xD,n,c,h,w), iy = off4(yD,n,c,h,w);
-        y[iy] = alpha*x[ix] + beta*y[iy];
+        if (xD->type == 0) {
+            const _Float16 *hx=(const _Float16 *)xV;
+            _Float16 *hy=(_Float16 *)yV;
+            hy[iy]=(_Float16)(alpha*(float)hx[ix]+beta*(float)hy[iy]);
+        } else {
+            y[iy] = alpha*x[ix] + beta*y[iy];
+        }
     }
     return 0;
 }
@@ -367,10 +373,13 @@ __declspec(dllexport) int miopenSetTensor(
     int n,c,h,w;
     (void)handle;
     if(!d || !y || !valuePtr) return 3;
-    if(d->nb!=4 || d->type!=1) return 6;
+    if(d->nb!=4 || (d->type!=1 && d->type!=0)) return 6;
     for(n=0;n<d->dims[0];++n) for(c=0;c<d->dims[1];++c)
-    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w)
-        y[off4(d,n,c,h,w)]=*(const float *)valuePtr;
+    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w) {
+        int i=off4(d,n,c,h,w);
+        if (d->type==0) ((_Float16 *)yV)[i]=*(const _Float16 *)valuePtr;
+        else y[i]=*(const float *)valuePtr;
+    }
     return 0;
 }
 
@@ -381,10 +390,15 @@ __declspec(dllexport) int miopenScaleTensor(
     int n,c,h,w;
     (void)handle;
     if(!d || !y || !valuePtr) return 3;
-    if(d->nb!=4 || d->type!=1) return 6;
+    if(d->nb!=4 || (d->type!=1 && d->type!=0)) return 6;
     for(n=0;n<d->dims[0];++n) for(c=0;c<d->dims[1];++c)
-    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w)
-        y[off4(d,n,c,h,w)]*=*(const float *)valuePtr;
+    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w) {
+        int i=off4(d,n,c,h,w);
+        if (d->type==0) {
+            _Float16 *hy=(_Float16 *)yV;
+            hy[i]=(_Float16)((float)hy[i]*(float)*(const _Float16 *)valuePtr);
+        } else y[i]*=*(const float *)valuePtr;
+    }
     return 0;
 }
 

@@ -13,6 +13,9 @@ on:
       - 'scripts/test-cudnn-activation-pytorch.py'
       - 'scripts/test-cudnn-softmax-pytorch.py'
       - 'scripts/test-cudnn-direct-hip-gpu.py'
+      - 'scripts/test-cudnn-direct-hip.ps1'
+      - 'tests/test_cudnn_gpu_evidence.py'
+      - 'benchmarks/cudnn-gfx1200-direct-hip-fp32-fp16-20261018.json'
   pull_request:
     paths:
       - '.github/workflows/cudnn-bridge.yml'
@@ -25,6 +28,9 @@ on:
       - 'scripts/test-cudnn-activation-pytorch.py'
       - 'scripts/test-cudnn-softmax-pytorch.py'
       - 'scripts/test-cudnn-direct-hip-gpu.py'
+      - 'scripts/test-cudnn-direct-hip.ps1'
+      - 'tests/test_cudnn_gpu_evidence.py'
+      - 'benchmarks/cudnn-gfx1200-direct-hip-fp32-fp16-20261018.json'
 
 jobs:
   windows-abi-contract:
@@ -48,7 +54,8 @@ jobs:
           @(
             'scripts/build-cudnn-bridge.ps1',
             'scripts/stage-cudnn-bridge.ps1',
-            'scripts/test-cudnn-bridge.ps1'
+            'scripts/test-cudnn-bridge.ps1',
+            'scripts/test-cudnn-direct-hip.ps1'
           ) | ForEach-Object {
             $tokens = $null
             $errors = $null
@@ -72,6 +79,7 @@ jobs:
           python -m py_compile scripts/test-cudnn-activation-pytorch.py
           python -m py_compile scripts/test-cudnn-softmax-pytorch.py
           python -m py_compile scripts/test-cudnn-direct-hip-gpu.py
+          python tests/test_cudnn_gpu_evidence.py
 
       - name: Validate bridge manifest
         shell: pwsh

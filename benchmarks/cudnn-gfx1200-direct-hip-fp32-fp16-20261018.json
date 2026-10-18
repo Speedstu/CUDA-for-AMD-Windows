@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "kind": "real-gpu-direct-hip-miopen",
+  "backend_scope": "direct HIP device allocations, cuDNN v8 bridge, real MIOpen; NOT PyTorch/ZLUDA end-to-end",
+  "hardware": {
+    "gpu": "AMD Radeon RX 9060 XT",
+    "hip_device_count": 1,
+    "architecture": "gfx1200",
+    "driver_version": "32.0.31041.1004"
+  },
+  "runtime": {
+    "distribution": "AMD TheRock Windows gfx120X-all 7.14.0",
+    "package_sha256": "87091e92ff9fcc0a590193b9d42bd48cf8e9ce9df258efeb52de7d3c3e44d395",
+    "hip_dll_sha256": "7ad052ed90ba2867a7b2a4f78767559bdc712f2fb8e497d3e6dfed59b8790d21",
+    "miopen_dll_sha256": "3f6eb778c9684a27f9981bd58998d10ab814bf7f63eb78f8551bca49da60eba0",
+    "cudnn_bridge_sha256": "9fea39fb90d3c5c787db4f7279c784b6108bfb9b6e83a78893152f480546800d",
+    "loaded_module_paths_and_digests_verified": true
+  },
+  "numeric": {
+    "reference": "Independent CPU mathematical values for each operation",
+    "fp32_tolerance": 1E-05,
+    "fp16_tolerance": 0.02,
+    "correctness_tests": 16,
+    "passed": 16,
+    "failed": 0,
+    "results": [
+      {
+        "operator": "sigmoid",
+        "dtype": "float32",
+        "forward_max_abs": 4.943631737308607E-08,
+        "backward_max_abs": 1.381166438441106E-07,
+        "status": "pass"
+      },
+      {
+        "operator": "relu",
+        "dtype": "float32",
+        "forward_max_abs": 0.0,
+        "backward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "tanh",
+        "dtype": "float32",
+        "forward_max_abs": 2.0336654582564506E-08,
+        "backward_max_abs": 2.9053247585508757E-08,
+        "status": "pass"
+      },
+      {
+        "operator": "softmax_channel_accurate",
+        "dtype": "float32",
+        "forward_max_abs": 3.0997757916040314E-08,
+        "backward_max_abs": 1.0550267173781158E-07,
+        "status": "pass"
+      },
+      {
+        "operator": "max_pool2d_nonoverlapping",
+        "dtype": "float32",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "transform_tensor_strided",
+        "dtype": "float32",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "set_tensor_strided",
+        "dtype": "float32",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "scale_tensor_strided",
+        "dtype": "float32",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "sigmoid",
+        "dtype": "float16",
+        "forward_max_abs": 0.0004259842278823145,
+        "backward_max_abs": 0.0009372125394801478,
+        "status": "pass"
+      },
+      {
+        "operator": "relu",
+        "dtype": "float16",
+        "forward_max_abs": 0.0,
+        "backward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "tanh",
+        "dtype": "float16",
+        "forward_max_abs": 0.00016039257581690336,
+        "backward_max_abs": 0.00044986919050671315,
+        "status": "pass"
+      },
+      {
+        "operator": "softmax_channel_accurate",
+        "dtype": "float16",
+        "forward_max_abs": 4.473448133945901E-05,
+        "backward_max_abs": 7.322142611951299E-05,
+        "status": "pass"
+      },
+      {
+        "operator": "max_pool2d_nonoverlapping",
+        "dtype": "float16",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "transform_tensor_strided",
+        "dtype": "float16",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "set_tensor_strided",
+        "dtype": "float16",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      },
+      {
+        "operator": "scale_tensor_strided",
+        "dtype": "float16",
+        "forward_max_abs": 0.0,
+        "status": "pass"
+      }
+    ]
+  },
+  "limitations": [
+    "Bounded FP32/FP16 numerical cases only; not full cuDNN",
+    "No CUDA-targeted PyTorch end-to-end validation",
+    "No cuDNN frontend/v9, unsupported streams, pooling backward",
+    "FP16 tensor scalar ABI required explicit float32 to binary16 conversion; coefficients not exactly representable as half refuse safely"
+  ]
+}

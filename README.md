@@ -142,6 +142,16 @@ This is evidence for that tested path, **not a claim that every llama.cpp kernel
 
 See [`docs/LLAMA_CPP.md`](docs/LLAMA_CPP.md).
 
+### Experimental cuDNN phase 1, gfx1200 hardware results
+
+A narrow source-built cuDNN v8 -> MIOpen bridge (60 overridden exports)
+now has [16/16 real RX 9060 XT direct-HIP FP32/FP16 numerical checks](benchmarks/cudnn-gfx1200-direct-hip-fp32-fp16-20261018.json),
+covering activations, accurate channel softmax, restricted max pooling
+and strided tensor operations. The FP16 host-scalar ABI was corrected
+after real hardware exposed a silent wrong-output case. **This is not
+full cuDNN, cuDNN v9 or PyTorch CUDA application support**; see the
+[phase 1 checklist](docs/CUDNN_PHASE1_CHECKLIST.md).
+
 ## Performance snapshot
 
 Performance claims are kept same-GPU and reproducible where possible; this is **not** an AMD-vs-NVIDIA benchmark.

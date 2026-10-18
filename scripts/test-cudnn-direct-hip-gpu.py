@@ -54,7 +54,7 @@ def main():
     for flag in ("bridge-dll","hip-dll","miopen-dll"):
         parser.add_argument("--"+flag, type=Path, required=True)
     parser.add_argument("--report",type=Path,required=True)
-    parser.add_argument("--only",choices=("all","activation","softmax","pooling"),default="all")
+    parser.add_argument("--only",choices=("all","activation","softmax","pooling","tensor","half"),default="all")
     args=parser.parse_args()
     bridge,hip_path,miopen_path=(getattr(args,n).resolve(strict=True) for n in
                                  ("bridge_dll","hip_dll","miopen_dll"))
@@ -104,6 +104,10 @@ def main():
     set_pool=bind(cudnn,"cudnnSetPooling2dDescriptor",[ptr]+[cint]*8)
     pool_dims=bind(cudnn,"cudnnGetPooling2dForwardOutputDim",[ptr,ptr]+[ctypes.POINTER(cint)]*4)
     pool_fwd=bind(cudnn,"cudnnPoolingForward",[ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr])
+    tensor4d_ex=bind(cudnn,"cudnnSetTensor4dDescriptorEx",[ptr]+[cint]*9)
+    tensor_transform=bind(cudnn,"cudnnTransformTensor",[ptr,ptr,ptr,ptr,ptr,ptr,ptr])
+    tensor_set=bind(cudnn,"cudnnSetTensor",[ptr,ptr,ptr,ptr])
+    tensor_scale=bind(cudnn,"cudnnScaleTensor",[ptr,ptr,ptr,ptr])
     handle=ptr()
     ck(create(ctypes.byref(handle)),"cudnnCreate")
     results=[]
@@ -211,12 +215,186 @@ def main():
                 if pd.value:ck(destroy_pool(pd),"destroy pool")
                 ck(destroy_t(ydesc),"destroy y tensor")
                 ck(destroy_t(xdesc),"destroy x tensor")
+        if args.only in ("all","tensor"):
+            x,y=(device_buffer(v) for v in ([1.,2.,3.,4.],[10.]*8))
+            xd,yd=ptr(),ptr()
+            try:
+                ck(create_t(ctypes.byref(xd)),"create transform source")
+                ck(create_t(ctypes.byref(yd)),"create transform destination")
+                ck(tensor4d_ex(xd,0,1,2,1,2,4,2,2,1),"configure source tensor")
+                ck(tensor4d_ex(yd,0,1,2,1,2,8,1,4,2),"configure strided output tensor")
+                alpha2,beta_half=ctypes.c_float(2.),ctypes.c_float(.5)
+                ck(tensor_transform(handle,ctypes.byref(alpha2),xd,x,
+                    ctypes.byref(beta_half),yd,y),"transform tensor")
+                actual=host_values(y,8)
+                expected=[7.,11.,9.,13.,10.,10.,10.,10.]
+                err=max(abs(a-b) for a,b in zip(actual,expected))
+                if err>1e-5:
+                    raise AssertionError(f"real GPU strided transform mismatch: {actual!r}")
+                results.append({"operator":"transform_tensor_strided","dtype":"float32",
+                                "forward_max_abs":err,"status":"pass"})
+                fill_value=ctypes.c_float(3.)
+                ck(tensor_set(handle,yd,y,ctypes.byref(fill_value)),"set tensor")
+                actual=host_values(y,8)
+                expected=[3.,3.,3.,3.,10.,10.,10.,10.]
+                err=max(abs(a-b) for a,b in zip(actual,expected))
+                if err>1e-5:raise AssertionError(f"real GPU set tensor mismatch: {actual!r}")
+                results.append({"operator":"set_tensor_strided","dtype":"float32",
+                                "forward_max_abs":err,"status":"pass"})
+                scale=ctypes.c_float(2.)
+                ck(tensor_scale(handle,yd,y,ctypes.byref(scale)),"scale tensor")
+                actual=host_values(y,8)
+                expected=[6.,6.,6.,6.,10.,10.,10.,10.]
+                err=max(abs(a-b) for a,b in zip(actual,expected))
+                if err>1e-5:raise AssertionError(f"real GPU scale tensor mismatch: {actual!r}")
+                results.append({"operator":"scale_tensor_strided","dtype":"float32",
+                                "forward_max_abs":err,"status":"pass"})
+            finally:
+                for d in (yd,xd):
+                    if d.value:ck(destroy_t(d),"destroy transform descriptor")
+        # Additional FP16 hardware qualification. This is deliberately a
+        # separate set of allocations and descriptors, not a float32 result
+        # relabelled as half precision.
+        if args.only in ("all","half"):
+            def device_half(values):
+                raw=struct.pack("<"+str(len(values))+"e",*(float(v) for v in values))
+                host=ctypes.create_string_buffer(raw)
+                dev=ptr()
+                ck(alloc(ctypes.byref(dev),len(raw)),"hipMalloc fp16")
+                buffers.append(dev)
+                ck(memcpy(dev,ctypes.cast(host,ptr),len(raw),1),"hipMemcpy fp16 H2D")
+                return dev
+            def host_half(dev,count):
+                ck(sync(),"hipDeviceSynchronize fp16")
+                host=ctypes.create_string_buffer(count*2)
+                ck(memcpy(ctypes.cast(host,ptr),dev,count*2,2),"hipMemcpy fp16 D2H")
+                return list(struct.unpack("<"+str(count)+"e",host.raw))
+            def tensor_half(n,c,h,w):
+                d=ptr()
+                ck(create_t(ctypes.byref(d)),"create fp16 tensor descriptor")
+                ck(set_t(d,0,2,n,c,h,w),"set fp16 tensor descriptor")
+                return d
+            v=[-2.,-1.,.25,2.]
+            grad=[1.,2.,1.5,-3.]
+            inp,dy,y,dx=(device_half(z) for z in (v,grad,[0.]*4,[0.]*4))
+            desc=tensor_half(1,1,1,4)
+            act=ptr()
+            try:
+                ck(create_a(ctypes.byref(act)),"create fp16 activation")
+                for mode,name,func,d_func in (
+                    (0,"sigmoid",lambda x:1/(1+math.exp(-x)),lambda x,y:y*(1-y)),
+                    (1,"relu",lambda x:max(0.,x),lambda x,y:float(x>0)),
+                    (2,"tanh",math.tanh,lambda x,y:1-y*y)):
+                    ck(set_a(act,mode,0,0.),"set fp16 activation")
+                    ck(act_fwd(handle,act,ctypes.byref(one),desc,inp,
+                               ctypes.byref(zero),desc,y),"fp16 activation forward")
+                    ck(act_bwd(handle,act,ctypes.byref(one),desc,y,desc,dy,
+                               desc,inp,ctypes.byref(zero),desc,dx),"fp16 activation backward")
+                    actual=host_half(y,4);actual_dx=host_half(dx,4)
+                    expected=[func(x) for x in v]
+                    exp_dx=[d_func(x,z)*g for x,z,g in zip(v,expected,grad)]
+                    err=max(abs(a-b) for a,b in zip(actual,expected))
+                    derr=max(abs(a-b) for a,b in zip(actual_dx,exp_dx))
+                    if max(err,derr)>2e-2:
+                        raise AssertionError(f"half {name} mismatch {err=} {derr=}")
+                    results.append({"operator":name,"dtype":"float16","forward_max_abs":err,
+                                    "backward_max_abs":derr,"status":"pass"})
+            finally:
+                if act.value:ck(destroy_a(act),"destroy half activation")
+                ck(destroy_t(desc),"destroy half descriptor")
+
+            v=[0.,1.,2.,0.,-1.,3.]
+            grad=[1.,-.3,2.,.4,-.7,1.]
+            inp,dy,y,dx=(device_half(z) for z in (v,grad,[0.]*6,[0.]*6))
+            desc=tensor_half(1,3,1,2)
+            try:
+                ck(sm_fwd(handle,1,1,ctypes.byref(one),desc,inp,
+                          ctypes.byref(zero),desc,y),"fp16 softmax forward")
+                ck(sm_bwd(handle,1,1,ctypes.byref(one),desc,y,desc,dy,
+                          ctypes.byref(zero),desc,dx),"fp16 softmax backward")
+                actual=host_half(y,6);actual_dx=host_half(dx,6)
+                expected=[0.]*6;exp_dx=[0.]*6
+                for w in range(2):
+                    mx=max(v[c*2+w] for c in range(3))
+                    total=sum(math.exp(v[c*2+w]-mx) for c in range(3))
+                    for c in range(3):
+                        expected[c*2+w]=math.exp(v[c*2+w]-mx)/total
+                    dot=sum(expected[c*2+w]*grad[c*2+w] for c in range(3))
+                    for c in range(3):
+                        exp_dx[c*2+w]=expected[c*2+w]*(grad[c*2+w]-dot)
+                err=max(abs(a-b) for a,b in zip(actual,expected))
+                derr=max(abs(a-b) for a,b in zip(actual_dx,exp_dx))
+                if max(err,derr)>2e-2:
+                    raise AssertionError(f"half softmax mismatch {err=} {derr=}")
+                results.append({"operator":"softmax_channel_accurate","dtype":"float16",
+                                "forward_max_abs":err,"backward_max_abs":derr,"status":"pass"})
+            finally:
+                ck(destroy_t(desc),"destroy half softmax descriptor")
+
+            inp,y=(device_half(z) for z in ([float(i) for i in range(1,17)],[0.]*4))
+            xd,yd=tensor_half(1,1,4,4),tensor_half(1,1,2,2)
+            pd=ptr()
+            try:
+                ck(create_pool(ctypes.byref(pd)),"create half pool")
+                ck(set_pool(pd,0,0,2,2,0,0,2,2),"set half pool")
+                ck(pool_fwd(handle,pd,ctypes.byref(one),xd,inp,
+                            ctypes.byref(zero),yd,y),"fp16 pooling forward")
+                actual=host_half(y,4)
+                err=max(abs(a-b) for a,b in zip(actual,[6.,8.,14.,16.]))
+                if err>2e-2:raise AssertionError(f"half max pool mismatch {actual}")
+                results.append({"operator":"max_pool2d_nonoverlapping",
+                                "dtype":"float16","forward_max_abs":err,"status":"pass"})
+            finally:
+                if pd.value:ck(destroy_pool(pd),"destroy half pool")
+                ck(destroy_t(yd),"destroy half y tensor")
+                ck(destroy_t(xd),"destroy half x tensor")
+
+            inp,y=(device_half(z) for z in ([1.,2.,3.,4.],[10.]*8))
+            xd,yd=ptr(),ptr()
+            try:
+                ck(create_t(ctypes.byref(xd)),"create half source descriptor")
+                ck(create_t(ctypes.byref(yd)),"create half dest descriptor")
+                ck(tensor4d_ex(xd,2,1,2,1,2,4,2,2,1),"configure half source")
+                ck(tensor4d_ex(yd,2,1,2,1,2,8,1,4,2),"configure half dest")
+                alpha2,beta_half=ctypes.c_float(2.),ctypes.c_float(.5)
+                ck(tensor_transform(handle,ctypes.byref(alpha2),xd,inp,
+                                    ctypes.byref(beta_half),yd,y),"half tensor transform")
+                actual=host_half(y,8)
+                err=max(abs(a-b) for a,b in zip(actual,[7.,11.,9.,13.,10.,10.,10.,10.]))
+                if err>2e-2:raise AssertionError(f"half tensor transform mismatch {actual}")
+                results.append({"operator":"transform_tensor_strided","dtype":"float16",
+                                "forward_max_abs":err,"status":"pass"})
+                val=ctypes.c_float(3.)
+                ck(tensor_set(handle,yd,y,ctypes.byref(val)),"half set tensor")
+                actual=host_half(y,8)
+                err=max(abs(a-b) for a,b in zip(actual,[3.,3.,3.,3.,10.,10.,10.,10.]))
+                if err>2e-2:raise AssertionError(f"half set tensor mismatch {actual}")
+                results.append({"operator":"set_tensor_strided","dtype":"float16",
+                                "forward_max_abs":err,"status":"pass"})
+                val=ctypes.c_float(2.)
+                ck(tensor_scale(handle,yd,y,ctypes.byref(val)),"half scale tensor")
+                actual=host_half(y,8)
+                err=max(abs(a-b) for a,b in zip(actual,[6.,6.,6.,6.,10.,10.,10.,10.]))
+                if err>2e-2:raise AssertionError(f"half scale tensor mismatch {actual}")
+                results.append({"operator":"scale_tensor_strided","dtype":"float16",
+                                "forward_max_abs":err,"status":"pass"})
+            finally:
+                for d in (yd,xd):
+                    if d.value:ck(destroy_t(d),"destroy half tensor descriptor")
     finally:
         for dev in reversed(buffers):
             if dev.value: ck(free(dev),"hipFree")
         ck(destroy(handle),"destroy handle")
         dll_search.close()
+    device_name=ctypes.create_string_buffer(256)
+    try:
+        name_func=bind(hip,"hipDeviceGetName",[ptr,cint,cint])
+        ck(name_func(ctypes.cast(device_name,ptr),len(device_name),0),"hipDeviceGetName")
+        gpu_name=device_name.value.decode("utf-8",errors="replace")
+    except AttributeError:
+        gpu_name="not_available_from_HIP"
     report={"schema":1,"scope":"direct_HIP_device_allocations_real_MIOpen_no_PyTorch",
+       "hip_device_name":gpu_name,
        "hip_device_count":count.value,"results":results,
        "loaded_cudnn_bridge":loaded_identity("cudnn64_8.dll"),
        "loaded_hip":loaded_identity("amdhip64_7.dll"),

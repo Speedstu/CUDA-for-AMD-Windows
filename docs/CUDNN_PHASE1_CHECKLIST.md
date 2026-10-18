@@ -14,12 +14,12 @@ existing supported workload before being called *validated*.
 | Component / scope | State | Blocking evidence |
 | --- | --- | --- |
 | cuDNN v8 legacy 2D convolution forward, backward-data/filter | Validated on gfx1200 reference, September snapshot | More streams/layouts and GPU generations |
-| cuDNN v8 transform, set and scale tensor FP32/FP16 on default stream | **New experimental candidate** | Dedicated real-MIOpen GPU test in scripts/test-cudnn-transform-pytorch.py |
+| cuDNN v8 transform, set, scale tensor FP32/FP16 on default stream | **gfx1200 direct-HIP GPU numerical pass (experimental)** | CUDA-targeted PyTorch integration, more layouts and devices; FP16 scalar precision guard |
 | cuDNN tensor descriptors + algorithm heuristics | Partial | Broader shape/dtype/algorithm conformance |
 | cuDNN backward bias | **Not implemented** | Recent MIOpen deprecates its equivalent and can return NotImplemented |
-| cuDNN activation (sigmoid, ReLU, tanh) fwd/back | **Experimental ABI-verified candidate** | Real AMD GPU FP32/FP16 correctness; other modes and NaN semantics |
-| cuDNN softmax accurate+channel fwd/back | **Experimental ABI-verified candidate** | Real AMD GPU FP32/FP16 correctness; additional modes/algorithms |
-| cuDNN 2D max pooling forward (nonoverlapping, pad=0) | **Experimental ABI-verified candidate** | Real GPU MIOpen validation, backward, average/padded/overlapping variants |
+| cuDNN activation (sigmoid, ReLU, tanh) fwd/back | **gfx1200 direct-HIP GPU pass (experimental)** | CUDA PyTorch end-to-end, other modes and NaN semantics |
+| cuDNN softmax accurate+channel fwd/back | **gfx1200 direct-HIP GPU pass (experimental)** | PyTorch end-to-end; additional modes/algorithms |
+| cuDNN 2D max pooling forward (nonoverlapping, pad=0) | **gfx1200 direct-HIP GPU pass (experimental)** | Backward, average/padded/overlapping variants and multi-GPU |
 | cuDNN normalization | **Not broadly implemented in this proxy** | ABI and GPU tests per op; batching/gradient tests |
 | cuDNN frontend/backend graph and cuDNN v9 | **Not implemented** | Separate modern ABI design and graph execution |
 | Non-default CUDA stream mapping to HIP streams | **Not supported** | Verified ZLUDA stream handle conversion and ordering tests |
@@ -63,6 +63,9 @@ Use a **fresh isolated folder**; avoid staging into an active game's or
 user's global library directory.
 
 - Offline ABI: `pwsh scripts/test-cudnn-bridge.ps1`
+- Isolated real GPU numerical checks through direct HIP with loaded
+  module SHA-256 evidence (needs a compatible TheRock installation):
+  \`pwsh scripts/test-cudnn-direct-hip.ps1 -TheRockRoot H:\\TheRock -BridgeDll H:\\isolated\\cudnn64_8.dll -TimeoutSeconds 180 -AllowGpuTest\`
 - CUDA bridge PyTorch training matrix (reference staging required):
   `python scripts/test-cudnn-bridge-pytorch.py`
 - New transform GPU correctness (reference staging required):

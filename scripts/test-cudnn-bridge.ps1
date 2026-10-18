@@ -79,6 +79,8 @@ $softmaxSmoke = Join-Path $bridgeOut 'bridge_softmax_smoke.exe'
 $softmaxSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_softmax_smoke.c'
 $poolSmoke = Join-Path $bridgeOut 'bridge_pool_smoke.exe'
 $poolSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_pool_smoke.c'
+$halfSmoke = Join-Path $bridgeOut 'bridge_half_scalars_smoke.exe'
+$halfSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_half_scalars_smoke.c'
 & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -s -o $miopenStub $stubSource
 if ($LASTEXITCODE -ne 0) { throw 'MIOpen test stub build failed.' }
 & $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $smokeExe $smokeSource -lm
@@ -89,6 +91,8 @@ if ($LASTEXITCODE -ne 0) { throw 'cuDNN activation ABI smoke executable build fa
 if ($LASTEXITCODE -ne 0) { throw 'cuDNN softmax ABI executable compilation failed.' }
 & $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $poolSmoke $poolSource -lm
 if ($LASTEXITCODE -ne 0) { throw 'cuDNN max pooling ABI test compilation failed.' }
+& $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $halfSmoke $halfSource -lm
+if ($LASTEXITCODE -ne 0) { throw 'cuDNN FP16 host-scalar ABI test compilation failed.' }
 
 Copy-Item $sourceCudnn (Join-Path $bridgeOut 'cudnn64_8_nvidia.dll') -Force
 $previousMiopen = $env:CUDA_AMD_MIOPEN_DLL
@@ -102,6 +106,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cuDNN softmax forward/backward numerical check failed.' }
     & $poolSmoke $bridgeDll
     if ($LASTEXITCODE -ne 0) { throw 'cuDNN 2D max pooling numerical check failed.' }
+    & $halfSmoke $bridgeDll
+    if ($LASTEXITCODE -ne 0) { throw 'FP16 host scalar conversion regression: wrong values or missing refusal.' }
     $stubNoPool = Join-Path $bridgeOut 'MIOpen-without-pooling.dll'
     & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_POOLING -s -o $stubNoPool $stubSource -lm
     if ($LASTEXITCODE -ne 0) { throw 'No-pooling MIOpen stub compilation failed.' }
@@ -176,6 +182,8 @@ $report = [ordered]@{
     softmax_channel_accurate_forward_backward_fp32 = 'pass'
     softmax_unimplemented_modes_and_backend = 'safe-refusal'
     max_pooling_2d_fp32 = 'pass'
+    half_tensor_host_float_scalars = 'pass'
+    half_scalar_inexact_and_nan = 'safe-refusal'
     pooling_unsupported_modes_or_backend = 'safe-refusal'
     transform_tensor_missing_backend_symbol = 'safe-refusal'
     invalid_explicit_miopen_path = 'safe-refusal'

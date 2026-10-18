@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
 
 /* ---- Minimal cuDNN v8 ABI types used by the implemented subset ---------- */
 
@@ -1887,19 +1888,51 @@ static cudnnStatus_t bridge_check_float_tensor4d(
     return CUDNN_STATUS_SUCCESS;
 }
 
+/*
+ * CUDA cuDNN v8 takes FLOAT host scalars for both FLOAT and HALF tensors.
+ * The tested MIOpen 7.14 tensor operators instead read HALF tensor scalars
+ * as binary16 host values. Forwarding the float pointer to MIOpen silently
+ * treats 2.0f / 0.5f as zero and returns SUCCESS with a zero tensor.
+ *
+ * Convert explicitly, and reject floats not exactly representable as half.
+ * This preserves numerical intent and fails closed rather than silently
+ * rounding/overflowing callers' coefficients.
+ */
+static cudnnStatus_t bridge_convert_tensor_scalar(
+    int dtype, const void *cudnn_scalar, uint16_t *half_storage, const void **backend_scalar) {
+    float f;
+    _Float16 half;
+    if (!cudnn_scalar || !half_storage || !backend_scalar)
+        return CUDNN_STATUS_BAD_PARAM;
+    *backend_scalar = cudnn_scalar;
+    if (dtype != CUDNN_DATA_HALF) return CUDNN_STATUS_SUCCESS;
+    memcpy(&f, cudnn_scalar, sizeof(f));
+    if (!isfinite(f)) return CUDNN_STATUS_NOT_SUPPORTED;
+    half = (_Float16)f;
+    if ((float)half != f) return CUDNN_STATUS_NOT_SUPPORTED;
+    memcpy(half_storage, &half, sizeof(*half_storage));
+    *backend_scalar = half_storage;
+    return CUDNN_STATUS_SUCCESS;
+}
+
 cudnnStatus_t cudnnSetTensor(cudnnHandle_t handle, const cudnnTensorDescriptor_t yDesc,
                             void *y, const void *valuePtr) {
     miopenTensorDescriptor_t my = NULL;
     cudnnStatus_t cs;
     miopenStatus_t ms;
+    uint16_t half_value = 0;
+    const void *backend_value = NULL;
     if (!y || !valuePtr) return CUDNN_STATUS_BAD_PARAM;
     cs = bridge_check_float_tensor4d(handle, yDesc);
     if (cs != CUDNN_STATUS_SUCCESS) return cs;
     if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
-    if (!g_miopen.set_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (!g_miopen.fill_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_convert_tensor_scalar(
+        yDesc->data_type, valuePtr, &half_value, &backend_value);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
     cs = bridge_make_miopen_tensor(yDesc, &my);
     if (cs != CUDNN_STATUS_SUCCESS) return cs;
-    ms = g_miopen.fill_tensor(handle->miopen, my, y, valuePtr);
+    ms = g_miopen.fill_tensor(handle->miopen, my, y, backend_value);
     bridge_destroy_miopen_tensor(my);
     return bridge_status(ms);
 }
@@ -1909,14 +1942,19 @@ cudnnStatus_t cudnnScaleTensor(cudnnHandle_t handle, const cudnnTensorDescriptor
     miopenTensorDescriptor_t my = NULL;
     cudnnStatus_t cs;
     miopenStatus_t ms;
+    uint16_t half_value = 0;
+    const void *backend_value = NULL;
     if (!y || !alpha) return CUDNN_STATUS_BAD_PARAM;
     cs = bridge_check_float_tensor4d(handle, yDesc);
     if (cs != CUDNN_STATUS_SUCCESS) return cs;
     if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
     if (!g_miopen.scale_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_convert_tensor_scalar(
+        yDesc->data_type, alpha, &half_value, &backend_value);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
     cs = bridge_make_miopen_tensor(yDesc, &my);
     if (cs != CUDNN_STATUS_SUCCESS) return cs;
-    ms = g_miopen.scale_tensor(handle->miopen, my, y, alpha);
+    ms = g_miopen.scale_tensor(handle->miopen, my, y, backend_value);
     bridge_destroy_miopen_tensor(my);
     return bridge_status(ms);
 }
@@ -1935,11 +1973,14 @@ cudnnStatus_t cudnnTransformTensor(
     miopenStatus_t ms;
     cudnnStatus_t cs;
     int i;
+    uint16_t half_alpha = 0, half_beta = 0;
+    const void *backend_alpha = NULL, *backend_beta = NULL;
 
     if (!handle || handle->magic != BRIDGE_MAGIC_HANDLE || !alpha || !beta ||
         !x || !y || !bridge_valid_tensor(xDesc) || !bridge_valid_tensor(yDesc))
         return CUDNN_STATUS_BAD_PARAM;
     if (handle->cuda_stream != NULL) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (x == y) return CUDNN_STATUS_NOT_SUPPORTED; /* In-place transforms are not supported. */
     if (xDesc->nb_dims != 4 || yDesc->nb_dims != 4)
         return CUDNN_STATUS_NOT_SUPPORTED;
     if (xDesc->data_type != yDesc->data_type ||
@@ -1955,10 +1996,17 @@ cudnnStatus_t cudnnTransformTensor(
         return CUDNN_STATUS_NOT_SUPPORTED;
     if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
     if (!g_miopen.transform_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_convert_tensor_scalar(
+        xDesc->data_type, alpha, &half_alpha, &backend_alpha);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
+    cs = bridge_convert_tensor_scalar(
+        yDesc->data_type, beta, &half_beta, &backend_beta);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
 
     cs = bridge_make_miopen_tensor(xDesc, &mx); if (cs) goto done;
     cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
-    ms = g_miopen.transform_tensor(handle->miopen, alpha, mx, x, beta, my, y);
+    ms = g_miopen.transform_tensor(
+        handle->miopen, backend_alpha, mx, x, backend_beta, my, y);
     cs = bridge_status(ms);
 done:
     bridge_destroy_miopen_tensor(mx);

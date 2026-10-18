@@ -292,3 +292,26 @@ max values and alpha/beta scaling. Ineligible modes and missing
 backend symbols are deliberately unsupported. This remains an
 **experimental, not yet real-GPU-validated** path; pooling backward,
 cuDNN v9, padding semantics and non-default streams are not claimed.
+
+
+### October 18: actual gfx1200 cuDNN/MIOpen FP32+FP16 hardware qualification
+
+A separately staged, source-built 60-override cuDNN v8 compatibility
+bridge ran **16/16 numeric GPU checks** on a physical RX 9060 XT,
+using actual HIP and MIOpen DLLs from the official TheRock Windows
+gfx120X-all 7.14.0 distribution. Eight FP32 and eight FP16
+checks passed with no wrong outputs and the *loaded* driver/bridge
+module paths and SHA-256 hashes independently verified. See
+[raw numerical evidence](../benchmarks/cudnn-gfx1200-direct-hip-fp32-fp16-20261018.json).
+FP16 tensor transform initially returned SUCCESS with zero output;
+this silent numeric failure was fixed by strict cuDNN float32-host
+to MIOpen binary16 tensor scalar conversion. Tests reject inexact
+and non-finite scalar coefficients rather than silently rounding.
+
+These are bounded direct-HIP device allocation / real MIOpen GPU tests,
+**not CUDA-targeted PyTorch end-to-end evidence**. Only the declared
+sigmoid/ReLU/tanh, accurate channel softmax, unpadded nonoverlapping
+max pooling, transform/set/scale tensors and existing narrow legacy
+cuDNN v8 convolution subset are within validated feature scope.
+cuDNN v9/frontend, advanced fusions, unvalidated streams, many
+normalizations, and other hardware remain open tasks.
