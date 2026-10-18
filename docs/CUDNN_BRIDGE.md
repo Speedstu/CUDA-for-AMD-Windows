@@ -48,11 +48,12 @@ A separate public `torch.nn.functional.conv2d(..., bias=...)` training check als
 
 ## Implemented surface
 
-The generated proxy currently overrides 47 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
+The generated proxy currently overrides 53 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
 
 - handle create/destroy
 - experimental cudnnTransformTensor (FP32/FP16, 4D, optional MIOpen backend symbol; default stream; real-GPU correctness test pending)
 - experimental cudnnSetTensor and cudnnScaleTensor (FP32/FP16 4D, optional backend symbols; default stream; real-GPU validation pending)
+- experimental cuDNN v8 activation descriptors, forward and backward for sigmoid, ReLU and tanh, default stream only (real GPU evidence pending)
 - default-stream get/set
 - tensor descriptors
 - filter descriptors
@@ -133,6 +134,38 @@ The older cuDNN v8 convolution, backward-data and backward-filter
 reference results from September are preserved; none of these new
 operations is installed globally or silently promoted to the stable
 v6 path.
+## Phase 1 extension: cuDNN v8 activations (October 18, 2026)
+
+The optional translation now exposes six cuDNN entry points:
+cudnnCreateActivationDescriptor, cudnnDestroyActivationDescriptor,
+cudnnSetActivationDescriptor, cudnnGetActivationDescriptor,
+cudnnActivationForward and cudnnActivationBackward.
+
+Only sigmoid, ReLU and tanh are mapped to the documented MIOpen
+LOGISTIC, RELU and TANH modes. The bridge translates these enum values
+rather than assuming NVIDIA and AMD enumerations match.
+The supported configuration is 4D FP32/FP16 matching tensors,
+non-overlapping positive strides, default CUDA stream, coefficient 0,
+and CUDNN_NOT_PROPAGATE_NAN. Other modes/coefficients or propagation
+semantics explicitly return NOT_SUPPORTED rather than a silently wrong
+kernel. The MIOpen descriptors and forward/backward symbols are optional;
+a backend missing them retains the pre-existing convolution functionality.
+
+An offline ABI/numerical test (CPU-backed synthetic MIOpen) covers
+sigmoid, ReLU, and tanh forward/backward, descriptor getters/setters,
+unsupported modes and omission of the optional activation symbols:
+\`pwsh scripts/test-cudnn-bridge.ps1\`.
+
+Real-GPU qualification is **still required** before claiming supported
+hardware. On a deliberately staged ZLUDA/HIP/MIOpen runtime with real
+MIOpen activation functions, run:
+
+\`python scripts/test-cudnn-activation-pytorch.py --bridge-dll C:\\path\\to\\cudnn64_8.dll\`
+
+That script checks six FP32/FP16 forward/backward cases against CPU
+references and includes the SHA-256 of the exact bridge DLL used.
+The offline MIOpen stub is never to be reported as a physical GPU test.
+
 ## Exact solver/workspace binding
 
 The bridge does not map a cuDNN algorithm family to an arbitrary MIOpen implementation.

@@ -257,3 +257,15 @@ cuDNN/bridge path; the PyTorch no-cuDNN fallback passed the CPU
 reference on 2026-09-20 (max_abs ~1.14e-05). A single carefully
 bounded trace would be required to isolate the failing cuDNN path;
 keep the existing fallback available.
+
+### October 18: cuDNN phase 1 — activation ABI candidate
+
+A versioned experimental cuDNN v8-to-MIOpen bridge now includes
+sigmoid/ReLU/tanh descriptors and forward/backward translations (53
+manifest overrides after tensor transform/set/scale additions).
+The offline synthetic MIOpen ABI and numerical regression suite
+passes, including a backend with no optional activation symbols.
+**This is not yet a real AMD GPU functional pass** for the new
+activation API; see [CUDNN_BRIDGE.md](CUDNN_BRIDGE.md) and the
+[phase 1 checklist](CUDNN_PHASE1_CHECKLIST.md). Stable installers
+and already validated driver binaries remain unchanged.

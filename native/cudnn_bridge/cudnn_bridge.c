@@ -166,6 +166,7 @@ cudnnStatus_t cudnnGetConvolutionNdForwardOutputDim(
 
 typedef int miopenStatus_t;
 typedef void *miopenHandle_t;
+typedef void *miopenActivationDescriptor_t;
 typedef void *miopenTensorDescriptor_t;
 typedef void *miopenConvolutionDescriptor_t;
 typedef void *miopenAcceleratorQueue_t;
@@ -342,6 +343,18 @@ typedef miopenStatus_t (*PFN_miopenConvolutionForward)(
     const miopenTensorDescriptor_t, const void *, const miopenConvolutionDescriptor_t,
     miopenConvFwdAlgorithm_t, const void *, const miopenTensorDescriptor_t, void *, void *, size_t);
 
+typedef miopenStatus_t (*PFN_miopenCreateActivationDescriptor)(miopenActivationDescriptor_t *);
+typedef miopenStatus_t (*PFN_miopenDestroyActivationDescriptor)(miopenActivationDescriptor_t);
+typedef miopenStatus_t (*PFN_miopenSetActivationDescriptor)(
+    miopenActivationDescriptor_t, int, double, double, double);
+typedef miopenStatus_t (*PFN_miopenActivationForward)(
+    miopenHandle_t, miopenActivationDescriptor_t, const void *,
+    miopenTensorDescriptor_t, const void *, const void *, miopenTensorDescriptor_t, void *);
+typedef miopenStatus_t (*PFN_miopenActivationBackward)(
+    miopenHandle_t, miopenActivationDescriptor_t, const void *,
+    miopenTensorDescriptor_t, const void *, miopenTensorDescriptor_t, const void *,
+    miopenTensorDescriptor_t, const void *, const void *, miopenTensorDescriptor_t, void *);
+
 typedef struct MiopenApi {
     HMODULE module;
     PFN_miopenCreate create;
@@ -372,6 +385,11 @@ typedef struct MiopenApi {
     PFN_miopenTransformTensor transform_tensor; /* optional across MIOpen versions */
     PFN_miopenSetTensor fill_tensor;
     PFN_miopenScaleTensor scale_tensor;
+    PFN_miopenCreateActivationDescriptor create_activation;
+    PFN_miopenDestroyActivationDescriptor destroy_activation;
+    PFN_miopenSetActivationDescriptor set_activation;
+    PFN_miopenActivationForward activation_forward;
+    PFN_miopenActivationBackward activation_backward;
 } MiopenApi;
 
 static MiopenApi g_miopen;
@@ -447,6 +465,11 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
     LOAD_OPTIONAL(transform_tensor, miopenTransformTensor);
     LOAD_OPTIONAL(fill_tensor, miopenSetTensor);
     LOAD_OPTIONAL(scale_tensor, miopenScaleTensor);
+    LOAD_OPTIONAL(create_activation, miopenCreateActivationDescriptor);
+    LOAD_OPTIONAL(destroy_activation, miopenDestroyActivationDescriptor);
+    LOAD_OPTIONAL(set_activation, miopenSetActivationDescriptor);
+    LOAD_OPTIONAL(activation_forward, miopenActivationForward);
+    LOAD_OPTIONAL(activation_backward, miopenActivationBackward);
 #undef LOAD_OPTIONAL
     g_miopen_ready = 1;
     return TRUE;
@@ -1910,6 +1933,182 @@ cudnnStatus_t cudnnTransformTensor(
 done:
     bridge_destroy_miopen_tensor(mx);
     bridge_destroy_miopen_tensor(my);
+    return cs;
+}
+
+/* ---- cuDNN v8 activation subset ---------------------------------------- */
+
+#define BRIDGE_MAGIC_ACTIVATION 0x41444e4eU
+typedef struct BridgeActivation {
+    uint32_t magic;
+    int mode;
+    int nan;
+    double coef;
+} BridgeActivation;
+typedef BridgeActivation *cudnnActivationDescriptor_t;
+typedef int cudnnActivationMode_t;
+typedef int cudnnNanPropagation_t;
+
+static int bridge_activation_to_miopen_mode(int mode, int *out) {
+    if (!out) return 0;
+    /* cuDNN SIGMOID=0, RELU=1, TANH=2; MIOpen LOGISTIC=1, RELU=3, TANH=2 */
+    switch (mode) {
+        case 0: *out = 1; return 1;
+        case 1: *out = 3; return 1;
+        case 2: *out = 2; return 1;
+        default: return 0;
+    }
+}
+
+cudnnStatus_t cudnnCreateActivationDescriptor(cudnnActivationDescriptor_t *desc) {
+    BridgeActivation *d;
+    if (!desc) return CUDNN_STATUS_BAD_PARAM;
+    *desc = NULL;
+    d = (BridgeActivation *)calloc(1, sizeof(*d));
+    if (!d) return CUDNN_STATUS_ALLOC_FAILED;
+    d->magic = BRIDGE_MAGIC_ACTIVATION;
+    d->mode = -1;
+    *desc = d;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnDestroyActivationDescriptor(cudnnActivationDescriptor_t desc) {
+    if (!desc || desc->magic != BRIDGE_MAGIC_ACTIVATION) return CUDNN_STATUS_BAD_PARAM;
+    desc->magic = 0;
+    free(desc);
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnSetActivationDescriptor(
+    cudnnActivationDescriptor_t desc, cudnnActivationMode_t mode,
+    cudnnNanPropagation_t reluNanOpt, double coef) {
+    int backend_mode;
+    if (!desc || desc->magic != BRIDGE_MAGIC_ACTIVATION) return CUDNN_STATUS_BAD_PARAM;
+    if (reluNanOpt != 0 && reluNanOpt != 1) return CUDNN_STATUS_BAD_PARAM;
+    if (!bridge_activation_to_miopen_mode(mode, &backend_mode)) return CUDNN_STATUS_NOT_SUPPORTED;
+    /* ReLU and sigmoid use fixed curves. Tanh uses unit alpha/beta,
+       without silently applying cuDNN coefficient semantics. */
+    if (coef != 0.0) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (reluNanOpt != 0) return CUDNN_STATUS_NOT_SUPPORTED;
+    desc->mode = mode;
+    desc->nan = reluNanOpt;
+    desc->coef = coef;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnGetActivationDescriptor(
+    const cudnnActivationDescriptor_t desc,
+    cudnnActivationMode_t *mode, cudnnNanPropagation_t *reluNanOpt, double *coef) {
+    if (!desc || desc->magic != BRIDGE_MAGIC_ACTIVATION ||
+        desc->mode < 0 || !mode || !reluNanOpt || !coef)
+        return CUDNN_STATUS_BAD_PARAM;
+    *mode = desc->mode;
+    *reluNanOpt = desc->nan;
+    *coef = desc->coef;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+static cudnnStatus_t bridge_activation_validate(
+    cudnnHandle_t handle, const cudnnActivationDescriptor_t a,
+    const BridgeTensor *x, const BridgeTensor *y) {
+    cudnnStatus_t cs;
+    int dummy, i;
+    if (!a || a->magic != BRIDGE_MAGIC_ACTIVATION) return CUDNN_STATUS_BAD_PARAM;
+    if (!bridge_activation_to_miopen_mode(a->mode, &dummy)) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_check_float_tensor4d(handle, x);
+    if (cs) return cs;
+    cs = bridge_check_float_tensor4d(handle, y);
+    if (cs) return cs;
+    if (x->data_type != y->data_type) return CUDNN_STATUS_NOT_SUPPORTED;
+    for (i=0; i<4; ++i) {
+        if (x->dims[i] != y->dims[i]) return CUDNN_STATUS_BAD_PARAM;
+    }
+    return CUDNN_STATUS_SUCCESS;
+}
+
+static cudnnStatus_t bridge_activation_miopen_descriptor(
+    const cudnnActivationDescriptor_t desc, miopenActivationDescriptor_t *out) {
+    miopenStatus_t ms;
+    int mode;
+    if (!out) return CUDNN_STATUS_BAD_PARAM;
+    *out = NULL;
+    if (!g_miopen.create_activation || !g_miopen.set_activation ||
+        !g_miopen.destroy_activation) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (!bridge_activation_to_miopen_mode(desc->mode, &mode))
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    ms = g_miopen.create_activation(out);
+    if (ms != MIOPEN_STATUS_SUCCESS) return bridge_status(ms);
+    /* MIOpen's TANH = beta * tanh(alpha * x); unit scaling matches cuDNN.
+       Other supported modes are parameter-free. */
+    ms = g_miopen.set_activation(*out, mode, 1.0, 1.0, 1.0);
+    if (ms != MIOPEN_STATUS_SUCCESS) {
+        g_miopen.destroy_activation(*out);
+        *out = NULL;
+        return bridge_status(ms);
+    }
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnActivationForward(
+    cudnnHandle_t handle, const cudnnActivationDescriptor_t activationDesc,
+    const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x,
+    const void *beta, const cudnnTensorDescriptor_t yDesc, void *y) {
+    miopenTensorDescriptor_t mx = NULL, my = NULL;
+    miopenActivationDescriptor_t ma = NULL;
+    miopenStatus_t ms;
+    cudnnStatus_t cs;
+    if (!alpha || !beta || !x || !y) return CUDNN_STATUS_BAD_PARAM;
+    cs = bridge_activation_validate(handle, activationDesc, xDesc, yDesc);
+    if (cs) return cs;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.activation_forward) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_activation_miopen_descriptor(activationDesc, &ma);
+    if (cs) return cs;
+    cs = bridge_make_miopen_tensor(xDesc, &mx); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
+    ms = g_miopen.activation_forward(handle->miopen, ma, alpha, mx, x, beta, my, y);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(mx);
+    bridge_destroy_miopen_tensor(my);
+    g_miopen.destroy_activation(ma);
+    return cs;
+}
+
+cudnnStatus_t cudnnActivationBackward(
+    cudnnHandle_t handle, const cudnnActivationDescriptor_t activationDesc,
+    const void *alpha, const cudnnTensorDescriptor_t yDesc, const void *y,
+    const cudnnTensorDescriptor_t dyDesc, const void *dy,
+    const cudnnTensorDescriptor_t xDesc, const void *x,
+    const void *beta, const cudnnTensorDescriptor_t dxDesc, void *dx) {
+    miopenTensorDescriptor_t my = NULL, mdy = NULL, mx = NULL, mdx = NULL;
+    miopenActivationDescriptor_t ma = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    if (!alpha || !beta || !y || !dy || !x || !dx) return CUDNN_STATUS_BAD_PARAM;
+    cs = bridge_activation_validate(handle, activationDesc, xDesc, yDesc);
+    if (cs) return cs;
+    cs = bridge_activation_validate(handle, activationDesc, xDesc, dyDesc);
+    if (cs) return cs;
+    cs = bridge_activation_validate(handle, activationDesc, xDesc, dxDesc);
+    if (cs) return cs;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.activation_backward) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_activation_miopen_descriptor(activationDesc, &ma);
+    if (cs) return cs;
+    cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(dyDesc, &mdy); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(xDesc, &mx); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(dxDesc, &mdx); if (cs) goto done;
+    ms = g_miopen.activation_backward(handle->miopen, ma, alpha,
+                                     my, y, mdy, dy, mx, x, beta, mdx, dx);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(my);
+    bridge_destroy_miopen_tensor(mdy);
+    bridge_destroy_miopen_tensor(mx);
+    bridge_destroy_miopen_tensor(mdx);
+    g_miopen.destroy_activation(ma);
     return cs;
 }
 

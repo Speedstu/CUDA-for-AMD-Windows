@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <math.h>
 
 typedef struct StubHandle { void *stream; } StubHandle;
 typedef struct StubTensor {
@@ -386,3 +387,84 @@ __declspec(dllexport) int miopenScaleTensor(
         y[off4(d,n,c,h,w)]*=*(const float *)valuePtr;
     return 0;
 }
+
+
+#ifndef CUDAAMD_STUB_NO_ACTIVATION
+typedef struct StubActivation { int mode; double alpha, beta, gamma; } StubActivation;
+__declspec(dllexport) int miopenCreateActivationDescriptor(void **out) {
+    StubActivation *a;
+    if(!out) return 3;
+    a=(StubActivation *)calloc(1,sizeof(*a));
+    if(!a) return 4;
+    *out=a;
+    return 0;
+}
+__declspec(dllexport) int miopenDestroyActivationDescriptor(void *p) {
+    if(!p) return 3;
+    free(p);
+    return 0;
+}
+__declspec(dllexport) int miopenSetActivationDescriptor(void *p,int mode,
+                                                          double a,double b,double g) {
+    StubActivation *d=(StubActivation *)p;
+    if(!d) return 3;
+    if(mode!=1 && mode!=2 && mode!=3) return 6;
+    d->mode=mode; d->alpha=a; d->beta=b; d->gamma=g;
+    return 0;
+}
+static float stub_activate(float x,int mode) {
+    if(mode==3) return x>0.f?x:0.f;
+    if(mode==1) return 1.f/(1.f+expf(-x));
+    if(mode==2) return tanhf(x);
+    return 0.f;
+}
+static float stub_activate_prime(float x,float y,int mode) {
+    if(mode==3) return x>0.f?1.f:0.f;
+    if(mode==1) return y*(1.f-y);
+    if(mode==2) return 1.f-y*y;
+    return 0.f;
+}
+__declspec(dllexport) int miopenActivationForward(
+    void *handle,void *activation,const void *alpha,void *xDescV,const void *xV,
+    const void *beta,void *yDescV,void *yV) {
+    StubActivation *act=(StubActivation *)activation;
+    StubTensor *xd=(StubTensor *)xDescV,*yd=(StubTensor *)yDescV;
+    const float *x=(const float *)xV;
+    float *y=(float *)yV;
+    int n,c,h,w;
+    (void)handle;
+    if(!act || !xd || !yd || !alpha || !beta || !x || !y) return 3;
+    if(xd->type!=1 || yd->type!=1 || xd->nb!=4 || yd->nb!=4) return 6;
+    for(n=0;n<xd->dims[0];++n) for(c=0;c<xd->dims[1];++c)
+    for(h=0;h<xd->dims[2];++h) for(w=0;w<xd->dims[3];++w) {
+        int ix=off4(xd,n,c,h,w), iy=off4(yd,n,c,h,w);
+        y[iy]=*(const float *)alpha*stub_activate(x[ix],act->mode) +
+              *(const float *)beta*y[iy];
+    }
+    return 0;
+}
+__declspec(dllexport) int miopenActivationBackward(
+    void *handle,void *activation,const void *alpha,
+    void *yDescV,const void *yV,void *dyDescV,const void *dyV,
+    void *xDescV,const void *xV,const void *beta,void *dxDescV,void *dxV) {
+    StubActivation *act=(StubActivation *)activation;
+    StubTensor *yd=(StubTensor *)yDescV,*dyd=(StubTensor *)dyDescV;
+    StubTensor *xd=(StubTensor *)xDescV,*dxd=(StubTensor *)dxDescV;
+    const float *y=(const float *)yV,*dy=(const float *)dyV,*x=(const float *)xV;
+    float *dx=(float *)dxV;
+    int n,c,h,w;
+    (void)handle;
+    if(!act || !yd || !dyd || !xd || !dxd || !alpha || !beta ||
+       !y || !dy || !x || !dx) return 3;
+    if(yd->type!=1 || dyd->type!=1 || xd->type!=1 || dxd->type!=1) return 6;
+    for(n=0;n<xd->dims[0];++n) for(c=0;c<xd->dims[1];++c)
+    for(h=0;h<xd->dims[2];++h) for(w=0;w<xd->dims[3];++w) {
+        int ix=off4(xd,n,c,h,w),iy=off4(yd,n,c,h,w);
+        int idy=off4(dyd,n,c,h,w),idx=off4(dxd,n,c,h,w);
+        dx[idx]=*(const float *)alpha*dy[idy]*
+                stub_activate_prime(x[ix],y[iy],act->mode) +
+                *(const float *)beta*dx[idx];
+    }
+    return 0;
+}
+#endif

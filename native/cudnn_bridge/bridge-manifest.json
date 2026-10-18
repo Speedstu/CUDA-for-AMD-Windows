@@ -56,6 +56,12 @@
     "cudnnConvolutionBackwardFilter",
     "cudnnTransformTensor",
     "cudnnSetTensor",
-    "cudnnScaleTensor"
+    "cudnnScaleTensor",
+    "cudnnCreateActivationDescriptor",
+    "cudnnDestroyActivationDescriptor",
+    "cudnnSetActivationDescriptor",
+    "cudnnGetActivationDescriptor",
+    "cudnnActivationForward",
+    "cudnnActivationBackward"
   ]
 }

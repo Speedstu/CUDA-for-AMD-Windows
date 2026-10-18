@@ -73,10 +73,14 @@ $buildArgs = @{
 $bridgeDll = Join-Path $bridgeOut 'cudnn64_8.dll'
 $miopenStub = Join-Path $bridgeOut 'MIOpen.dll'
 $smokeExe = Join-Path $bridgeOut 'bridge_smoke.exe'
+$activationSmoke = Join-Path $bridgeOut 'bridge_activation_smoke.exe'
+$activationSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_activation_smoke.c'
 & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -s -o $miopenStub $stubSource
 if ($LASTEXITCODE -ne 0) { throw 'MIOpen test stub build failed.' }
 & $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $smokeExe $smokeSource -lm
 if ($LASTEXITCODE -ne 0) { throw 'cuDNN bridge smoke executable build failed.' }
+& $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $activationSmoke $activationSource -lm
+if ($LASTEXITCODE -ne 0) { throw 'cuDNN activation ABI smoke executable build failed.' }
 
 Copy-Item $sourceCudnn (Join-Path $bridgeOut 'cudnn64_8_nvidia.dll') -Force
 $previousMiopen = $env:CUDA_AMD_MIOPEN_DLL
@@ -84,6 +88,15 @@ try {
     $env:CUDA_AMD_MIOPEN_DLL = $miopenStub
     & $smokeExe $bridgeDll
     if ($LASTEXITCODE -ne 0) { throw "cuDNN bridge ABI/correctness smoke failed: exit $LASTEXITCODE" }
+    & $activationSmoke $bridgeDll
+    if ($LASTEXITCODE -ne 0) { throw "cuDNN activation forward/backward test failed: exit $LASTEXITCODE" }
+    $stubNoActivation = Join-Path $bridgeOut 'MIOpen-without-activation.dll'
+    & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_ACTIVATION -s -o $stubNoActivation $stubSource -lm
+    if ($LASTEXITCODE -ne 0) { throw 'Old MIOpen no-activation stub build failed.' }
+    $env:CUDA_AMD_MIOPEN_DLL = $stubNoActivation
+    & $activationSmoke $bridgeDll '--without-activation'
+    if ($LASTEXITCODE -ne 0) { throw 'Optional activation symbols fail-closed probe failed.' }
+    $env:CUDA_AMD_MIOPEN_DLL = $miopenStub
     # Optional tensor transform must not be mandatory for other convolutions.
     $stubNoTransform = Join-Path $bridgeOut 'MIOpen-without-transform.dll'
     & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_TRANSFORM -s -o $stubNoTransform $stubSource
@@ -131,6 +144,9 @@ $report = [ordered]@{
     cpu_reference_backward_filter = 'pass'
     transform_tensor_strided_fp32 = 'pass'
     set_scale_tensor_strided_fp32 = 'pass'
+    activation_sigmoid_relu_tanh_fp32 = 'pass'
+    activation_backward_cpu_reference = 'pass'
+    activation_without_backend_symbol = 'safe-refusal'
     transform_tensor_missing_backend_symbol = 'safe-refusal'
     invalid_explicit_miopen_path = 'safe-refusal'
     v7_forward_algorithm_query = 'pass'
