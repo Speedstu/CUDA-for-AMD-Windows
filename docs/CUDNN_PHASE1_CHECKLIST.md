@@ -19,7 +19,8 @@ existing supported workload before being called *validated*.
 | cuDNN backward bias | **Not implemented** | Recent MIOpen deprecates its equivalent and can return NotImplemented |
 | cuDNN activation (sigmoid, ReLU, tanh) fwd/back | **Experimental ABI-verified candidate** | Real AMD GPU FP32/FP16 correctness; other modes and NaN semantics |
 | cuDNN softmax accurate+channel fwd/back | **Experimental ABI-verified candidate** | Real AMD GPU FP32/FP16 correctness; additional modes/algorithms |
-| cuDNN pooling/normalization | **Not broadly implemented in this proxy** | ABI and GPU tests per op; batching/gradient tests |
+| cuDNN 2D max pooling forward (nonoverlapping, pad=0) | **Experimental ABI-verified candidate** | Real GPU MIOpen validation, backward, average/padded/overlapping variants |
+| cuDNN normalization | **Not broadly implemented in this proxy** | ABI and GPU tests per op; batching/gradient tests |
 | cuDNN frontend/backend graph and cuDNN v9 | **Not implemented** | Separate modern ABI design and graph execution |
 | Non-default CUDA stream mapping to HIP streams | **Not supported** | Verified ZLUDA stream handle conversion and ordering tests |
 | Fused SDPA / FlashAttention | Unsafe modes explicitly refused | Correct AMD kernel or verified fallback with speed testing |

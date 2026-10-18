@@ -77,6 +77,8 @@ $activationSmoke = Join-Path $bridgeOut 'bridge_activation_smoke.exe'
 $activationSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_activation_smoke.c'
 $softmaxSmoke = Join-Path $bridgeOut 'bridge_softmax_smoke.exe'
 $softmaxSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_softmax_smoke.c'
+$poolSmoke = Join-Path $bridgeOut 'bridge_pool_smoke.exe'
+$poolSource = Join-Path $repo 'native\cudnn_bridge\tests\bridge_pool_smoke.c'
 & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -s -o $miopenStub $stubSource
 if ($LASTEXITCODE -ne 0) { throw 'MIOpen test stub build failed.' }
 & $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $smokeExe $smokeSource -lm
@@ -85,6 +87,8 @@ if ($LASTEXITCODE -ne 0) { throw 'cuDNN bridge smoke executable build failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'cuDNN activation ABI smoke executable build failed.' }
 & $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $softmaxSmoke $softmaxSource -lm
 if ($LASTEXITCODE -ne 0) { throw 'cuDNN softmax ABI executable compilation failed.' }
+& $Gcc -std=gnu17 -O2 -Wall -Wextra -Werror -s -o $poolSmoke $poolSource -lm
+if ($LASTEXITCODE -ne 0) { throw 'cuDNN max pooling ABI test compilation failed.' }
 
 Copy-Item $sourceCudnn (Join-Path $bridgeOut 'cudnn64_8_nvidia.dll') -Force
 $previousMiopen = $env:CUDA_AMD_MIOPEN_DLL
@@ -96,6 +100,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "cuDNN activation forward/backward test failed: exit $LASTEXITCODE" }
     & $softmaxSmoke $bridgeDll
     if ($LASTEXITCODE -ne 0) { throw 'cuDNN softmax forward/backward numerical check failed.' }
+    & $poolSmoke $bridgeDll
+    if ($LASTEXITCODE -ne 0) { throw 'cuDNN 2D max pooling numerical check failed.' }
+    $stubNoPool = Join-Path $bridgeOut 'MIOpen-without-pooling.dll'
+    & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_POOLING -s -o $stubNoPool $stubSource -lm
+    if ($LASTEXITCODE -ne 0) { throw 'No-pooling MIOpen stub compilation failed.' }
+    $env:CUDA_AMD_MIOPEN_DLL = $stubNoPool
+    & $poolSmoke $bridgeDll '--without-pooling'
+    if ($LASTEXITCODE -ne 0) { throw 'Missing optional max pooling symbol was not safely refused.' }
+    $env:CUDA_AMD_MIOPEN_DLL = $miopenStub
     $stubNoSoftmax = Join-Path $bridgeOut 'MIOpen-without-softmax.dll'
     & $Gcc -std=gnu17 -shared -O2 -Wall -Wextra -Werror -DCUDAAMD_STUB_NO_SOFTMAX -s -o $stubNoSoftmax $stubSource -lm
     if ($LASTEXITCODE -ne 0) { throw 'Missing-softmax MIOpen stub compilation failed.' }
@@ -162,6 +175,8 @@ $report = [ordered]@{
     activation_without_backend_symbol = 'safe-refusal'
     softmax_channel_accurate_forward_backward_fp32 = 'pass'
     softmax_unimplemented_modes_and_backend = 'safe-refusal'
+    max_pooling_2d_fp32 = 'pass'
+    pooling_unsupported_modes_or_backend = 'safe-refusal'
     transform_tensor_missing_backend_symbol = 'safe-refusal'
     invalid_explicit_miopen_path = 'safe-refusal'
     v7_forward_algorithm_query = 'pass'

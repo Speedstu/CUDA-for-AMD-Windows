@@ -167,6 +167,7 @@ cudnnStatus_t cudnnGetConvolutionNdForwardOutputDim(
 typedef int miopenStatus_t;
 typedef void *miopenHandle_t;
 typedef void *miopenActivationDescriptor_t;
+typedef void *miopenPoolingDescriptor_t;
 typedef void *miopenTensorDescriptor_t;
 typedef void *miopenConvolutionDescriptor_t;
 typedef void *miopenAcceleratorQueue_t;
@@ -363,6 +364,15 @@ typedef miopenStatus_t (*PFN_miopenSoftmaxBackwardV2)(
     miopenTensorDescriptor_t, const void *, const void *,
     miopenTensorDescriptor_t, void *, int, int);
 
+typedef miopenStatus_t (*PFN_miopenCreatePoolingDescriptor)(miopenPoolingDescriptor_t *);
+typedef miopenStatus_t (*PFN_miopenDestroyPoolingDescriptor)(miopenPoolingDescriptor_t);
+typedef miopenStatus_t (*PFN_miopenSet2dPoolingDescriptor)(
+    miopenPoolingDescriptor_t,int,int,int,int,int,int,int);
+typedef miopenStatus_t (*PFN_miopenPoolingForward)(
+    miopenHandle_t,miopenPoolingDescriptor_t,const void *,
+    miopenTensorDescriptor_t,const void *,const void *,
+    miopenTensorDescriptor_t,void *,bool,void *,size_t);
+
 typedef struct MiopenApi {
     HMODULE module;
     PFN_miopenCreate create;
@@ -400,6 +410,10 @@ typedef struct MiopenApi {
     PFN_miopenActivationBackward activation_backward;
     PFN_miopenSoftmaxForwardV2 softmax_forward_v2;
     PFN_miopenSoftmaxBackwardV2 softmax_backward_v2;
+    PFN_miopenCreatePoolingDescriptor create_pool;
+    PFN_miopenDestroyPoolingDescriptor destroy_pool;
+    PFN_miopenSet2dPoolingDescriptor set_pool;
+    PFN_miopenPoolingForward pool_fwd;
 } MiopenApi;
 
 static MiopenApi g_miopen;
@@ -482,6 +496,10 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
     LOAD_OPTIONAL(activation_backward, miopenActivationBackward);
     LOAD_OPTIONAL(softmax_forward_v2, miopenSoftmaxForward_V2);
     LOAD_OPTIONAL(softmax_backward_v2, miopenSoftmaxBackward_V2);
+    LOAD_OPTIONAL(create_pool, miopenCreatePoolingDescriptor);
+    LOAD_OPTIONAL(destroy_pool, miopenDestroyPoolingDescriptor);
+    LOAD_OPTIONAL(set_pool, miopenSet2dPoolingDescriptor);
+    LOAD_OPTIONAL(pool_fwd, miopenPoolingForward);
 #undef LOAD_OPTIONAL
     g_miopen_ready = 1;
     return TRUE;
@@ -2192,6 +2210,107 @@ done:
     bridge_destroy_miopen_tensor(my);
     bridge_destroy_miopen_tensor(mdy);
     bridge_destroy_miopen_tensor(mdx);
+    return cs;
+}
+
+/* ---- cuDNN v8 max pooling 2D, safe narrow subset ------------------------ */
+
+#define BRIDGE_MAGIC_POOL 0x50444e4eU
+typedef struct BridgePool {
+    uint32_t magic;
+    int configured;
+    int mode, nan;
+    int wh,ww,ph,pw,sh,sw;
+} BridgePool;
+typedef BridgePool *cudnnPoolingDescriptor_t;
+
+cudnnStatus_t cudnnCreatePoolingDescriptor(cudnnPoolingDescriptor_t *desc) {
+    BridgePool *d;
+    if (!desc) return CUDNN_STATUS_BAD_PARAM;
+    *desc = NULL;
+    d = (BridgePool *)calloc(1,sizeof(*d));
+    if (!d) return CUDNN_STATUS_ALLOC_FAILED;
+    d->magic = BRIDGE_MAGIC_POOL;
+    *desc = d;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnDestroyPoolingDescriptor(cudnnPoolingDescriptor_t desc) {
+    if (!desc || desc->magic != BRIDGE_MAGIC_POOL) return CUDNN_STATUS_BAD_PARAM;
+    desc->magic = 0;
+    free(desc);
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnSetPooling2dDescriptor(
+    cudnnPoolingDescriptor_t desc, int mode, int nan,
+    int windowHeight, int windowWidth, int verticalPadding, int horizontalPadding,
+    int verticalStride, int horizontalStride) {
+    if (!desc || desc->magic != BRIDGE_MAGIC_POOL) return CUDNN_STATUS_BAD_PARAM;
+    if (windowHeight<=0 || windowWidth<=0 || verticalStride<=0 || horizontalStride<=0 ||
+        verticalPadding<0 || horizontalPadding<0) return CUDNN_STATUS_BAD_PARAM;
+    /* Only MAX with no padding, nonoverlapping windows is validated. */
+    if (mode!=0 || nan!=0 || verticalPadding || horizontalPadding ||
+        verticalStride!=windowHeight || horizontalStride!=windowWidth)
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    desc->configured=1;desc->mode=mode;desc->nan=nan;
+    desc->wh=windowHeight;desc->ww=windowWidth;
+    desc->ph=verticalPadding;desc->pw=horizontalPadding;
+    desc->sh=verticalStride;desc->sw=horizontalStride;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnGetPooling2dForwardOutputDim(
+    const cudnnPoolingDescriptor_t poolDesc, const cudnnTensorDescriptor_t xDesc,
+    int *n, int *c, int *h, int *w) {
+    if (!poolDesc || poolDesc->magic != BRIDGE_MAGIC_POOL || !poolDesc->configured ||
+        !bridge_valid_tensor(xDesc) || !n || !c || !h || !w)
+        return CUDNN_STATUS_BAD_PARAM;
+    if (xDesc->nb_dims != 4) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (xDesc->dims[2] < poolDesc->wh || xDesc->dims[3] < poolDesc->ww)
+        return CUDNN_STATUS_BAD_PARAM;
+    if (xDesc->dims[2]%poolDesc->wh || xDesc->dims[3]%poolDesc->ww)
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    *n=xDesc->dims[0];*c=xDesc->dims[1];
+    *h=xDesc->dims[2]/poolDesc->wh;*w=xDesc->dims[3]/poolDesc->ww;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnPoolingForward(
+    cudnnHandle_t handle, const cudnnPoolingDescriptor_t poolDesc,
+    const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x,
+    const void *beta, const cudnnTensorDescriptor_t yDesc, void *y) {
+    miopenPoolingDescriptor_t mp = NULL;
+    miopenTensorDescriptor_t mx = NULL, my = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    int n,c,h,w;
+    if (!alpha || !beta || !x || !y) return CUDNN_STATUS_BAD_PARAM;
+    if (!poolDesc || poolDesc->magic != BRIDGE_MAGIC_POOL || !poolDesc->configured)
+        return CUDNN_STATUS_BAD_PARAM;
+    cs = bridge_check_float_tensor4d(handle,xDesc); if (cs) return cs;
+    cs = bridge_check_float_tensor4d(handle,yDesc); if (cs) return cs;
+    if (xDesc->data_type != yDesc->data_type) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = cudnnGetPooling2dForwardOutputDim(poolDesc,xDesc,&n,&c,&h,&w);
+    if (cs) return cs;
+    if (yDesc->dims[0]!=n || yDesc->dims[1]!=c ||
+        yDesc->dims[2]!=h || yDesc->dims[3]!=w) return CUDNN_STATUS_BAD_PARAM;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.create_pool || !g_miopen.destroy_pool ||
+        !g_miopen.set_pool || !g_miopen.pool_fwd)
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    ms = g_miopen.create_pool(&mp);
+    if (ms!=MIOPEN_STATUS_SUCCESS) return bridge_status(ms);
+    ms = g_miopen.set_pool(mp,0,poolDesc->wh,poolDesc->ww,0,0,poolDesc->sh,poolDesc->sw);
+    if (ms!=MIOPEN_STATUS_SUCCESS) {cs=bridge_status(ms);goto done;}
+    cs = bridge_make_miopen_tensor(xDesc,&mx);if(cs)goto done;
+    cs = bridge_make_miopen_tensor(yDesc,&my);if(cs)goto done;
+    ms = g_miopen.pool_fwd(handle->miopen,mp,alpha,mx,x,beta,my,y,false,NULL,0);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(mx);
+    bridge_destroy_miopen_tensor(my);
+    g_miopen.destroy_pool(mp);
     return cs;
 }
 

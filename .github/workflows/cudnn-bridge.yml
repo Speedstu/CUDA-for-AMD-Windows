@@ -12,6 +12,7 @@ on:
       - 'scripts/test-cudnn-transform-pytorch.py'
       - 'scripts/test-cudnn-activation-pytorch.py'
       - 'scripts/test-cudnn-softmax-pytorch.py'
+      - 'scripts/test-cudnn-direct-hip-gpu.py'
   pull_request:
     paths:
       - '.github/workflows/cudnn-bridge.yml'
@@ -23,6 +24,7 @@ on:
       - 'scripts/test-cudnn-transform-pytorch.py'
       - 'scripts/test-cudnn-activation-pytorch.py'
       - 'scripts/test-cudnn-softmax-pytorch.py'
+      - 'scripts/test-cudnn-direct-hip-gpu.py'
 
 jobs:
   windows-abi-contract:
@@ -69,6 +71,7 @@ jobs:
           python -m py_compile scripts/test-cudnn-transform-pytorch.py
           python -m py_compile scripts/test-cudnn-activation-pytorch.py
           python -m py_compile scripts/test-cudnn-softmax-pytorch.py
+          python -m py_compile scripts/test-cudnn-direct-hip-gpu.py
 
       - name: Validate bridge manifest
         shell: pwsh
@@ -95,6 +98,11 @@ jobs:
             'cudnnActivationBackward',
             'cudnnSoftmaxForward',
             'cudnnSoftmaxBackward',
+            'cudnnCreatePoolingDescriptor',
+            'cudnnDestroyPoolingDescriptor',
+            'cudnnSetPooling2dDescriptor',
+            'cudnnGetPooling2dForwardOutputDim',
+            'cudnnPoolingForward',
             'cudnnGetConvolutionBackwardFilterWorkspaceSize',
             'cudnnGetConvolutionBackwardFilterAlgorithm_v7'
           )

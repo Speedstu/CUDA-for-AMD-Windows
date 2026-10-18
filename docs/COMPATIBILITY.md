@@ -280,3 +280,15 @@ softmax values and analytical gradients; unsupported algorithms,
 axes and missing symbols fail closed. Real AMD GPU FP32/FP16
 qualification is pending and required before promotion to validated
 status. The safe public runtime remains unchanged.
+
+
+### October 18: 2D max-pooling ABI candidate
+
+The cuDNN v8 proxy now has 60 overridden entry points with a
+small forward-only 2D MAX pooling translation via optional MIOpen
+symbols. Its unpadded, nonoverlapping 2x2 window/stride CPU-backed
+ABI test passes against a 4x4 input and checks the exact numerical
+max values and alpha/beta scaling. Ineligible modes and missing
+backend symbols are deliberately unsupported. This remains an
+**experimental, not yet real-GPU-validated** path; pooling backward,
+cuDNN v9, padding semantics and non-default streams are not claimed.

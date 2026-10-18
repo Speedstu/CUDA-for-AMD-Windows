@@ -528,3 +528,56 @@ __declspec(dllexport) int miopenSoftmaxBackward_V2(
     return 0;
 }
 #endif
+
+
+#ifndef CUDAAMD_STUB_NO_POOLING
+typedef struct StubPool {
+    int mode,wh,ww,ph,pw,sh,sw;
+} StubPool;
+
+__declspec(dllexport) int miopenCreatePoolingDescriptor(void **out) {
+    StubPool *d;
+    if(!out)return 3;
+    d=(StubPool *)calloc(1,sizeof(*d));
+    if(!d)return 4;
+    *out=d;return 0;
+}
+__declspec(dllexport) int miopenDestroyPoolingDescriptor(void *p) {
+    if(!p)return 3;
+    free(p);return 0;
+}
+__declspec(dllexport) int miopenSet2dPoolingDescriptor(
+    void *desc,int mode,int wh,int ww,int ph,int pw,int sh,int sw) {
+    StubPool *p=(StubPool *)desc;
+    if(!p)return 3;
+    if(mode!=0 || wh<=0 || ww<=0 || sh<=0 || sw<=0 || ph || pw)return 6;
+    p->mode=mode;p->wh=wh;p->ww=ww;p->ph=ph;p->pw=pw;p->sh=sh;p->sw=sw;
+    return 0;
+}
+__declspec(dllexport) int miopenPoolingForward(
+    void *handle,void *poolDesc,const void *alpha,void *xDescV,const void *xV,
+    const void *beta,void *yDescV,void *yV,bool do_backward,void *ws,size_t wss) {
+    StubPool *p=(StubPool *)poolDesc;
+    StubTensor *xd=(StubTensor *)xDescV,*yd=(StubTensor *)yDescV;
+    const float *x=(const float *)xV;
+    float *y=(float *)yV;
+    int n,c,h,w,ph,pw;
+    (void)handle;(void)ws;(void)wss;
+    if(!p || !xd || !yd || !alpha || !beta || !x || !y)return 3;
+    if(do_backward || xd->type!=1 || yd->type!=1 ||
+       xd->nb!=4 || yd->nb!=4 || p->mode!=0)return 6;
+    for(n=0;n<yd->dims[0];++n) for(c=0;c<yd->dims[1];++c)
+    for(h=0;h<yd->dims[2];++h) for(w=0;w<yd->dims[3];++w) {
+        float v=-INFINITY;
+        for(ph=0;ph<p->wh;++ph)for(pw=0;pw<p->ww;++pw) {
+            float sample=x[off4(xd,n,c,h*p->sh+ph,w*p->sw+pw)];
+            if(sample>v)v=sample;
+        }
+        {
+            int i=off4(yd,n,c,h,w);
+            y[i]=*(const float *)alpha*v+*(const float *)beta*y[i];
+        }
+    }
+    return 0;
+}
+#endif

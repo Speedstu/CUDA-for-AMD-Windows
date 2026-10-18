@@ -64,6 +64,11 @@
     "cudnnActivationForward",
     "cudnnActivationBackward",
     "cudnnSoftmaxForward",
-    "cudnnSoftmaxBackward"
+    "cudnnSoftmaxBackward",
+    "cudnnCreatePoolingDescriptor",
+    "cudnnDestroyPoolingDescriptor",
+    "cudnnSetPooling2dDescriptor",
+    "cudnnGetPooling2dForwardOutputDim",
+    "cudnnPoolingForward"
   ]
 }

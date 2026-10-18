@@ -48,13 +48,14 @@ A separate public `torch.nn.functional.conv2d(..., bias=...)` training check als
 
 ## Implemented surface
 
-The generated proxy currently overrides 55 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
+The generated proxy currently overrides 60 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
 
 - handle create/destroy
 - experimental cudnnTransformTensor (FP32/FP16, 4D, optional MIOpen backend symbol; default stream; real-GPU correctness test pending)
 - experimental cudnnSetTensor and cudnnScaleTensor (FP32/FP16 4D, optional backend symbols; default stream; real-GPU validation pending)
 - experimental cuDNN v8 activation descriptors, forward and backward for sigmoid, ReLU and tanh, default stream only (real GPU evidence pending)
 - experimental cudnnSoftmaxForward and cudnnSoftmaxBackward for ACCURATE+CHANNEL FP32/FP16 4D; optional MIOpen _V2 translations (real GPU evidence pending)
+- experimental cuDNN v8 max pooling 2D forward without overlap or padding (MIOpen pooling; real GPU evidence pending)
 - default-stream get/set
 - tensor descriptors
 - filter descriptors
@@ -188,6 +189,53 @@ against a CPU PyTorch reference (not yet passed on real MIOpen):
 \`python scripts/test-cudnn-softmax-pytorch.py --bridge-dll C:\\staged\\cudnn64_8.dll\`
 
 No stable installer or NVIDIA DLL is replaced by this candidate.
+
+## Optional real GPU validation through the HIP runtime
+
+For an independent GPU check that does not require a CUDA-targeted PyTorch
+wheel, \`scripts/test-cudnn-direct-hip-gpu.py\` allocates genuinely
+device-resident FP32 tensors with \`hipMalloc\`, runs cuDNN activation
+and accurate channel softmax forward/backward against a separately loaded
+actual MIOpen backend, copies the results to host with \`hipMemcpy\`, and
+compares against a CPU mathematical reference. It records actual
+loaded cuDNN/HIP/MIOpen DLL module paths and SHA-256 values.
+
+Example for a correctly extracted, isolated ROCm TheRock distribution:
+
+    python scripts/test-cudnn-direct-hip-gpu.py --bridge-dll H:\\isolated\\cudnn64_8.dll --hip-dll H:\\therock\\bin\\amdhip64_7.dll --miopen-dll H:\\therock\\bin\\MIOpen.dll --report H:\\isolated\\gpu-evidence.json
+
+Run only under a separate short-lived process with a bounded timeout
+and no other active GPU workloads. It MUST NOT be executed against the
+CPU-only MIOpen stub and does not install system DLLs.
+This direct-HIP device-allocation test is **not the same as complete
+CUDA-facing PyTorch/ZLUDA application validation**. Hardware results
+must be recorded separately from CPU-backed ABI tests.
+
+## Phase 1 extension: 2D max pooling forward (October 18, 2026)
+
+The optional legacy cuDNN v8 pooling API subset includes
+cudnnCreatePoolingDescriptor, cudnnDestroyPoolingDescriptor,
+cudnnSetPooling2dDescriptor, cudnnGetPooling2dForwardOutputDim,
+and cudnnPoolingForward. It maps to MIOpen's documented
+miopenCreatePoolingDescriptor, miopenSet2dPoolingDescriptor and
+miopenPoolingForward functions.
+
+To avoid silent disagreements in padding/rounding or backward
+argmax workspace semantics, the current subset deliberately accepts
+only 4D FP32/FP16 MAX pooling with no padding, nonoverlapping
+window-size strides, evenly divisible spatial dimensions, and
+the default CUDA stream. Average pooling, padding, overlapping
+windows, deterministic max claims and backward gradient APIs are
+**not** implemented. These paths return NOT_SUPPORTED rather than
+producing plausible but incorrect tensors.
+
+The offline ABI regression suite verifies 4x4 to 2x2 max pooling,
+alpha/beta scaling, dimension queries, invalid algorithm refusal,
+missing MIOpen pooling symbol refusal, unchanged convolution, and
+reversible DLL staging.
+The opt-in direct HIP/MIOpen GPU test now includes max-pooling FP32
+comparison against an exact CPU reference; it must run with real
+MIOpen and a device, not the synthetic test stub.
 
 ## Exact solver/workspace binding
 
