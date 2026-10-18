@@ -13,6 +13,7 @@ typedef int (*PF_destroy_desc)(void *);
 typedef int (*PF_set_tensor4d)(void *, int, int, int, int, int, int);
 typedef int (*PF_set_tensor4d_ex)(void *, int, int, int, int, int, int, int, int, int);
 typedef int (*PF_transform)(void *, const void *, void *, const void *, const void *, void *, void *);
+typedef int (*PF_set_or_scale)(void *, void *, void *, const void *);
 typedef int (*PF_set_filter4d)(void *, int, int, int, int, int, int);
 typedef int (*PF_set_conv2d)(void *, int,int,int,int,int,int,int,int);
 typedef int (*PF_outdim)(void *, void *, void *, int *, int *, int *, int *);
@@ -58,6 +59,7 @@ int main(int argc, char **argv) {
     float x_transform[4]={1,2,3,4};
     float y_transform[8]={10,10,10,10,10,10,10,10};
     float transform_alpha=2.0f, transform_beta=0.5f;
+    float set_value=3.0f, scale_value=2.0f;
     void *transform_xdesc=NULL,*transform_ydesc=NULL;
     int missing_transform=(argc>2 && strcmp(argv[2],"--without-transform")==0);
     int invalid_backend=(argc>2 && strcmp(argv[2],"--bad-backend")==0);
@@ -72,6 +74,8 @@ int main(int argc, char **argv) {
     LOAD(cudnnSetTensor4dDescriptor,PF_set_tensor4d)
     LOAD(cudnnSetTensor4dDescriptorEx,PF_set_tensor4d_ex)
     LOAD(cudnnTransformTensor,PF_transform)
+    LOAD(cudnnSetTensor,PF_set_or_scale)
+    LOAD(cudnnScaleTensor,PF_set_or_scale)
     LOAD(cudnnCreateFilterDescriptor,PF_create_desc)
     LOAD(cudnnDestroyFilterDescriptor,PF_destroy_desc)
     LOAD(cudnnSetFilter4dDescriptor,PF_set_filter4d)
@@ -192,6 +196,17 @@ int main(int argc, char **argv) {
        cudnnCreateTensorDescriptor(&transform_ydesc)) return 33;
     if(cudnnSetTensor4dDescriptorEx(transform_xdesc,0,1,2,1,2,4,2,2,1) ||
        cudnnSetTensor4dDescriptorEx(transform_ydesc,0,1,2,1,2,8,1,4,2)) return 34;
+    rc=cudnnSetTensor(h,transform_ydesc,y_transform,&set_value);
+    if(rc) { fprintf(stderr,"set tensor failed %d\n",rc); return 42; }
+    for(i=0;i<4;++i) if(y_transform[i]!=3.0f) return 43;
+    if(y_transform[4]!=10.f) return 44;
+    rc=cudnnScaleTensor(h,transform_ydesc,y_transform,&scale_value);
+    if(rc) { fprintf(stderr,"scale tensor failed %d\n",rc); return 45; }
+    for(i=0;i<4;++i) {
+        if(y_transform[i]!=6.f) return 46;
+        y_transform[i]=10.f;
+    }
+    if(y_transform[4]!=10.f) return 47;
     rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
                             &transform_beta,transform_ydesc,y_transform);
     if(missing_transform){
@@ -214,6 +229,13 @@ int main(int argc, char **argv) {
     rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
                             &transform_beta,transform_ydesc,y_transform);
     if(rc!=9) { fprintf(stderr,"unsupported transform dtype returned %d\n",rc);return 41; }
+    /* Deliberately overlapping output strides must fail closed, not race. */
+    if(cudnnSetTensor4dDescriptorEx(transform_ydesc,0,1,2,1,2,1,1,1,1)) return 48;
+    rc=cudnnSetTensor(h,transform_ydesc,y_transform,&set_value);
+    if(rc!=9) { fprintf(stderr,"overlapping tensor returned %d\\n",rc);return 49; }
+    rc=cudnnTransformTensor(h,&transform_alpha,transform_xdesc,x_transform,
+                            &transform_beta,transform_ydesc,y_transform);
+    if(rc!=9) { fprintf(stderr,"overlapping transform returned %d\\n",rc);return 50; }
     cudnnDestroyTensorDescriptor(transform_ydesc);
     cudnnDestroyTensorDescriptor(transform_xdesc);
 

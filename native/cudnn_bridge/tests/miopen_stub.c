@@ -357,3 +357,32 @@ __declspec(dllexport) int miopenTransformTensor(
     return 0;
 }
 #endif
+
+
+__declspec(dllexport) int miopenSetTensor(
+    void *handle, void *yDescV, void *yV, const void *valuePtr) {
+    StubTensor *d=(StubTensor *)yDescV;
+    float *y=(float *)yV;
+    int n,c,h,w;
+    (void)handle;
+    if(!d || !y || !valuePtr) return 3;
+    if(d->nb!=4 || d->type!=1) return 6;
+    for(n=0;n<d->dims[0];++n) for(c=0;c<d->dims[1];++c)
+    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w)
+        y[off4(d,n,c,h,w)]=*(const float *)valuePtr;
+    return 0;
+}
+
+__declspec(dllexport) int miopenScaleTensor(
+    void *handle, void *yDescV, void *yV, const void *valuePtr) {
+    StubTensor *d=(StubTensor *)yDescV;
+    float *y=(float *)yV;
+    int n,c,h,w;
+    (void)handle;
+    if(!d || !y || !valuePtr) return 3;
+    if(d->nb!=4 || d->type!=1) return 6;
+    for(n=0;n<d->dims[0];++n) for(c=0;c<d->dims[1];++c)
+    for(h=0;h<d->dims[2];++h) for(w=0;w<d->dims[3];++w)
+        y[off4(d,n,c,h,w)]*=*(const float *)valuePtr;
+    return 0;
+}

@@ -54,6 +54,8 @@
     "cudnnGetConvolutionBackwardFilterAlgorithm_v7",
     "cudnnGetConvolutionBackwardFilterWorkspaceSize",
     "cudnnConvolutionBackwardFilter",
-    "cudnnTransformTensor"
+    "cudnnTransformTensor",
+    "cudnnSetTensor",
+    "cudnnScaleTensor"
   ]
 }

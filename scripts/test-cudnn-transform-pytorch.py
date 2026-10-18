@@ -45,6 +45,10 @@ def main() -> int:
     cudnn.cudnnSetTensor4dDescriptorEx.restype = status
     cudnn.cudnnTransformTensor.argtypes = [ptr, ptr, ptr, ptr, ptr, ptr, ptr]
     cudnn.cudnnTransformTensor.restype = status
+    cudnn.cudnnSetTensor.argtypes = [ptr, ptr, ptr, ptr]
+    cudnn.cudnnSetTensor.restype = status
+    cudnn.cudnnScaleTensor.argtypes = [ptr, ptr, ptr, ptr]
+    cudnn.cudnnScaleTensor.restype = status
 
     def ck(code: int, name: str) -> None:
         if code:
@@ -87,9 +91,25 @@ def main() -> int:
                 tolerance = 1e-5 if name == "float32" else 1e-2
                 if max_abs > tolerance:
                     raise AssertionError(f"{name}: bad transformed values {max_abs} > {tolerance}")
+                # Fill and scale a physically non-contiguous destination.
+                fill_value = ctypes.c_float(3.0)
+                scale_value = ctypes.c_float(2.0)
+                ck(cudnn.cudnnSetTensor(handle, yd, ptr(y.data_ptr()),
+                                        ctypes.byref(fill_value)), "cudnnSetTensor")
+                torch.cuda.synchronize()
+                set_error = (y.detach().float().cpu() - 3.0).abs().max().item()
+                if set_error > tolerance:
+                    raise AssertionError(f"{name} set tensor mismatch: {set_error}")
+                ck(cudnn.cudnnScaleTensor(handle, yd, ptr(y.data_ptr()),
+                                          ctypes.byref(scale_value)), "cudnnScaleTensor")
+                torch.cuda.synchronize()
+                scale_error = (y.detach().float().cpu() - 6.0).abs().max().item()
+                if scale_error > tolerance:
+                    raise AssertionError(f"{name} scale tensor mismatch: {scale_error}")
                 results.append({
                     "dtype": name, "max_abs": max_abs, "tolerance": tolerance,
                     "source_strides": list(x.stride()), "dest_strides": list(y.stride()),
+                    "set_max_abs": set_error, "scale_max_abs": scale_error,
                     "status": "pass",
                 })
             finally:

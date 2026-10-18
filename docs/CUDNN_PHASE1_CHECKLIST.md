@@ -14,7 +14,7 @@ existing supported workload before being called *validated*.
 | Component / scope | State | Blocking evidence |
 | --- | --- | --- |
 | cuDNN v8 legacy 2D convolution forward, backward-data/filter | Validated on gfx1200 reference, September snapshot | More streams/layouts and GPU generations |
-| cuDNN v8 transform tensor FP32/FP16 on default stream | **New experimental candidate** | Dedicated real-MIOpen GPU test in scripts/test-cudnn-transform-pytorch.py |
+| cuDNN v8 transform, set and scale tensor FP32/FP16 on default stream | **New experimental candidate** | Dedicated real-MIOpen GPU test in scripts/test-cudnn-transform-pytorch.py |
 | cuDNN tensor descriptors + algorithm heuristics | Partial | Broader shape/dtype/algorithm conformance |
 | cuDNN backward bias | **Not implemented** | Recent MIOpen deprecates its equivalent and can return NotImplemented |
 | cuDNN pooling/activation/normalization | **Not broadly implemented in this proxy** | ABI and GPU tests per op; batching/gradient tests |

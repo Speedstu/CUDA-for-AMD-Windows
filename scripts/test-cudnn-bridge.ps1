@@ -130,6 +130,7 @@ $report = [ordered]@{
     cpu_reference_backward_data = 'pass'
     cpu_reference_backward_filter = 'pass'
     transform_tensor_strided_fp32 = 'pass'
+    set_scale_tensor_strided_fp32 = 'pass'
     transform_tensor_missing_backend_symbol = 'safe-refusal'
     invalid_explicit_miopen_path = 'safe-refusal'
     v7_forward_algorithm_query = 'pass'

@@ -330,6 +330,10 @@ typedef miopenStatus_t (*PFN_miopenConvolutionBackwardWeightsImmediate)(
     miopenHandle_t, const miopenTensorDescriptor_t, const void *,
     const miopenTensorDescriptor_t, const void *, const miopenConvolutionDescriptor_t,
     const miopenTensorDescriptor_t, void *, void *, size_t, uint64_t);
+typedef miopenStatus_t (*PFN_miopenSetTensor)(
+    miopenHandle_t, const miopenTensorDescriptor_t, void *, const void *);
+typedef miopenStatus_t (*PFN_miopenScaleTensor)(
+    miopenHandle_t, const miopenTensorDescriptor_t, void *, const void *);
 typedef miopenStatus_t (*PFN_miopenTransformTensor)(
     miopenHandle_t, const void *, const miopenTensorDescriptor_t, const void *,
     const void *, const miopenTensorDescriptor_t, void *);
@@ -366,6 +370,8 @@ typedef struct MiopenApi {
     PFN_miopenConvolutionBackwardWeightsImmediate conv_bwd_weights_immediate;
     PFN_miopenConvolutionForward conv_fwd;
     PFN_miopenTransformTensor transform_tensor; /* optional across MIOpen versions */
+    PFN_miopenSetTensor fill_tensor;
+    PFN_miopenScaleTensor scale_tensor;
 } MiopenApi;
 
 static MiopenApi g_miopen;
@@ -437,10 +443,11 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
      * MIOpen tensor transforms are available on some but not all backend
      * versions. Missing optional symbols must not disable existing convs.
      */
-    {
-        FARPROC proc = bridge_get_proc(m, "miopenTransformTensor");
-        if (proc) memcpy(&g_miopen.transform_tensor, &proc, sizeof(proc));
-    }
+#define LOAD_OPTIONAL(field, symbol) do {     FARPROC bridge_proc = bridge_get_proc(m, #symbol);     if (bridge_proc) memcpy(&g_miopen.field, &bridge_proc, sizeof(g_miopen.field)); } while (0)
+    LOAD_OPTIONAL(transform_tensor, miopenTransformTensor);
+    LOAD_OPTIONAL(fill_tensor, miopenSetTensor);
+    LOAD_OPTIONAL(scale_tensor, miopenScaleTensor);
+#undef LOAD_OPTIONAL
     g_miopen_ready = 1;
     return TRUE;
 }
@@ -1779,6 +1786,88 @@ done:
     return cs;
 }
 
+/* ---- cuDNN standalone tensor primitives ------------------------------- */
+
+/*
+ * Only translate tensor primitives on the known-safe default stream and
+ * floating-point 4D descriptors. Unsupported dtype/rank/optional symbols
+ * are refused, never delegated blindly to an NVIDIA DLL.
+ */
+/* Reject overlapping layouts: even a syntactically valid positive stride
+ * can alias output elements and silently overwrite GPU results. Sparse or
+ * transposed, but non-overlapping, strides remain allowed. */
+static int bridge_nonoverlapping_4d(const BridgeTensor *t) {
+    int used[4] = {0,0,0,0};
+    int i,j,best;
+    int64_t min_next_stride = 1;
+    if (!t || t->nb_dims != 4) return 0;
+    for (i = 0; i < 4; ++i) {
+        best = -1;
+        for (j = 0; j < 4; ++j) {
+            if (!used[j] && t->dims[j] > 1 &&
+                (best < 0 || t->strides[j] < t->strides[best]))
+                best = j;
+        }
+        if (best < 0) break;
+        used[best] = 1;
+        if (t->strides[best] < min_next_stride) return 0;
+        if ((int64_t)t->strides[best] > INT64_MAX / t->dims[best])
+            return 0;
+        min_next_stride = (int64_t)t->strides[best] * t->dims[best];
+    }
+    return 1;
+}
+static cudnnStatus_t bridge_check_float_tensor4d(
+    cudnnHandle_t handle, const BridgeTensor *tensor) {
+    int i;
+    if (!handle || handle->magic != BRIDGE_MAGIC_HANDLE || !bridge_valid_tensor(tensor))
+        return CUDNN_STATUS_BAD_PARAM;
+    if (handle->cuda_stream != NULL) return CUDNN_STATUS_NOT_SUPPORTED;
+    if (tensor->nb_dims != 4 ||
+        (tensor->data_type != CUDNN_DATA_FLOAT && tensor->data_type != CUDNN_DATA_HALF))
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    for (i = 0; i < 4; ++i) {
+        if (tensor->dims[i] <= 0 || tensor->strides[i] <= 0)
+            return CUDNN_STATUS_BAD_PARAM;
+    }
+    if (!bridge_nonoverlapping_4d(tensor)) return CUDNN_STATUS_NOT_SUPPORTED;
+    return CUDNN_STATUS_SUCCESS;
+}
+
+cudnnStatus_t cudnnSetTensor(cudnnHandle_t handle, const cudnnTensorDescriptor_t yDesc,
+                            void *y, const void *valuePtr) {
+    miopenTensorDescriptor_t my = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    if (!y || !valuePtr) return CUDNN_STATUS_BAD_PARAM;
+    cs = bridge_check_float_tensor4d(handle, yDesc);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.set_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_make_miopen_tensor(yDesc, &my);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
+    ms = g_miopen.fill_tensor(handle->miopen, my, y, valuePtr);
+    bridge_destroy_miopen_tensor(my);
+    return bridge_status(ms);
+}
+
+cudnnStatus_t cudnnScaleTensor(cudnnHandle_t handle, const cudnnTensorDescriptor_t yDesc,
+                              void *y, const void *alpha) {
+    miopenTensorDescriptor_t my = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    if (!y || !alpha) return CUDNN_STATUS_BAD_PARAM;
+    cs = bridge_check_float_tensor4d(handle, yDesc);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.scale_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_make_miopen_tensor(yDesc, &my);
+    if (cs != CUDNN_STATUS_SUCCESS) return cs;
+    ms = g_miopen.scale_tensor(handle->miopen, my, y, alpha);
+    bridge_destroy_miopen_tensor(my);
+    return bridge_status(ms);
+}
+
 /* ---- cuDNN tensor transforms ------------------------------------------- */
 
 /*
@@ -1809,6 +1898,8 @@ cudnnStatus_t cudnnTransformTensor(
         if (xDesc->strides[i] <= 0 || yDesc->strides[i] <= 0)
             return CUDNN_STATUS_BAD_PARAM;
     }
+    if (!bridge_nonoverlapping_4d(xDesc) || !bridge_nonoverlapping_4d(yDesc))
+        return CUDNN_STATUS_NOT_SUPPORTED;
     if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
     if (!g_miopen.transform_tensor) return CUDNN_STATUS_NOT_SUPPORTED;
 

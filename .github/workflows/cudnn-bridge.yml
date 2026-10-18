@@ -79,6 +79,8 @@ jobs:
             'cudnnGetConvolutionBackwardDataAlgorithm_v7',
             'cudnnConvolutionBackwardFilter',
             'cudnnTransformTensor',
+            'cudnnSetTensor',
+            'cudnnScaleTensor',
             'cudnnGetConvolutionBackwardFilterWorkspaceSize',
             'cudnnGetConvolutionBackwardFilterAlgorithm_v7'
           )
