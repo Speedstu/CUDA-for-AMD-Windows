@@ -355,6 +355,14 @@ typedef miopenStatus_t (*PFN_miopenActivationBackward)(
     miopenTensorDescriptor_t, const void *, miopenTensorDescriptor_t, const void *,
     miopenTensorDescriptor_t, const void *, const void *, miopenTensorDescriptor_t, void *);
 
+typedef miopenStatus_t (*PFN_miopenSoftmaxForwardV2)(
+    miopenHandle_t, const void *, miopenTensorDescriptor_t, const void *,
+    const void *, miopenTensorDescriptor_t, void *, int, int);
+typedef miopenStatus_t (*PFN_miopenSoftmaxBackwardV2)(
+    miopenHandle_t, const void *, miopenTensorDescriptor_t, const void *,
+    miopenTensorDescriptor_t, const void *, const void *,
+    miopenTensorDescriptor_t, void *, int, int);
+
 typedef struct MiopenApi {
     HMODULE module;
     PFN_miopenCreate create;
@@ -390,6 +398,8 @@ typedef struct MiopenApi {
     PFN_miopenSetActivationDescriptor set_activation;
     PFN_miopenActivationForward activation_forward;
     PFN_miopenActivationBackward activation_backward;
+    PFN_miopenSoftmaxForwardV2 softmax_forward_v2;
+    PFN_miopenSoftmaxBackwardV2 softmax_backward_v2;
 } MiopenApi;
 
 static MiopenApi g_miopen;
@@ -470,6 +480,8 @@ static BOOL CALLBACK bridge_load_miopen_once(PINIT_ONCE once, PVOID param, PVOID
     LOAD_OPTIONAL(set_activation, miopenSetActivationDescriptor);
     LOAD_OPTIONAL(activation_forward, miopenActivationForward);
     LOAD_OPTIONAL(activation_backward, miopenActivationBackward);
+    LOAD_OPTIONAL(softmax_forward_v2, miopenSoftmaxForward_V2);
+    LOAD_OPTIONAL(softmax_backward_v2, miopenSoftmaxBackward_V2);
 #undef LOAD_OPTIONAL
     g_miopen_ready = 1;
     return TRUE;
@@ -2109,6 +2121,77 @@ done:
     bridge_destroy_miopen_tensor(mx);
     bridge_destroy_miopen_tensor(mdx);
     g_miopen.destroy_activation(ma);
+    return cs;
+}
+
+/* ---- cuDNN v8 channel-wise accurate softmax ----------------------------- */
+
+/*
+ * We intentionally do not map FAST, LOG or INSTANCE to unverified
+ * semantics. Only ACCURATE=1 and CHANNEL=1 are checked for parity with
+ * the corresponding MIOpen _V2 enums. This is a narrow, opt-in subset.
+ */
+cudnnStatus_t cudnnSoftmaxForward(
+    cudnnHandle_t handle, int algorithm, int mode,
+    const void *alpha, const cudnnTensorDescriptor_t xDesc, const void *x,
+    const void *beta, const cudnnTensorDescriptor_t yDesc, void *y) {
+    miopenTensorDescriptor_t mx = NULL, my = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    int i;
+    if (!alpha || !beta || !x || !y) return CUDNN_STATUS_BAD_PARAM;
+    if (algorithm != 1 || mode != 1) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_check_float_tensor4d(handle, xDesc); if (cs) return cs;
+    cs = bridge_check_float_tensor4d(handle, yDesc); if (cs) return cs;
+    if (xDesc->data_type != yDesc->data_type) return CUDNN_STATUS_NOT_SUPPORTED;
+    for (i=0; i<4; ++i)
+        if (xDesc->dims[i] != yDesc->dims[i]) return CUDNN_STATUS_BAD_PARAM;
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.softmax_forward_v2) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_make_miopen_tensor(xDesc, &mx); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
+    ms = g_miopen.softmax_forward_v2(handle->miopen, alpha, mx, x, beta, my, y,
+                                     algorithm, mode);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(mx);
+    bridge_destroy_miopen_tensor(my);
+    return cs;
+}
+
+cudnnStatus_t cudnnSoftmaxBackward(
+    cudnnHandle_t handle, int algorithm, int mode,
+    const void *alpha, const cudnnTensorDescriptor_t yDesc, const void *y,
+    const cudnnTensorDescriptor_t dyDesc, const void *dy,
+    const void *beta, const cudnnTensorDescriptor_t dxDesc, void *dx) {
+    miopenTensorDescriptor_t my = NULL, mdy = NULL, mdx = NULL;
+    cudnnStatus_t cs;
+    miopenStatus_t ms;
+    int i;
+    if (!alpha || !beta || !y || !dy || !dx) return CUDNN_STATUS_BAD_PARAM;
+    if (algorithm != 1 || mode != 1) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_check_float_tensor4d(handle, yDesc); if (cs) return cs;
+    cs = bridge_check_float_tensor4d(handle, dyDesc); if (cs) return cs;
+    cs = bridge_check_float_tensor4d(handle, dxDesc); if (cs) return cs;
+    if (yDesc->data_type != dyDesc->data_type ||
+        yDesc->data_type != dxDesc->data_type)
+        return CUDNN_STATUS_NOT_SUPPORTED;
+    for (i=0; i<4; ++i) {
+        if (yDesc->dims[i] != dyDesc->dims[i] ||
+            yDesc->dims[i] != dxDesc->dims[i]) return CUDNN_STATUS_BAD_PARAM;
+    }
+    if (!bridge_backend_ready()) return CUDNN_STATUS_NOT_INITIALIZED;
+    if (!g_miopen.softmax_backward_v2) return CUDNN_STATUS_NOT_SUPPORTED;
+    cs = bridge_make_miopen_tensor(yDesc, &my); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(dyDesc, &mdy); if (cs) goto done;
+    cs = bridge_make_miopen_tensor(dxDesc, &mdx); if (cs) goto done;
+    ms = g_miopen.softmax_backward_v2(handle->miopen, alpha, my, y, mdy, dy,
+                                      beta, mdx, dx, algorithm, mode);
+    cs = bridge_status(ms);
+done:
+    bridge_destroy_miopen_tensor(my);
+    bridge_destroy_miopen_tensor(mdy);
+    bridge_destroy_miopen_tensor(mdx);
     return cs;
 }
 

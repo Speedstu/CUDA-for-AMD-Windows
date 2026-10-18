@@ -62,6 +62,8 @@
     "cudnnSetActivationDescriptor",
     "cudnnGetActivationDescriptor",
     "cudnnActivationForward",
-    "cudnnActivationBackward"
+    "cudnnActivationBackward",
+    "cudnnSoftmaxForward",
+    "cudnnSoftmaxBackward"
   ]
 }

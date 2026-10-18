@@ -468,3 +468,63 @@ __declspec(dllexport) int miopenActivationBackward(
     return 0;
 }
 #endif
+
+
+#ifndef CUDAAMD_STUB_NO_SOFTMAX
+/* Synthetic accurate channel softmax: numerical ABI test only, not GPU. */
+__declspec(dllexport) int miopenSoftmaxForward_V2(
+    void *handle,const void *alpha,void *xDescV,const void *xV,
+    const void *beta,void *yDescV,void *yV,int algo,int mode) {
+    StubTensor *xd=(StubTensor *)xDescV, *yd=(StubTensor *)yDescV;
+    const float *x=(const float *)xV;
+    float *y=(float *)yV;
+    int n,c,h,w;
+    (void)handle;
+    if(!alpha || !beta || !xd || !yd || !x || !y) return 3;
+    if(algo!=1 || mode!=1 || xd->nb!=4 || yd->nb!=4 ||
+       xd->type!=1 || yd->type!=1) return 6;
+    for(n=0;n<xd->dims[0];++n) for(h=0;h<xd->dims[2];++h)
+    for(w=0;w<xd->dims[3];++w) {
+        float maxv=-INFINITY, sum=0.f;
+        for(c=0;c<xd->dims[1];++c){
+            float v=x[off4(xd,n,c,h,w)];
+            if(v>maxv) maxv=v;
+        }
+        for(c=0;c<xd->dims[1];++c)
+            sum+=expf(x[off4(xd,n,c,h,w)]-maxv);
+        for(c=0;c<xd->dims[1];++c) {
+            int iy=off4(yd,n,c,h,w);
+            float prob=expf(x[off4(xd,n,c,h,w)]-maxv)/sum;
+            y[iy]=*(const float *)alpha*prob + *(const float *)beta*y[iy];
+        }
+    }
+    return 0;
+}
+__declspec(dllexport) int miopenSoftmaxBackward_V2(
+    void *handle,const void *alpha,void *yDescV,const void *yV,
+    void *dyDescV,const void *dyV,const void *beta,void *dxDescV,void *dxV,
+    int algo,int mode) {
+    StubTensor *yd=(StubTensor *)yDescV,*dyd=(StubTensor *)dyDescV;
+    StubTensor *dxd=(StubTensor *)dxDescV;
+    const float *y=(const float *)yV,*dy=(const float *)dyV;
+    float *dx=(float *)dxV;
+    int n,c,h,w;
+    (void)handle;
+    if(!alpha || !beta || !yd || !dyd || !dxd || !y || !dy || !dx) return 3;
+    if(algo!=1 || mode!=1 || yd->nb!=4 || dyd->nb!=4 || dxd->nb!=4 ||
+       yd->type!=1 || dyd->type!=1 || dxd->type!=1) return 6;
+    for(n=0;n<yd->dims[0];++n) for(h=0;h<yd->dims[2];++h)
+    for(w=0;w<yd->dims[3];++w) {
+        float dot=0.f;
+        for(c=0;c<yd->dims[1];++c)
+            dot+=y[off4(yd,n,c,h,w)]*dy[off4(dyd,n,c,h,w)];
+        for(c=0;c<yd->dims[1];++c) {
+            int iy=off4(yd,n,c,h,w),idy=off4(dyd,n,c,h,w);
+            int idx=off4(dxd,n,c,h,w);
+            dx[idx]=*(const float *)alpha*y[iy]*(dy[idy]-dot)+
+                    *(const float *)beta*dx[idx];
+        }
+    }
+    return 0;
+}
+#endif

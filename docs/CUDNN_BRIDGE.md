@@ -48,12 +48,13 @@ A separate public `torch.nn.functional.conv2d(..., bias=...)` training check als
 
 ## Implemented surface
 
-The generated proxy currently overrides 53 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
+The generated proxy currently overrides 55 exports when built against the PyTorch 2.3.0+cu118 top-level cuDNN v8 DLL. The implemented convolution-related surface includes:
 
 - handle create/destroy
 - experimental cudnnTransformTensor (FP32/FP16, 4D, optional MIOpen backend symbol; default stream; real-GPU correctness test pending)
 - experimental cudnnSetTensor and cudnnScaleTensor (FP32/FP16 4D, optional backend symbols; default stream; real-GPU validation pending)
 - experimental cuDNN v8 activation descriptors, forward and backward for sigmoid, ReLU and tanh, default stream only (real GPU evidence pending)
+- experimental cudnnSoftmaxForward and cudnnSoftmaxBackward for ACCURATE+CHANNEL FP32/FP16 4D; optional MIOpen _V2 translations (real GPU evidence pending)
 - default-stream get/set
 - tensor descriptors
 - filter descriptors
@@ -165,6 +166,28 @@ MIOpen activation functions, run:
 That script checks six FP32/FP16 forward/backward cases against CPU
 references and includes the SHA-256 of the exact bridge DLL used.
 The offline MIOpen stub is never to be reported as a physical GPU test.
+
+## Phase 1 extension: accurate channel softmax (October 18, 2026)
+
+cudnnSoftmaxForward and cudnnSoftmaxBackward now translate the cuDNN
+ACCURATE (1) / CHANNEL (1) pair to MIOpen's documented
+miopenSoftmaxForward_V2 and miopenSoftmaxBackward_V2 pair.
+Only 4D FP32/FP16 tensors with matching logical dimensions,
+non-overlapping strides and default CUDA streams are eligible.
+Other algorithms/modes return NOT_SUPPORTED instead of silently changing
+normalization axes or logarithmic behaviour. The symbols are optional,
+so missing MIOpen softmax functions cannot disable the validated
+convolution or activation APIs.
+
+The CPU-backed MIOpen-stub smoke suite validates FP32 channel-wise
+softmax normalizers, forward and backward analytical gradients, and
+safe refusal when symbols or modes are missing.
+A separate, deliberately opt-in real GPU probe runs FP32 and FP16
+against a CPU PyTorch reference (not yet passed on real MIOpen):
+
+\`python scripts/test-cudnn-softmax-pytorch.py --bridge-dll C:\\staged\\cudnn64_8.dll\`
+
+No stable installer or NVIDIA DLL is replaced by this candidate.
 
 ## Exact solver/workspace binding
 

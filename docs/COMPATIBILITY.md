@@ -269,3 +269,14 @@ passes, including a backend with no optional activation symbols.
 activation API; see [CUDNN_BRIDGE.md](CUDNN_BRIDGE.md) and the
 [phase 1 checklist](CUDNN_PHASE1_CHECKLIST.md). Stable installers
 and already validated driver binaries remain unchanged.
+
+
+### October 18: cuDNN softmax ABI candidate
+
+The experimental cuDNN v8 bridge now exposes accurate channel-wise
+softmax forward/backward using optional MIOpen _V2 symbols, with **55
+manifest overrides**. The CPU-backed test validates numerical
+softmax values and analytical gradients; unsupported algorithms,
+axes and missing symbols fail closed. Real AMD GPU FP32/FP16
+qualification is pending and required before promotion to validated
+status. The safe public runtime remains unchanged.
