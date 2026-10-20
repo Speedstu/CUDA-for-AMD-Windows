@@ -42,10 +42,10 @@ foreach ($entry in $selected) {
     if (-not (Test-Path $file)) { throw "Missing patch file: $file" }
 
     Write-Host ("[{0}] {1} ({2})" -f $entry.order, $entry.file, $entry.status)
-    # Only the pinned async 2D and no-modal loader patches are zero-context: their
-    # insertion otherwise includes a blank context line rejected by
+    # Only the pinned async 2D patch is zero-context: its
+    # insertion would otherwise include a blank context line rejected by
     # the repository whitespace gate. Keep normal context for other patches.
-    if ([string]$entry.file -in @('memcpy-2d-async-candidate.patch','headless-loader-cudnn-property-candidate.patch')) { $applyOptions = @('--unidiff-zero') } else { $applyOptions = @() }
+    if ([string]$entry.file -in @('memcpy-2d-async-candidate.patch')) { $applyOptions = @('--unidiff-zero') } else { $applyOptions = @() }
     & $git.Source -C $ZludaSourceRoot apply @applyOptions --check --whitespace=error-all $file
     if ($LASTEXITCODE -ne 0) { throw "Patch check failed: $($entry.file)" }
 

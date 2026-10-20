@@ -10,6 +10,7 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +25,12 @@ def source_checks() -> None:
     manifest = json.loads((PATCH.parent / "series.json").read_text("utf-8"))
     assert any(item["file"] == PATCH.name and item["status"] == "candidate"
                for item in manifest["patches"]), "Candidate patch absent from pinned series"
+    # A context-free patch previously landed inside try_load_from_self_or_hip
+    # (without the _with_message suffix), breaking the release Rust build.
+    # Require context anchored in the actual modal function, not a line number.
+    assert re.search(r"(?m)^@@ .*@@ pub unsafe fn try_load_from_self_or_hip_with_message", p)
+    assert "     if result.is_none() {" in p
+    assert "     try_load_from_self_dir(redirect_name).or_else" not in p
     assert "ZLUDA_ALLOW_MISSING_DLL_DIALOG" in p
     assert "std::io::Write::write_all" in p
     assert "+            return None;" in p, "Must stop before TaskDialogIndirect by default"

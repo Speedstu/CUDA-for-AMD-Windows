@@ -2,7 +2,9 @@ diff --git a/zluda_dnn/src/impl.rs b/zluda_dnn/src/impl.rs
 index 45ec0ed..62d01b7 100644
 --- a/zluda_dnn/src/impl.rs
 +++ b/zluda_dnn/src/impl.rs
-@@ -1333,0 +1334,18 @@ pub mod dnn8 {
+@@ -1332,4 +1332,22 @@ pub mod dnn8 {
+     }
+ 
 +    // All three library properties match the version returned by
 +    // cudnnGetVersion(). Never return success with an unwritten output.
 +    pub(crate) unsafe fn get_property(
@@ -21,7 +23,11 @@ index 45ec0ed..62d01b7 100644
 +        Ok(())
 +    }
 +
-@@ -1482,0 +1501,18 @@ pub mod dnn9 {
+     pub(crate) fn get_error_string(
+         status: cuda_types::cudnn8::cudnnStatus_t,
+@@ -1481,4 +1499,22 @@ pub mod dnn9 {
+     }
+ 
 +    // All three library properties match the version returned by
 +    // cudnnGetVersion(). Never return success with an unwritten output.
 +    pub(crate) unsafe fn get_property(
@@ -40,17 +46,25 @@ index 45ec0ed..62d01b7 100644
 +        Ok(())
 +    }
 +
+     pub(crate) fn get_error_string(status: cudnnStatus_t) -> *const ::core::ffi::c_char {
+         if cfg!(windows) && status.is_err() && status.err() == super::miopen().err().map(Into::into)
 diff --git a/zluda_dnn/src/lib.rs b/zluda_dnn/src/lib.rs
 index 21b72fc..6a61202 100644
 --- a/zluda_dnn/src/lib.rs
 +++ b/zluda_dnn/src/lib.rs
-@@ -86,0 +87 @@ dual_function_declarations! {
+@@ -85,4 +85,5 @@ dual_function_declarations! {
+         cudnnGetConvolutionForwardAlgorithm_v7,
+         cudnnGetErrorString,
 +        cudnnGetProperty,
+         cudnnGetVersion
+     ],
 diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
 index 1a293a9..fef5c04 100644
 --- a/zluda_windows/src/lib.rs
 +++ b/zluda_windows/src/lib.rs
-@@ -456,0 +457,15 @@ pub unsafe fn try_load_from_self_or_hip_with_message(
+@@ -455,4 +455,19 @@ pub unsafe fn try_load_from_self_or_hip_with_message(
+     });
+     if result.is_none() {
 +        /* Missing HIP components must never stall headless GPU workloads.
 +         * The original TaskDialogIndirect could silently block a CLI,
 +         * service or CI child process before any kernel was launched.
@@ -66,3 +80,5 @@ index 1a293a9..fef5c04 100644
 +        if std::env::var("ZLUDA_ALLOW_MISSING_DLL_DIALOG").as_deref() != Ok("1") {
 +            return None;
 +        }
+         let mut title = U16String::from_str("ZLUDA failed to load ");
+         title.push_str(redirect_names[0]);
