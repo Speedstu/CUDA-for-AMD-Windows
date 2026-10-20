@@ -81,6 +81,16 @@
       "required_probes": [
         "driver_memcpy2d_async"
       ]
+    },
+    {
+      "order": 80,
+      "file": "headless-loader-cudnn-property-candidate.patch",
+      "status": "candidate",
+      "purpose": "Never block a headless process on absent HIP DLLs by default and report accurate cuDNN 8/9 runtime library properties",
+      "required_probes": [
+        "cudnn_missing_miopen_headless",
+        "cudnn_get_property"
+      ]
     }
   ]
 }

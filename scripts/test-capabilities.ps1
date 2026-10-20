@@ -114,10 +114,17 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
         Set-Env $psi 'ZLUDA_LAUNCH_TRACE' '1'
     }
 
+    # The missing-MIOpen modal dialog affects every architecture, not
+    # just gfx1150. When no MIOpen can be found in the configured HIP tree,
+    # use the bounded, CPU-referenced PyTorch no-cuDNN conv fallback.
+    $noMiopenBackend = [bool](
+        -not $hip -or
+        -not (Test-Path -LiteralPath (Join-Path $hip 'bin\MIOpen.dll') -PathType Leaf)
+    )
     if (
         $Name -eq 'conv2d' -and
-        $config.gpu -and
-        [string]$config.gpu.arch -eq 'gfx1150'
+        ($noMiopenBackend -or
+            ($config.gpu -and [string]$config.gpu.arch -eq 'gfx1150'))
     ) {
         $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
         if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {

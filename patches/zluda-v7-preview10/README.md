@@ -172,3 +172,23 @@ independent srcPitch=41216 and dstPitch=288, using a non-default stream
 and checking destination row contents plus untouched padding. This is
 NOT a proof of correct operation until that probe passes on real hardware,
 followed by Nemotron plain inference and numerical output checks.
+
+
+## Headless missing-HIP DLL and cuDNN property candidate (#3)
+
+The order-80 headless-loader-cudnn-property-candidate.patch keeps
+missing MIOpen.dll and other missing HIP components from blocking
+headless callers behind TaskDialogIndirect. The default path writes
+a zluda-dependency stderr diagnostic and returns immediately.
+Only ZLUDA_ALLOW_MISSING_DLL_DIALOG=1 opts into the legacy GUI.
+It also adds cudnnGetProperty MAJOR/MINOR/PATCH responses consistent
+with cudnnGetVersion (cuDNN8 8.9.7, cuDNN9 9.13.1), and fails
+with BAD_PARAM for invalid/null pointers rather than reporting
+success with an uninitialized output.
+
+Use tests/test_zluda_headless_loader.py --dnn8 DLL --dnn9 DLL
+to run an isolated, 12-second bounded no-MIOpen subprocess
+check. This is a candidate, NOT a GPU convolution fix or stable
+ZLUDA DLL release. The original status code for missing MIOpen
+may remain nonzero INTERNAL_ERROR; the important correction is
+that it does not display a modal error UI.

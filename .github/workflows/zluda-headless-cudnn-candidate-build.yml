@@ -1,0 +1,104 @@
+name: zluda-headless-cudnn-candidate-build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/zluda-headless-cudnn-candidate-build.yml'
+      - 'patches/zluda-v7-preview10/headless-loader-cudnn-property-candidate.patch'
+      - 'patches/zluda-v7-preview10/series.json'
+      - 'tests/test_zluda_headless_loader.py'
+      - 'scripts/apply-zluda-patches.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-cudnn-abi:
+    runs-on: windows-2022
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned source regression metadata
+        shell: pwsh
+        run: |
+          python tests/test_zluda_headless_loader.py
+          if ($LASTEXITCODE -ne 0) { throw 'Headless dependency / cuDNN property source checks failed' }
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          cargo +1.96.0 --version
+
+      - name: Checkout pinned upstream ZLUDA
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/vosen/ZLUDA.git zluda-upstream
+          if ($LASTEXITCODE -ne 0) { throw 'ZLUDA clone failed' }
+          git -C zluda-upstream checkout --detach 9c8b43f242985150f86a7f485218b7b82c3e96ca
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned upstream checkout failed' }
+          git -C zluda-upstream submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned submodules failed' }
+
+      - name: Cache Rust compiler and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            zluda-upstream\target
+          key: ${{ runner.os }}-zluda-dnn-1.96.0-${{ hashFiles('patches/zluda-v7-preview10/*.patch') }}
+          restore-keys: |
+            ${{ runner.os }}-zluda-dnn-1.96.0-
+
+      - name: Apply full pinned candidate patch series
+        shell: pwsh
+        run: |
+          ./scripts/apply-zluda-patches.ps1 -ZludaSourceRoot zluda-upstream -IncludeCandidates
+          if ($LASTEXITCODE -ne 0) { throw 'Series apply failed' }
+          git -C zluda-upstream diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Patched source whitespace check failed' }
+
+      - name: Compile experimental ZLUDA cuDNN8/9 libraries
+        shell: pwsh
+        run: |
+          cargo +1.96.0 build --manifest-path zluda-upstream/Cargo.toml -p zluda_dnn8 -p zluda_dnn9 --release
+          if ($LASTEXITCODE -ne 0) { throw 'cuDNN candidate compilation failed' }
+
+      - name: Prove no modal stall with missing MIOpen and correct version fields
+        shell: pwsh
+        run: |
+          python tests/test_zluda_headless_loader.py --dnn8 zluda-upstream/target/release/cudnn64_8.dll --dnn9 zluda-upstream/target/release/cudnn64_9.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Headless DLL regression failed' }
+
+      - name: Produce candidate hash evidence
+        shell: pwsh
+        run: |
+          $dir = 'zluda-upstream/target/release'
+          $out = 'candidate-cudnn-evidence'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($name in @('cudnn64_8.dll','cudnn64_9.dll')) {
+            if (-not (Test-Path "$dir/$name")) { throw "Missing $name" }
+            Copy-Item "$dir/$name" "$out/$name"
+          }
+          $entry = [ordered]@{
+            upstream_zluda_commit = '9c8b43f242985150f86a7f485218b7b82c3e96ca'
+            project_commit = $env:GITHUB_SHA
+            rust = '1.96.0'
+            status = 'candidate-only, no GPU workload validation'
+            validation = 'cuDNN v8/v9 property fields and missing-MIOpen nonmodal failure'
+            files = @{}
+          }
+          foreach ($name in @('cudnn64_8.dll','cudnn64_9.dll')) {
+            $entry.files[$name] = (Get-FileHash "$out/$name" -Algorithm SHA256).Hash
+          }
+          $entry | ConvertTo-Json -Depth 5 | Out-File "$out/sha256.json" -Encoding utf8
+
+      - name: Upload experimental DLLs and hashes (not stable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zluda-headless-cudnn8-9-candidate
+          path: candidate-cudnn-evidence/*
+          retention-days: 90
+          if-no-files-found: error

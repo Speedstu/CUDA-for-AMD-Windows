@@ -79,6 +79,8 @@ jobs:
           python tests/test_safe_llama_context.py
           python tests/test_ptx_metadata_semantics.py
           python tests/test_zluda_memcpy2d_patch.py
+          python tests/test_zluda_headless_loader.py
+          python tests/test_miopen_safety_guard.py
           python tests/test_driver_probe_preconditions.py
           python tests/test_topk_compiled_ptx_checker.py
           python -m py_compile tests/test_llama_topk_atom_histogram.py

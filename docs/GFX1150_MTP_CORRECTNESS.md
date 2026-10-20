@@ -128,3 +128,79 @@ Keep the artifacts opt-in and do not promote to global stable defaults.
 - On gfx1100 the safe math-only SDPA wrapper is tested, but the
   underlying raw memory-efficient SDPA numeric bug in issue #9
   remains outstanding. Do not enable the unsafe fused path by default.
+
+
+## October 20: Nemotron graded plain inference
+
+Cary5031 independently graded ten fixed questions, three repeats each,
+on Nemotron-3-Nano-30B-A3B-UD-Q4_K_XL.gguf (22,833,947,424 bytes,
+SHA256 627F5B04AEDC97F967332F331BD75B7A4ED2F33CA83E6EE74B44235CC1887890).
+ZLUDA used the async-copy candidate driver (in-process nvcuda.dll
+SHA256 94D3B56D... in all 30 child runs) and the histogram llama
+candidate from Actions run 38634153056. The same model, prompts,
+independent rubric, deterministic decoding and 400-token cap
+were applied to native and ZLUDA plain inference:
+
+| Backend | Correct final answers | Exits | Mean generation t/s |
+| --- | ---: | ---: | ---: |
+| Native ROCm plain | 30/30 | 30/30 | 13.8 |
+| ZLUDA plain | 30/30 | 30/30 | 13.6 |
+
+All repeats were byte-identical within each question/backend cell,
+zero incomplete/incorrect answers, and zero CUDA faults/missing symbols.
+Some wording differs between native and ZLUDA without changing the
+graded final answer. ZLUDA/native throughput ~0.99 on Radeon 890M.
+See https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/6#issuecomment-6281010418 .
+The 60 underlying summaries and text outputs remain with the reporter,
+not with this repository. Nemotron DRAFT-MTP was NOT tested.
+
+## Reproduce the opt-in llama draft-MTP graded run (not a safe smoke)
+
+Use a known-good and separately staged runtime, the SHA-verified
+llama-b10978-zluda-topk-atom-candidate from Actions run 38634153056,
+and the async-copy driver from run 38450929271. Verify the manifest
+and actual loaded driver DLL SHA256, not just the file on disk.
+The conservative run-llama-zluda-safe.ps1 defaults to one GPU layer,
+one token and launch blocking; it is NOT a full MTP launcher.
+
+The reporter's exact native arguments (substitute valid absolute
+paths from the same fixed ten-question set) were:
+
+    zluda.exe -- llama-cli.exe -m MODEL.gguf -md DRAFT.gguf -ngl 99 -ngld 99 -dev CUDA0 -devd CUDA0 -sm none --spec-type draft-mtp -nkvo --no-op-offload -fa off -st --jinja --reasoning off -sysf system.txt -f q01.txt --temp 0 --top-k 1 --seed 1234 -n 400 -c 4096 --verbose
+
+Set ZLUDA_CC=8.6, ZLUDA_TRACE_MISSING_SYMBOLS=1 and
+GGML_CUDA_DISABLE_GRAPHS=1 for this gfx1150 candidate.
+Do NOT enable CUDA_LAUNCH_BLOCKING for throughput comparisons;
+earlier per-launch tracing was orders of magnitude slower.
+The full 99-layer command needs substantial memory and is NOT
+authorized for a device that cannot accommodate it.
+
+For plain mode use identical flags but remove -md, -ngld, -devd and
+--spec-type. Use --no-jinja for the original Qwen-specific repro
+when appropriate, but preserve the deterministic ten-question
+grading protocol for matched comparisons.
+
+## Candidate artifact lifespan / release safety
+
+Actions run 38634153056 (histogram llama) was reported to expire
+2026-10-28; 37965774616 (argv launcher) on 2026-11-08;
+38300337884 (f60a9d4) on 2026-11-11;
+38450929271 (async-copy driver) on 2026-11-12.
+The older F32-MMF safe build artifact in run 38056434647 has
+already expired. Longer retention on FUTURE runs cannot restore
+expired artifacts; a reproducible rebuild will have a new SHA.
+No candidate is globally promoted or published as stable.
+A candidate-only prerelease needs manual review of original
+license/redistribution terms, hashes, test evidence and risks.
+
+## Remaining PTX and driver convergence
+
+The llama histogram rewrite replaces a few PTX red.shared.add
+instructions with supported atom.shared.add; generic red.global,
+red.shared and red.generic parsing is still missing in ZLUDA.
+Use the contributor's proposed address-space, register/immediate
+and shared-address conversion tests with a [64,64,64,64] CPU
+reference before any general parser patch is considered safe.
+Build future driver candidates on top of the async-copy series
+to preserve both the CUB/launch metadata fix and Nemotron copy
+support, and rerun the full gating suite before promotion.

@@ -26,8 +26,10 @@ if safe_sdpa or safe_conv2d:
                     disable_mem(False)
 
         if safe_conv2d:
-            # gfx1150 community testing shows the legacy cuDNN/ZLUDA path can
-            # hang indefinitely. PyTorch's no-cuDNN convolution fallback is
+            # A missing HIP MIOpen.dll can make old ZLUDA pop a modal
+            # dialog on ANY GPU before a kernel is launched. gfx1150
+            # additionally keeps its conservative compatibility policy.
+            # PyTorch's no-cuDNN convolution fallback is
             # slower, but it avoids that unsafe path and remains numerically
             # verifiable by the capability probe.
             torch.backends.cudnn.enabled = False

@@ -88,5 +88,5 @@ jobs:
         with:
           name: nvcuda-memcpy2d-async-candidate
           path: zluda-upstream/target/release/nvcuda.dll
-          retention-days: 30
+          retention-days: 90
           if-no-files-found: error

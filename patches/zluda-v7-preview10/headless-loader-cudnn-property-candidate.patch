@@ -1,0 +1,68 @@
+diff --git a/zluda_dnn/src/impl.rs b/zluda_dnn/src/impl.rs
+index 45ec0ed..62d01b7 100644
+--- a/zluda_dnn/src/impl.rs
++++ b/zluda_dnn/src/impl.rs
+@@ -1333,0 +1334,18 @@ pub mod dnn8 {
++    // All three library properties match the version returned by
++    // cudnnGetVersion(). Never return success with an unwritten output.
++    pub(crate) unsafe fn get_property(
++        property: libraryPropertyType, value: *mut ::core::ffi::c_int,
++    ) -> cudnnStatus_t {
++        if value.is_null() {
++            return Err(cudnnError_t::BAD_PARAM);
++        }
++        let v = match property.0 {
++            0 => cuda_types::cudnn8::CUDNN_MAJOR as i32,
++            1 => cuda_types::cudnn8::CUDNN_MINOR as i32,
++            2 => cuda_types::cudnn8::CUDNN_PATCHLEVEL as i32,
++            _ => return Err(cudnnError_t::BAD_PARAM),
++        };
++        *value = v;
++        Ok(())
++    }
++
+@@ -1482,0 +1501,18 @@ pub mod dnn9 {
++    // All three library properties match the version returned by
++    // cudnnGetVersion(). Never return success with an unwritten output.
++    pub(crate) unsafe fn get_property(
++        property: libraryPropertyType, value: *mut ::core::ffi::c_int,
++    ) -> cudnnStatus_t {
++        if value.is_null() {
++            return Err(cudnnError_t::BAD_PARAM);
++        }
++        let v = match property.0 {
++            0 => cuda_types::cudnn9::CUDNN_MAJOR as i32,
++            1 => cuda_types::cudnn9::CUDNN_MINOR as i32,
++            2 => cuda_types::cudnn9::CUDNN_PATCHLEVEL as i32,
++            _ => return Err(cudnnError_t::BAD_PARAM),
++        };
++        *value = v;
++        Ok(())
++    }
++
+diff --git a/zluda_dnn/src/lib.rs b/zluda_dnn/src/lib.rs
+index 21b72fc..6a61202 100644
+--- a/zluda_dnn/src/lib.rs
++++ b/zluda_dnn/src/lib.rs
+@@ -86,0 +87 @@ dual_function_declarations! {
++        cudnnGetProperty,
+diff --git a/zluda_windows/src/lib.rs b/zluda_windows/src/lib.rs
+index 1a293a9..fef5c04 100644
+--- a/zluda_windows/src/lib.rs
++++ b/zluda_windows/src/lib.rs
+@@ -456,0 +457,15 @@ pub unsafe fn try_load_from_self_or_hip_with_message(
++        /* Missing HIP components must never stall headless GPU workloads.
++         * The original TaskDialogIndirect could silently block a CLI,
++         * service or CI child process before any kernel was launched.
++         * Errors are noninteractive by default. Users who explicitly want
++         * the old desktop dialog can opt back in for troubleshooting.
++         */
++        let dependencies = redirect_names.join(" or ");
++        let diagnostic = format!(
++            "[zluda-dependency] ZLUDA failed to load {dependencies}. \
++             Install a compatible HIP SDK/MIOpen runtime or correct HIP_PATH.\n"
++        );
++        let _ = std::io::Write::write_all(&mut std::io::stderr(), diagnostic.as_bytes());
++        if std::env::var("ZLUDA_ALLOW_MISSING_DLL_DIALOG").as_deref() != Ok("1") {
++            return None;
++        }

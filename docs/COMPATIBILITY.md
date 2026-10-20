@@ -315,3 +315,29 @@ max pooling, transform/set/scale tensors and existing narrow legacy
 cuDNN v8 convolution subset are within validated feature scope.
 cuDNN v9/frontend, advanced fusions, unvalidated streams, many
 normalizations, and other hardware remain open tasks.
+
+
+### October 20: gfx1150 conv2d modal dialog root cause
+
+The original cuDNN-enabled gfx1150 conv2d timeout was a Windows
+modal TaskDialogIndirect inside ZLUDA's HIP library loader after
+MIOpen.dll could not be found. No CUDA kernel had launched.
+See https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/3#issuecomment-6281010178 .
+An opt-in source candidate now reports a missing dependency without
+modal GUI by default, and implements accurate cudnnGetProperty
+values for cuDNN8/9. A timeout-bounded Windows subprocess and
+Rust compile test exercise this case. The working PyTorch no-cuDNN
+convolution fallback remains, and cuDNN compute performance with
+MIOpen installed is a separate unvalidated path.
+
+### October 20: gfx1150 Nemotron graded accuracy
+
+The 10-question Nemotron plain inference set graded 30/30 correct
+on both native ROCm and async-copy ZLUDA (60/60 normal exits).
+Reported throughput: 13.8 t/s native vs 13.6 t/s ZLUDA on
+the Radeon 890M. For exact model hash, method, limitations and
+reproducible MTP command, see
+GFX1150_MTP_CORRECTNESS.md. This is scoped hardware evidence,
+not a guarantee for other models or cuDNN/SDPA.
+
+The normal PyTorch launcher and the bounded capability conv2d probe now also select the no-cuDNN fallback on any configured AMD GPU without an accessible MIOpen.dll file; the stricter unverified gfx1150 guard is preserved. This is a safe fallback, not a cuDNN fix. Future candidate builds use 90-day retention where configured; prior artifacts retain their original expiration and no stable release is implied.

@@ -66,19 +66,34 @@ foreach ($statePath in $bridgeStateCandidates) {
     } catch {}
 }
 
+# MIOpen absence is architecture-independent: an old ZLUDA cuDNN shim
+# can show a modal missing-DLL TaskDialog before launching any kernel.
+# The existing gfx1150 conservative policy remains in addition to this.
+$miopenCandidates = @()
+foreach ($root in @($hip, $env:HIP_PATH, $zluda, $targetDir)) {
+    if (-not $root) { continue }
+    $miopenCandidates += (Join-Path $root 'MIOpen.dll')
+    $miopenCandidates += (Join-Path $root 'bin\MIOpen.dll')
+}
+$miopenDllPresent = [bool]($bridgeMiopenReady -or @(
+    $miopenCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+).Count -gt 0)
+
 # Both stable v6 and preview v7 have returned finite but wrong fused SDPA
 # tensors on AMD hardware. Keep math-only SDPA unless explicitly opted out.
 $autoSafeSDPA = [bool]($pythonProgram -and -not $AllowUnsafeFusedSDPA)
 $useSafeSDPA = [bool]($PyTorchSafeSDPA -or $autoSafeSDPA)
 
-# Community gfx1150 testing shows the legacy cuDNN/ZLUDA convolution path can
-# hang indefinitely. Until a bridge-backed path is staged and validated, use
-# PyTorch's non-cuDNN convolution fallback instead of letting that hang.
+# Prevent the confirmed modal missing-MIOpen hang on any AMD architecture.
+# On gfx1150 keep the preexisting additional fail-safe until a verified
+# bridge is staged, even if an arbitrary MIOpen.dll file exists.
 $autoSafeConv2D = [bool](
     $pythonProgram -and
-    $gpuArch -eq 'gfx1150' -and
-    -not $bridgeMiopenReady -and
-    -not $AllowUnsafeCudnnConv
+    -not $AllowUnsafeCudnnConv -and
+    (
+        -not $miopenDllPresent -or
+        ($gpuArch -eq 'gfx1150' -and -not $bridgeMiopenReady)
+    )
 )
 $useSafeConv2D = $autoSafeConv2D
 
@@ -139,7 +154,7 @@ if ($useSafeSDPA) {
     Write-Host "[run] PyTorch safe SDPA: flash=off memory-efficient=off math=on ($reason)"
 }
 if ($useSafeConv2D) {
-    Write-Host '[run] PyTorch safe conv2d: cuDNN=off (automatic gfx1150 hang guard)'
+    Write-Host '[run] PyTorch safe conv2d: cuDNN=off (missing MIOpen or unverified gfx1150 bridge guard)'
 } elseif ($gpuArch -eq 'gfx1150' -and $bridgeMiopenReady) {
     Write-Host '[run] PyTorch conv2d: staged cuDNN->MIOpen bridge detected'
 }
