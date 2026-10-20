@@ -38,8 +38,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'ZLUDA clone failed' }
           git -C zluda-upstream checkout --detach 9c8b43f242985150f86a7f485218b7b82c3e96ca
           if ($LASTEXITCODE -ne 0) { throw 'Pinned upstream checkout failed' }
-          git -C zluda-upstream submodule update --init --recursive
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned submodules failed' }
+          # cuDNN8/9 needs only Rust crates from the pinned main checkout.
+          # Our clean local Release build passed with both LLVM and HiGHS
+          # submodules absent; skip their multi-GB fetch in this candidate job.
 
       - name: Cache Rust compiler and dependencies
         uses: actions/cache@v4
