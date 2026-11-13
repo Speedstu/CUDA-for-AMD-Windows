@@ -29,6 +29,7 @@ TESTS = (
     "driver_function_metadata",
     "cub_sort_scan",
     "driver_ptx_selection",
+    "driver_ptx_atomics",
     "driver_launch_blocking",
     "driver_buffer_clear",
     "driver_memcpy2d_async",
@@ -861,6 +862,43 @@ def run_driver_ptx_selection(torch):
                 cuda.cuCtxDestroy_v2(ctx)
             except Exception:
                 pass
+
+
+def run_driver_ptx_atomics(torch):
+    """Run hand-written atom.* / red.* PTX kernels against a CPU reference.
+
+    pass:        every form ran and matched the CPU reference.
+    unsupported: at least one kernel is not exported or its module was
+                 rejected, and nothing that ran was wrong (today: red.*).
+    incorrect:   a kernel ran and produced a wrong result. Never downgraded.
+    """
+    import ptx_atomic_forms
+
+    cuda = _load_win_dll("nvcuda.dll")
+    cuda.cuCtxGetCurrent.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cuda.cuCtxGetCurrent.restype = ctypes.c_int
+    # PyTorch owns the context; cuInit alone does not make one current.
+    context_guard = torch.empty(1, device="cuda")
+    sync(torch)
+    active_context = ctypes.c_void_p()
+    code = int(cuda.cuCtxGetCurrent(ctypes.byref(active_context)))
+    if code != 0:
+        raise RuntimeError(f"cuCtxGetCurrent returned CUDA error {code}")
+    if not active_context.value:
+        raise RuntimeError("driver_ptx_atomics requires an active CUDA context")
+    report = ptx_atomic_forms.run_cases(cuda)
+    del context_guard
+    summary = report["summary"]
+    if summary["verdict"] == "unsupported":
+        missing = summary["not_exported"] + summary["rejected"]
+        raise RuntimeError(
+            "PTX atomic forms not exported by this driver "
+            f"({len(missing)} of {summary['total']}); every form that ran matched "
+            f"the CPU reference ({summary['passed']} of {summary['passed']}). details="
+            + json.dumps(summary, sort_keys=True)
+        )
+    return {"ok": summary["verdict"] == "pass", "summary": summary, "cases": report["cases"]}
+
 
 def run_driver_launch_blocking(torch):
     result = run_driver_buffer_clear(torch)
@@ -2364,6 +2402,7 @@ RUNNERS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "driver_function_metadata": run_driver_function_metadata,
     "cub_sort_scan": run_cub_sort_scan,
     "driver_ptx_selection": run_driver_ptx_selection,
+    "driver_ptx_atomics": run_driver_ptx_atomics,
     "driver_launch_blocking": run_driver_launch_blocking,
     "driver_buffer_clear": run_driver_buffer_clear,
     "driver_memcpy2d_async": run_driver_memcpy2d_async,
