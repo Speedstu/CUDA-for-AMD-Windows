@@ -102,7 +102,6 @@ def main() -> None:
         env = os.environ.copy()
         env.pop("ZLUDA_ALLOW_MISSING_DLL_DIALOG", None)
         env["HIP_PATH"] = str(dll.parent / "nonexistent-HIP-SDK")
-        env["ZLUDA_NO_DIALOG"] = "1"
         t = time.perf_counter()
         try:
             child = subprocess.run([sys.executable, str(Path(__file__).resolve()),

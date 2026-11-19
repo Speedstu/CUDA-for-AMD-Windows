@@ -11,3 +11,4 @@
 *.patch text eol=lf
 # Unified diff context uses a leading space even for blank source lines.
 patches/zluda-v7-preview10/headless-loader-cudnn-property-candidate.patch whitespace=-blank-at-eol
+patches/llama-b10978/zluda-fattn-no-mma-experiment.patch whitespace=-blank-at-eol

@@ -45,39 +45,15 @@ $programLeaf = [System.IO.Path]::GetFileName($Program)
 $pythonProgram = [bool]($programLeaf -match '^python(?:w|[0-9.]*)?\.exe$')
 $gpuArch = if ($config.gpu -and $config.gpu.arch) { [string]$config.gpu.arch } else { '' }
 
-# Detect an explicitly staged cuDNN -> MIOpen bridge. If it has a concrete
-# MIOpen backend, gfx1150 does not need the no-cuDNN safety fallback.
-$bridgeMiopenReady = [bool]($env:CUDA_AMD_MIOPEN_DLL -and (Test-Path $env:CUDA_AMD_MIOPEN_DLL))
-$bridgeStateCandidates = @(
-    (Join-Path $targetDir '.cudaamd-cudnn-bridge.json')
-)
-if ($pythonProgram -and ([System.IO.Path]::GetFileName($targetDir) -ieq 'Scripts')) {
-    $venvRoot = Split-Path $targetDir -Parent
-    $bridgeStateCandidates += (Join-Path $venvRoot 'Lib\site-packages\torch\lib\.cudaamd-cudnn-bridge.json')
+# Resolve MIOpen through the same function as the standalone capability
+# harness. This prevents a staged MIOpen bridge being tested as no-cuDNN.
+. (Join-Path $PSScriptRoot 'miopen-detection.ps1')
+$miopenResolution = Get-CudaAmdMiopenState -HipRoot $hip -ZludaRoot $zluda -TargetDir $targetDir -ProgramPath $Program -InheritedHipPath $env:HIP_PATH -ConfiguredMiopenDll $env:CUDA_AMD_MIOPEN_DLL
+$bridgeMiopenReady = [bool]$miopenResolution.bridge_ready
+$miopenDllPresent = [bool]$miopenResolution.miopen_present
+if ($bridgeMiopenReady) {
+    $env:CUDA_AMD_MIOPEN_DLL = [string]$miopenResolution.miopen_path
 }
-foreach ($statePath in $bridgeStateCandidates) {
-    if ($bridgeMiopenReady -or -not (Test-Path $statePath)) { continue }
-    try {
-        $state = Get-Content $statePath -Raw | ConvertFrom-Json
-        if ($state.miopen_dll -and (Test-Path ([string]$state.miopen_dll))) {
-            $env:CUDA_AMD_MIOPEN_DLL = [string]$state.miopen_dll
-            $bridgeMiopenReady = $true
-        }
-    } catch {}
-}
-
-# MIOpen absence is architecture-independent: an old ZLUDA cuDNN shim
-# can show a modal missing-DLL TaskDialog before launching any kernel.
-# The existing gfx1150 conservative policy remains in addition to this.
-$miopenCandidates = @()
-foreach ($root in @($hip, $env:HIP_PATH, $zluda, $targetDir)) {
-    if (-not $root) { continue }
-    $miopenCandidates += (Join-Path $root 'MIOpen.dll')
-    $miopenCandidates += (Join-Path $root 'bin\MIOpen.dll')
-}
-$miopenDllPresent = [bool]($bridgeMiopenReady -or @(
-    $miopenCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-).Count -gt 0)
 
 # Both stable v6 and preview v7 have returned finite but wrong fused SDPA
 # tensors on AMD hardware. Keep math-only SDPA unless explicitly opted out.

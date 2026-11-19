@@ -57,6 +57,9 @@ if (-not $PythonExe) {
     if ($cmd) { $PythonExe = $cmd.Source }
 }
 if (-not $PythonExe -or -not (Test-Path $PythonExe)) { throw 'Python not found. Pass -PythonExe <cuda-pytorch-venv\Scripts\python.exe>.' }
+. (Join-Path $PSScriptRoot 'miopen-detection.ps1')
+$miopenResolution = Get-CudaAmdMiopenState -HipRoot $hip -ZludaRoot $zluda -TargetDir (Split-Path $PythonExe -Parent) -ProgramPath $PythonExe -InheritedHipPath $env:HIP_PATH -ConfiguredMiopenDll $env:CUDA_AMD_MIOPEN_DLL
+
 $torchCheck = & $PythonExe -c "import torch; print(torch.__version__)" 2>&1
 if ($LASTEXITCODE -ne 0) { throw "PyTorch import failed in $PythonExe`n$($torchCheck | Out-String)" }
 
@@ -108,23 +111,25 @@ function Invoke-Probe([string]$Name, [int]$ProbeTimeoutSeconds) {
     }
     if (Test-Path $hipblasltLib) { Set-Env $psi 'HIPBLASLT_TENSILE_LIBPATH' $hipblasltLib }
     Set-Env $psi 'PATH' "$hip\bin;$zluda;$env:PATH"
+    if ($miopenResolution.bridge_ready) {
+        Set-Env $psi 'CUDA_AMD_MIOPEN_DLL' ([string]$miopenResolution.miopen_path)
+    }
+
 
     if ($Name -eq 'driver_launch_blocking') {
         Set-Env $psi 'CUDA_LAUNCH_BLOCKING' '1'
         Set-Env $psi 'ZLUDA_LAUNCH_TRACE' '1'
     }
 
-    # The missing-MIOpen modal dialog affects every architecture, not
-    # just gfx1150. When no MIOpen can be found in the configured HIP tree,
-    # use the bounded, CPU-referenced PyTorch no-cuDNN conv fallback.
-    $noMiopenBackend = [bool](
-        -not $hip -or
-        -not (Test-Path -LiteralPath (Join-Path $hip 'bin\MIOpen.dll') -PathType Leaf)
-    )
+    # Share the launcher's actual bridge + backend resolution. Previously the
+    # harness only considered HIP/bin/MIOpen.dll and silently skipped a
+    # configured CUDA_AMD_MIOPEN_DLL or staged bridge on other drives.
+    $noMiopenBackend = -not [bool]$miopenResolution.miopen_present
     if (
         $Name -eq 'conv2d' -and
         ($noMiopenBackend -or
-            ($config.gpu -and [string]$config.gpu.arch -eq 'gfx1150'))
+            ($config.gpu -and [string]$config.gpu.arch -eq 'gfx1150' -and
+             -not $miopenResolution.bridge_ready))
     ) {
         $safeSite = Join-Path $PSScriptRoot 'pytorch-safe-site'
         if (-not (Test-Path (Join-Path $safeSite 'sitecustomize.py'))) {
@@ -267,7 +272,12 @@ foreach ($name in $Tests) {
     }
     $results += $entry
     switch ($entry.status) {
-        'pass'        { Write-Host ' PASS' -ForegroundColor Green }
+        'pass'        {
+            $path = if ($name -eq 'conv2d' -and $entry.result -and $entry.result.path) {
+                ' [path=' + [string]$entry.result.path + ']'
+            } else { '' }
+            Write-Host (" PASS" + $path) -ForegroundColor Green
+        }
         'unsupported' { Write-Host ' UNSUPPORTED' -ForegroundColor Yellow }
         'incorrect'   { Write-Host ' INCORRECT' -ForegroundColor Red }
         'timeout'            { Write-Host ' TIMEOUT' -ForegroundColor Red }

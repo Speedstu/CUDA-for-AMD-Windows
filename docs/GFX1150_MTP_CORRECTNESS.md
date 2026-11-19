@@ -204,3 +204,60 @@ reference before any general parser patch is considered safe.
 Build future driver candidates on top of the async-copy series
 to preserve both the CUB/launch metadata fix and Nemotron copy
 support, and rerun the full gating suite before promotion.
+
+
+## November 19: external gfx1150 flash-attention tile/vec validation
+
+In [issue #6 follow-up](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/6#issuecomment-6871502458),
+Cary5031 reported an opt-in workaround for llama.cpp b10978. The
+pinned ZLUDA PTX parser cannot load tensor-core flash-attention kernels
+requiring movmatrix.sync.aligned.m8n8.trans.b16 and mma.sync.aligned.m16n8k16
+with FP16 accumulators. Older PTX variants may instead load
+NO_DEVICE_CODE stubs that print and trap. **Do not enable a plain
+GGML_CUDA_FA=ON build without excluding the MMA dispatch on this driver.**
+This is especially important given the September hard-lock investigation.
+
+The contributor added GGML_CUDA_ZLUDA_FATTN_NO_MMA, an opt-in
+compile-time guard in ggml-cuda/fattn.cu, so both Turing and Volta
+MMA branches are skipped and the tile/vec implementation is used.
+We imported the source patch and a separately named Windows
+llama-zluda-fa-tilevec-experiment-build workflow from Cary5031's
+fork branch fa-tilevec-experiment. The workflow explicitly
+sets FA=ON but never enables the unsupported MMA dispatch.
+The old safe llama build and installed runtime stay unchanged.
+
+The contributor reports 180 of 180 clean, individually graded
+Gemma-4-12B ten-question runs (three repeats each; 30 runs per mode).
+All six mode cells achieved 30/30 correct final answers:
+
+| Mode | Mean generation tokens/s | Prompt processing seconds |
+| --- | ---: | ---: |
+| Native plain, FA on | 10.7 | 0.54 |
+| Native draft-MTP, FA on | 30.9 | 0.55 |
+| ZLUDA plain, FA on | 10.9 | 2.18 |
+| ZLUDA draft-MTP, FA on | 31.3 | 2.17 |
+| Vulkan plain | 11.0 | 0.57 |
+| Vulkan draft-MTP | 30.8 | 0.53 |
+
+ZLUDA's generation throughput matched native in those bounded
+tests, but ZLUDA still incurred higher prompt/setup latency.
+On a separate 0.8B workload enabling FA increased ZLUDA generation
+from 43.3 to 82.0 t/s. The reported 165 ZLUDA flash-attention
+runs incurred no device errors; these are **contributor results**
+from an independently built candidate, not a local RX 9060 XT
+reproduction or proof for other models. The original safe builds
+remain conservative.
+
+The same investigation found unsupported MMQ tensor-core forms
+(mma.sync integer8) and much lower long-prompt throughput when
+forcing the safe MMQ subset. **Keep FORCE_CUBLAS=ON** in this
+candidate. Open driver work includes PTX red.*, movmatrix,
+mma FP16 accumulator/int8 forms, and visible warnings when
+architecture selection falls back to a NO_DEVICE_CODE stub.
+A source-level tile/vec dispatch test plus compiled PTX presence
+checks guard the workflow; none replaces a hardware GPU regression.
+
+For this *separately built* candidate, explicitly pass -fa on
+to llama-cli and retain the contributor's pinned model, fixed
+questions, bounded output cap and actual DLL loaded hashes.
+Do not deploy this build into a stable game or PyTorch runtime.

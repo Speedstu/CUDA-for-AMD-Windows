@@ -9,6 +9,9 @@ on:
       - 'patches/zluda-v7-preview10/series.json'
       - 'tests/test_zluda_headless_loader.py'
       - 'scripts/apply-zluda-patches.ps1'
+      - 'tests/test_zluda_other_shims_headless.py'
+      - 'scripts/miopen-detection.ps1'
+      - 'tests/test_miopen_detection_ps.ps1'
 
 permissions:
   contents: read
@@ -24,6 +27,8 @@ jobs:
         run: |
           python tests/test_zluda_headless_loader.py
           if ($LASTEXITCODE -ne 0) { throw 'Headless dependency / cuDNN property source checks failed' }
+          pwsh -NoProfile -NonInteractive -File tests/test_miopen_detection_ps.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Shared MIOpen detector regression failed' }
 
       - name: Install pinned Rust toolchain
         shell: pwsh
@@ -61,11 +66,11 @@ jobs:
           git -C zluda-upstream diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Patched source whitespace check failed' }
 
-      - name: Compile experimental ZLUDA cuDNN8/9 libraries
+      - name: Compile experimental ZLUDA cuDNN and other HIP-dependent shims
         shell: pwsh
         run: |
-          cargo +1.96.0 build --manifest-path zluda-upstream/Cargo.toml -p zluda_dnn8 -p zluda_dnn9 --release
-          if ($LASTEXITCODE -ne 0) { throw 'cuDNN candidate compilation failed' }
+          cargo +1.96.0 build --manifest-path zluda-upstream/Cargo.toml -p zluda_dnn8 -p zluda_dnn9 -p zluda_blas -p zluda_blaslt -p zluda_sparse -p zluda_fft --release
+          if ($LASTEXITCODE -ne 0) { throw 'Headless shim candidate compilation failed' }
 
       - name: Prove no modal stall with missing MIOpen and correct version fields
         shell: pwsh
@@ -73,13 +78,20 @@ jobs:
           python tests/test_zluda_headless_loader.py --dnn8 zluda-upstream/target/release/cudnn64_8.dll --dnn9 zluda-upstream/target/release/cudnn64_9.dll
           if ($LASTEXITCODE -ne 0) { throw 'Headless DLL regression failed' }
 
+      - name: Bounded missing-backend probes for cuBLAS, cuBLASLt, cuSPARSE and cuFFT
+        shell: pwsh
+        run: |
+          python tests/test_zluda_other_shims_headless.py --bin-dir zluda-upstream/target/release
+          if ($LASTEXITCODE -ne 0) { throw 'Additional HIP shim modal regression failed' }
+
       - name: Produce candidate hash evidence
         shell: pwsh
         run: |
           $dir = 'zluda-upstream/target/release'
           $out = 'candidate-cudnn-evidence'
           New-Item -ItemType Directory -Force $out | Out-Null
-          foreach ($name in @('cudnn64_8.dll','cudnn64_9.dll')) {
+          $candidateDlls = @('cudnn64_8.dll','cudnn64_9.dll','cublas.dll','cublaslt.dll','cusparse.dll','cufft.dll')
+          foreach ($name in $candidateDlls) {
             if (-not (Test-Path "$dir/$name")) { throw "Missing $name" }
             Copy-Item "$dir/$name" "$out/$name"
           }
@@ -87,11 +99,11 @@ jobs:
             upstream_zluda_commit = '9c8b43f242985150f86a7f485218b7b82c3e96ca'
             project_commit = $env:GITHUB_SHA
             rust = '1.96.0'
-            status = 'candidate-only, no GPU workload validation'
-            validation = 'cuDNN v8/v9 property fields and missing-MIOpen nonmodal failure'
+            status = 'candidate-only, no GPU workload validation, do not overwrite stable shims'
+            validation = 'cuDNN v8/v9 property fields and missing-HIP nonmodal failure across six shims'
             files = @{}
           }
-          foreach ($name in @('cudnn64_8.dll','cudnn64_9.dll')) {
+          foreach ($name in $candidateDlls) {
             $entry.files[$name] = (Get-FileHash "$out/$name" -Algorithm SHA256).Hash
           }
           $entry | ConvertTo-Json -Depth 5 | Out-File "$out/sha256.json" -Encoding utf8
@@ -99,7 +111,7 @@ jobs:
       - name: Upload experimental DLLs and hashes (not stable)
         uses: actions/upload-artifact@v4
         with:
-          name: zluda-headless-cudnn8-9-candidate
+          name: zluda-headless-hip-shims-candidate
           path: candidate-cudnn-evidence/*
           retention-days: 90
           if-no-files-found: error

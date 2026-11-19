@@ -341,3 +341,32 @@ GFX1150_MTP_CORRECTNESS.md. This is scoped hardware evidence,
 not a guarantee for other models or cuDNN/SDPA.
 
 The normal PyTorch launcher and the bounded capability conv2d probe now also select the no-cuDNN fallback on any configured AMD GPU without an accessible MIOpen.dll file; the stricter unverified gfx1150 guard is preserved. This is a safe fallback, not a cuDNN fix. Future candidate builds use 90-day retention where configured; prior artifacts retain their original expiration and no stable release is implied.
+
+
+### November 19: additional gfx1150 contributor verification and diagnostics
+
+Cary5031 independently verified the October non-modal cuDNN candidate
+on a Radeon 890M: the old unbounded dialog disappeared and missing
+MIOpen is reported as an ordinary failure, with the previous safe
+no-cuDNN convolution remaining numerically correct. Follow-ups
+identify the need to rebuild cuBLAS/cuBLASLt/cuSPARSE/cuFFT shims
+(they also embed the common loader), to use the same MIOpen
+resolution in both the launcher and capability harness, and to
+record the actual cuDNN shim hash. These tests and new candidate
+build targets were added without replacing any installed runtime.
+Source: [issue #3](https://github.com/Speedstu/CUDA-for-AMD-Windows/issues/3#issuecomment-6845114221).
+
+The new PTX atomics probe from PR #11 tests 23 forms: on the
+contributor's stock, f60a9d4 and async-copy gfx1150 drivers,
+12 control/atom forms passed and 11 red.* forms were not exported.
+There were **zero incorrect device results** among the forms that
+ran. General red.* parsing remains missing; the probe explicitly
+reports UNSUPPORTED and distinguishes incorrect results from
+missing support.
+
+The [separate Flash Attention tile/vec candidate](../.github/workflows/llama-zluda-fa-tilevec-experiment-build.yml)
+uses an opt-in no-MMA dispatcher. Cary5031 reports all 180
+Gemma-4-12B test runs correct, with ZLUDA 31.3 t/s versus native
+30.9 t/s in draft-MTP generation. This is narrow external
+evidence and cannot be interpreted as full GPU or CUDA tensor-core
+support; prompt processing still has a measurable latency gap.

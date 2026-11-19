@@ -1,0 +1,33 @@
+diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
+index ceb4727..731b8b8 100644
+--- a/ggml/src/ggml-cuda/fattn.cu
++++ b/ggml/src/ggml-cuda/fattn.cu
+@@ -610,8 +610,18 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
+     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+ 
++#ifdef GGML_CUDA_ZLUDA_FATTN_NO_MMA
++    // ZLUDA experiment: the pinned ZLUDA PTX parser has no movmatrix and no
++    // mma.sync with f16 accumulators, so most flash_attn_ext_f16 instances are
++    // dropped from their module. Never select the MMA kernel; use the tile and
++    // vec kernels instead, as on GPUs without tensor cores.
++    const bool zluda_fattn_mma = false;
++#else
++    const bool zluda_fattn_mma = true;
++#endif // GGML_CUDA_ZLUDA_FATTN_NO_MMA
++
+     // If Turing tensor cores are available, use them:
+-    if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
++    if (zluda_fattn_mma && turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+         if (can_use_vector_kernel) {
+             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
+@@ -641,7 +651,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+         gqa_ratio_eff *= 2;
+     }
+ 
+-    if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
++    if (zluda_fattn_mma && volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+         if (can_use_vector_kernel && Q->ne[1] * gqa_ratio_eff <= 2) {
+             return BEST_FATTN_KERNEL_VEC;
+         }
