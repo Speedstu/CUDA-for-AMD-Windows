@@ -370,3 +370,5 @@ Gemma-4-12B test runs correct, with ZLUDA 31.3 t/s versus native
 30.9 t/s in draft-MTP generation. This is narrow external
 evidence and cannot be interpreted as full GPU or CUDA tensor-core
 support; prompt processing still has a measurable latency gap.
+
+The experimental missing-HIP loader build also packages the versioned CUDA DLL names used by applications (cuBLAS 11/12/13, cuBLASLt 11/12/13, cuSPARSE 10/11/12, cuFFT 10/11/12). Each alias is an exact byte-copy of its source-built Rust shim, is individually hashed, and is run under a bounded Windows no-modal factory test. Do not install these over stable runtime DLLs; they only establish fast failure when dependencies are absent.

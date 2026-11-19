@@ -24,6 +24,23 @@ SHIMS = (
     ("cufft.dll", "cufftCreate"),
 )
 
+# Filename aliases are what existing CUDA applications actually load.
+# The cargo-built names alone do not replace cublas64_11.dll, etc.
+VERSIONED_SHIMS = (
+    ("cublas64_11.dll", "cublasCreate_v2"),
+    ("cublas64_12.dll", "cublasCreate_v2"),
+    ("cublas64_13.dll", "cublasCreate_v2"),
+    ("cublasLt64_11.dll", "cublasLtCreate"),
+    ("cublasLt64_12.dll", "cublasLtCreate"),
+    ("cublasLt64_13.dll", "cublasLtCreate"),
+    ("cusparse64_10.dll", "cusparseCreate"),
+    ("cusparse64_11.dll", "cusparseCreate"),
+    ("cusparse64_12.dll", "cusparseCreate"),
+    ("cufft64_10.dll", "cufftCreate"),
+    ("cufft64_11.dll", "cufftCreate"),
+    ("cufft64_12.dll", "cufftCreate"),
+)
+
 def single_child(path: Path, symbol: str) -> None:
     dll = ctypes.WinDLL(str(path))
     fn = getattr(dll, symbol)
@@ -45,6 +62,7 @@ def single_child(path: Path, symbol: str) -> None:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--bin-dir", type=Path)
+    p.add_argument("--aliases", action="store_true", help="Check versioned CUDA DLL filenames")
     p.add_argument("--child", type=Path)
     p.add_argument("--symbol")
     args = p.parse_args()
@@ -65,7 +83,7 @@ def main():
         env["PATH"] = str(directory) + os.pathsep + os.path.join(
             os.environ.get("SystemRoot", r"C:\Windows"), "System32"
         )
-        for name, symbol in SHIMS:
+        for name, symbol in (VERSIONED_SHIMS if args.aliases else SHIMS):
             dll = directory / name
             if not dll.is_file():
                 raise AssertionError(f"Missing separately built candidate {dll}")

@@ -84,6 +84,32 @@ jobs:
           python tests/test_zluda_other_shims_headless.py --bin-dir zluda-upstream/target/release
           if ($LASTEXITCODE -ne 0) { throw 'Additional HIP shim modal regression failed' }
 
+      - name: Check versioned CUDA DLL aliases (staged copies only)
+        shell: pwsh
+        run: |
+          $source = 'zluda-upstream/target/release'
+          $dest = 'versioned-shims-smoke'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($rawName in @('cublas.dll','cublaslt.dll','cusparse.dll','cufft.dll')) {
+            Copy-Item -LiteralPath (Join-Path $source $rawName) -Destination (Join-Path $dest $rawName)
+          }
+          $aliases = [ordered]@{
+            'cublas.dll' = @('cublas64_11.dll','cublas64_12.dll','cublas64_13.dll')
+            'cublaslt.dll' = @('cublasLt64_11.dll','cublasLt64_12.dll','cublasLt64_13.dll')
+            'cusparse.dll' = @('cusparse64_10.dll','cusparse64_11.dll','cusparse64_12.dll')
+            'cufft.dll' = @('cufft64_10.dll','cufft64_11.dll','cufft64_12.dll')
+          }
+          foreach ($entry in $aliases.GetEnumerator()) {
+            foreach ($aliasName in $entry.Value) {
+              Copy-Item -LiteralPath (Join-Path $source $entry.Key) -Destination (Join-Path $dest $aliasName)
+              if ((Get-FileHash (Join-Path $dest $aliasName)).Hash -ine (Get-FileHash (Join-Path $source $entry.Key)).Hash) {
+                throw "Version alias checksum mismatch: $aliasName"
+              }
+            }
+          }
+          python tests/test_zluda_other_shims_headless.py --bin-dir $dest --aliases
+          if ($LASTEXITCODE -ne 0) { throw 'Versioned shim DLL alias regression failed' }
+
       - name: Produce candidate hash evidence
         shell: pwsh
         run: |
@@ -95,6 +121,9 @@ jobs:
             if (-not (Test-Path "$dir/$name")) { throw "Missing $name" }
             Copy-Item "$dir/$name" "$out/$name"
           }
+          # Versioned names used by CUDA applications; each was copied,
+          # hash-checked and executed under a bounded non-modal smoke test.
+          Copy-Item 'versioned-shims-smoke/*.dll' $out
           $entry = [ordered]@{
             upstream_zluda_commit = '9c8b43f242985150f86a7f485218b7b82c3e96ca'
             project_commit = $env:GITHUB_SHA
@@ -103,8 +132,8 @@ jobs:
             validation = 'cuDNN v8/v9 property fields and missing-HIP nonmodal failure across six shims'
             files = @{}
           }
-          foreach ($name in $candidateDlls) {
-            $entry.files[$name] = (Get-FileHash "$out/$name" -Algorithm SHA256).Hash
+          foreach ($item in Get-ChildItem $out -Filter '*.dll' -File) {
+            $entry.files[$item.Name] = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
           }
           $entry | ConvertTo-Json -Depth 5 | Out-File "$out/sha256.json" -Encoding utf8
 
